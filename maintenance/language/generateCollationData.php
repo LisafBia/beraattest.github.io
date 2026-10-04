@@ -2,21 +2,7 @@
 /**
  * Maintenance script to generate first letter data files for Collation.php.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup MaintenanceLanguage
  */
@@ -25,7 +11,10 @@
 require_once __DIR__ . '/../Maintenance.php';
 // @codeCoverageIgnoreEnd
 
+use MediaWiki\Collation\IcuCollation;
+use MediaWiki\Maintenance\Maintenance;
 use Wikimedia\StaticArrayWriter;
+use Wikimedia\StringUtils\StringUtils;
 
 /**
  * Generate first letter data files for Collation.php
@@ -36,21 +25,21 @@ class GenerateCollationData extends Maintenance {
 	/** @var string The directory with source data files in it */
 	public $dataDir;
 
-	/** @var int The primary weights, indexed by codepoint */
+	/** @var array<int,string> The primary weights, indexed by codepoint */
 	public $weights;
 
 	/**
 	 * A hashtable keyed by codepoint, where presence indicates that a character
 	 * has a decomposition mapping. This makes it non-preferred for group header
 	 * selection.
-	 * @var string[]
+	 * @var array<int,bool>
 	 */
 	public $mappedChars;
 
-	/** @var string */
+	/** @var resource|bool */
 	public $debugOutFile;
 
-	/** @var string[] */
+	/** @var int[][] */
 	private $groups;
 
 	public function __construct() {
@@ -114,20 +103,21 @@ class GenerateCollationData extends Maintenance {
 
 	private function loadUcd() {
 		$uxr = new UcdXmlReader( "{$this->dataDir}/ucd.all.grouped.xml" );
-		$uxr->readChars( [ $this, 'charCallback' ] );
+		$uxr->readChars( $this->charCallback( ... ) );
 	}
 
-	private function charCallback( $data ) {
+	private function charCallback( array $data ) {
 		// Skip non-printable characters,
 		// but do not skip a normal space (U+0020) since
 		// people like to use that as a fake no header symbol.
 		$category = substr( $data['gc'], 0, 1 );
-		if ( strpos( 'LNPS', $category ) === false
+		// @phan-suppress-next-line PhanParamSuspiciousOrder False positive
+		if ( !str_contains( 'LNPS', $category )
 			&& $data['cp'] !== '0020'
 		) {
 			return;
 		}
-		$cp = hexdec( $data['cp'] );
+		$cp = (int)hexdec( $data['cp'] );
 
 		// Skip the CJK ideograph blocks, as an optimisation measure.
 		// UCA doesn't sort them properly anyway, without tailoring.
@@ -141,19 +131,16 @@ class GenerateCollationData extends Maintenance {
 			return;
 		}
 
-		// Calculate implicit weight per UTS #10 v6.0.0, sec 7.1.3
-		if ( $data['UIdeo'] === 'Y' ) {
-			if ( $data['block'] == 'CJK Unified Ideographs'
-				|| $data['block'] == 'CJK Compatibility Ideographs'
-			) {
-				$base = 0xFB40;
-			} else {
-				$base = 0xFB80;
-			}
-		} else {
-			$base = 0xFBC0;
+		// Skip characters that mapped to a single character we skipped above.
+		// e.g. U+2329 -> U+3008 (from CJK Symbols and Punctuation)
+		if ( $data['dm'] !== '#' && !str_contains( $data['dm'], ' ' ) &&
+			!isset( $this->weights[ hexdec( $data['dm'] ) ] )
+		) {
+			return;
 		}
-		$a = $base + ( $cp >> 15 );
+
+		// Calculate implicit weight per UTS #10 v6.0.0, sec 7.1.3
+		$a = 0xFBC0 + ( $cp >> 15 );
 		$b = ( $cp & 0x7fff ) | 0x8000;
 
 		$this->weights[$cp] = sprintf( ".%04X.%04X", $a, $b );
@@ -186,7 +173,7 @@ class GenerateCollationData extends Maintenance {
 				continue;
 			}
 
-			$cp = hexdec( $m[1] );
+			$cp = (int)hexdec( $m[1] );
 			$allWeights = trim( $m[2] );
 			$primary = '';
 			$tertiary = '';
@@ -292,11 +279,14 @@ class GenerateCollationData extends Maintenance {
 
 		print "Out of order: $numOutOfOrder / " . count( $headerChars ) . "\n";
 
-		global $IP;
 		$writer = new StaticArrayWriter();
 		file_put_contents(
-			"$IP/includes/collation/data/first-letters-root.php",
-			$writer->create( $headerChars, 'File created by generateCollationData.php' )
+			MW_INSTALL_PATH . '/languages/data/first-letters-root.php',
+			$writer->create(
+				$headerChars,
+				"File created by maintenance/language/generateCollationData.php\n"
+					. "@codeCoverageIgnore"
+			)
 		);
 		echo "first-letters-root: file written.\n";
 	}
@@ -316,11 +306,11 @@ class UcdXmlReader {
 	/** @var array */
 	public $currentBlock;
 
-	public function __construct( $fileName ) {
+	public function __construct( string $fileName ) {
 		$this->fileName = $fileName;
 	}
 
-	public function readChars( $callback ) {
+	public function readChars( callable $callback ) {
 		$this->getBlocks();
 		$this->currentBlock = reset( $this->blocks );
 		$xml = $this->open();
@@ -344,7 +334,7 @@ class UcdXmlReader {
 		$xml->close();
 	}
 
-	protected function open() {
+	protected function open(): XMLReader {
 		$this->xml = new XMLReader;
 		if ( !$this->xml->open( $this->fileName ) ) {
 			throw new RuntimeException( __METHOD__ . ": unable to open {$this->fileName}" );
@@ -400,11 +390,11 @@ class UcdXmlReader {
 			}
 
 			$attrs['cp'] = $hexCp;
-			call_user_func( $this->callback, $attrs );
+			( $this->callback )( $attrs );
 		}
 	}
 
-	public function getBlocks() {
+	public function getBlocks(): array {
 		if ( $this->blocks ) {
 			return $this->blocks;
 		}

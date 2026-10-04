@@ -2,11 +2,12 @@
 
 namespace MediaWiki\Rest\Module;
 
+use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\Rest\BasicAccess\BasicAuthorizerInterface;
 use MediaWiki\Rest\Handler\RedirectHandler;
+use MediaWiki\Rest\JsonLocalizer;
 use MediaWiki\Rest\PathTemplateMatcher\ModuleConfigurationException;
 use MediaWiki\Rest\Reporter\ErrorReporter;
-use MediaWiki\Rest\ResponseFactory;
 use MediaWiki\Rest\RouteDefinitionException;
 use MediaWiki\Rest\Router;
 use MediaWiki\Rest\Validator\Validator;
@@ -38,8 +39,6 @@ use Wikimedia\ObjectFactory\ObjectFactory;
  */
 class SpecBasedModule extends MatcherBasedModule {
 
-	private string $definitionFile;
-
 	private ?array $moduleDef = null;
 
 	private ?int $routeFileTimestamp = null;
@@ -50,31 +49,30 @@ class SpecBasedModule extends MatcherBasedModule {
 	 * @internal
 	 */
 	public function __construct(
-		string $definitionFile,
+		private readonly string $definitionFile,
 		Router $router,
 		string $pathPrefix,
-		ResponseFactory $responseFactory,
+		JsonLocalizer $jsonLocalizer,
 		BasicAuthorizerInterface $basicAuth,
 		ObjectFactory $objectFactory,
 		Validator $restValidator,
-		ErrorReporter $errorReporter
+		ErrorReporter $errorReporter,
+		HookContainer $hookContainer,
 	) {
 		parent::__construct(
 			$router,
 			$pathPrefix,
-			$responseFactory,
+			$jsonLocalizer,
 			$basicAuth,
 			$objectFactory,
 			$restValidator,
-			$errorReporter
+			$errorReporter,
+			$hookContainer
 		);
-		$this->definitionFile = $definitionFile;
 	}
 
 	/**
 	 * Get a config version hash for cache invalidation
-	 *
-	 * @return string
 	 */
 	protected function getConfigHash(): string {
 		if ( $this->configHash === null ) {
@@ -89,8 +87,6 @@ class SpecBasedModule extends MatcherBasedModule {
 
 	/**
 	 * Load the module definition file.
-	 *
-	 * @return array
 	 */
 	private function getModuleDefinition(): array {
 		if ( $this->moduleDef !== null ) {
@@ -98,32 +94,58 @@ class SpecBasedModule extends MatcherBasedModule {
 		}
 
 		$this->routeFileTimestamp = filemtime( $this->definitionFile );
-		$moduleDef = $this->loadJsonFile( $this->definitionFile );
+		$this->moduleDef = static::loadModuleDefinition(
+			$this->definitionFile,
+			$this->getJsonLocalizer()
+		);
 
-		if ( !$moduleDef ) {
-			throw new ModuleConfigurationException(
-				'Malformed module definition file: ' . $this->definitionFile
+		return $this->moduleDef;
+	}
+
+	/**
+	 * Load the module definition file.
+	 *
+	 * @param string $file The module definition file to load
+	 * @param JsonLocalizer $localizer
+	 *
+	 * @return array
+	 */
+	public static function loadModuleDefinition( string $file, JsonLocalizer $localizer ): array {
+		$moduleDef = static::loadJsonFile( $file );
+
+		// This does not guarantee the file is a valid flat route file, just that it appears
+		// to be of that format. Files containing only an empty array are assumed to be valid
+		// flat route files containing no routes rather than malformed module definition files.
+		// Some development flat route files in extensions, such as Wikibase's routes.dev.json,
+		// may exist as placeholders but intentionally contain no routes.
+		if ( array_is_list( $moduleDef ) ) {
+			throw new ModuleFormatException(
+				$file . ' appears to be a flat route file, not a module definition file.'
 			);
 		}
 
-		if ( !isset( $moduleDef['mwapi'] ) ) {
+		// The array_is_list() call above confuses phan. Force phan to consider $mwapi to be of
+		// the type we expect. Also check its type ourselves in code at runtime, just to be sure.
+		$mwapi = $moduleDef['mwapi'] ?? null;
+		'@phan-var ?string $mwapi';
+
+		if ( !is_string( $mwapi ) ) {
 			throw new ModuleConfigurationException(
-				'Missing mwapi version field in ' . $this->definitionFile
+				'Missing or malformed mwapi version field in ' . $file
 			);
 		}
 
-		// Require OpenAPI version 3.1 or compatible.
-		if ( !version_compare( $moduleDef['mwapi'], '1.0.999', '<=' ) ||
-			!version_compare( $moduleDef['mwapi'], '1.0.0', '>=' )
+		// Require a supported version of mwapi
+		if ( version_compare( $mwapi, '1.0.0', '<' ) ||
+			version_compare( $mwapi, '1.2.999', '>' )
 		) {
 			throw new ModuleConfigurationException(
-				"Unsupported openapi version {$moduleDef['mwapi']} in "
-					. $this->definitionFile
+				"Unsupported mwapi version {$mwapi} in "
+				. $file
 			);
 		}
 
-		$this->moduleDef = $moduleDef;
-		return $this->moduleDef;
+		return $localizer->localizeJson( $moduleDef );
 	}
 
 	/**
@@ -179,6 +201,7 @@ class SpecBasedModule extends MatcherBasedModule {
 			'services',
 			'optional_services',
 			'args',
+			'adapter', // for known adapter classes
 		];
 
 		static $oasKeys = [
@@ -188,6 +211,8 @@ class SpecBasedModule extends MatcherBasedModule {
 			'description',
 			'tags',
 			'externalDocs',
+			'deprecationSettings',
+			'operationId',
 		];
 
 		if ( isset( $opSpec['redirect'] ) ) {
@@ -207,16 +232,29 @@ class SpecBasedModule extends MatcherBasedModule {
 		$info = [
 			'spec' => array_intersect_key( $handlerSpec, array_flip( $objectSpecKeys ) ),
 			'config' => array_diff_key( $handlerSpec, array_flip( $objectSpecKeys ) ),
-			'OAS' => array_intersect_key( $opSpec, array_flip( $oasKeys ) ),
+			'openApiSpec' => array_intersect_key( $opSpec, array_flip( $oasKeys ) ),
 			'path' => $path,
 		];
 
 		return $info;
 	}
 
+	/** @inheritDoc */
 	public function getOpenApiInfo() {
 		$def = $this->getModuleDefinition();
 		return $def['info'] ?? [];
+	}
+
+	/** @inheritDoc */
+	public function getOpenApiExternalDocs(): array {
+		$def = $this->getModuleDefinition();
+		return $def['externalDocs'] ?? [];
+	}
+
+	/** @inheritDoc */
+	public function getOpenApiTags(): array {
+		$def = $this->getModuleDefinition();
+		return $def['tags'] ?? [];
 	}
 
 }

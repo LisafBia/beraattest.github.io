@@ -66,10 +66,9 @@ class ConvertExtensionToRegistration extends Maintenance {
 		$this->addOption( 'config-prefix', 'Custom prefix for configuration settings', false, true );
 	}
 
-	protected function getAllGlobals() {
+	protected function getAllGlobals(): array {
 		$processor = new ReflectionClass( ExtensionProcessor::class );
 		$settings = $processor->getProperty( 'globalSettings' );
-		$settings->setAccessible( true );
 		return array_merge( $settings->getValue(), self::FORMER_GLOBALS );
 	}
 
@@ -104,7 +103,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 
 		foreach ( $vars as $name => $value ) {
 			$realName = substr( $name, 2 ); // Strip 'wg'
-			if ( $realName === false ) {
+			if ( $realName === '' ) {
 				continue;
 			}
 
@@ -114,8 +113,8 @@ class ConvertExtensionToRegistration extends Maintenance {
 			}
 
 			if ( isset( self::CUSTOM_GLOBALS[$realName] ) ) {
-				call_user_func_array( [ $this, self::CUSTOM_GLOBALS[$realName] ],
-					[ $realName, $value, $vars ] );
+				$method = self::CUSTOM_GLOBALS[$realName];
+				$this->$method( $realName, $value, $vars );
 			} elseif ( in_array( $realName, $globalSettings ) ) {
 				$this->json[$realName] = $value;
 			} elseif ( array_key_exists( $realName, self::NO_LONGER_SUPPORTED_GLOBALS ) ) {
@@ -123,18 +122,18 @@ class ConvertExtensionToRegistration extends Maintenance {
 					self::NO_LONGER_SUPPORTED_GLOBALS[$realName] . '). ' .
 					"Please update the entry point before convert to registration.\n" );
 				$this->hasWarning = true;
-			} elseif ( strpos( $name, $configPrefix ) === 0 ) {
+			} elseif ( str_starts_with( $name, $configPrefix ) ) {
 				$configName = substr( $name, strlen( $configPrefix ) );
 
 				$isPath = false;
 				if ( is_array( $value ) ) {
 					foreach ( $value as $k => $v ) {
-						if ( strpos( $v, $this->dir ) !== false ) {
+						if ( str_contains( $v, $this->dir ) ) {
 							$value[$k] = $this->stripPath( $v, $this->dir );
 							$isPath = true;
 						}
 					}
-				} elseif ( is_string( $value ) && strpos( $value, $this->dir ) !== false ) {
+				} elseif ( is_string( $value ) && str_contains( $value, $this->dir ) ) {
 					$value = $this->stripPath( $value, $this->dir );
 					$isPath = true;
 				}
@@ -145,7 +144,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 				if ( $isPath ) {
 					$this->json['config'][$configName]['path'] = true;
 				}
-			} elseif ( $configPrefix !== 'wg' && strpos( $name, 'wg' ) === 0 ) {
+			} elseif ( $configPrefix !== 'wg' && str_starts_with( $name, 'wg' ) ) {
 				// Warn about this
 				$this->output( 'Warning: Skipped global "' . $name . '" (' .
 					'config prefix is "' . $configPrefix . '"). ' .
@@ -186,7 +185,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 		}
 	}
 
-	protected function handleExtensionFunctions( $realName, $value ) {
+	protected function handleExtensionFunctions( string $realName, array $value ) {
 		foreach ( $value as $func ) {
 			if ( $func instanceof Closure ) {
 				$this->fatalError( "Error: Closures cannot be converted to JSON. " .
@@ -203,7 +202,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 		$this->json[$realName] = $value;
 	}
 
-	protected function handleMessagesDirs( $realName, $value ) {
+	protected function handleMessagesDirs( string $realName, array $value, array $_ ) {
 		foreach ( $value as $key => $dirs ) {
 			foreach ( (array)$dirs as $dir ) {
 				$this->json[$realName][$key][] = $this->stripPath( $dir, $this->dir );
@@ -211,7 +210,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 		}
 	}
 
-	protected function handleExtensionMessagesFiles( $realName, $value, $vars ) {
+	protected function handleExtensionMessagesFiles( string $realName, array $value, array $vars ) {
 		foreach ( $value as $key => $file ) {
 			$strippedFile = $this->stripPath( $file, $this->dir );
 			if ( isset( $vars['wgMessagesDirs'][$key] ) ) {
@@ -226,10 +225,10 @@ class ConvertExtensionToRegistration extends Maintenance {
 		}
 	}
 
-	private function stripPath( $val, $dir ) {
+	private function stripPath( string $val, string $dir ): string {
 		if ( $val === $dir ) {
 			$val = '';
-		} elseif ( strpos( $val, $dir ) === 0 ) {
+		} elseif ( str_starts_with( $val, $dir ) ) {
 			// +1 is for the trailing / that won't be in $this->dir
 			$val = substr( $val, strlen( $dir ) + 1 );
 		}
@@ -237,7 +236,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 		return $val;
 	}
 
-	protected function removeAbsolutePath( $realName, $value ) {
+	protected function removeAbsolutePath( string $realName, array $value ) {
 		$out = [];
 		foreach ( $value as $key => $val ) {
 			$out[$key] = $this->stripPath( $val, $this->dir );
@@ -245,7 +244,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 		$this->json[$realName] = $out;
 	}
 
-	protected function removeAutodiscoveredParserTestFiles( $realName, $value ) {
+	protected function removeAutodiscoveredParserTestFiles( string $realName, array $value ) {
 		$out = [];
 		foreach ( $value as $key => $val ) {
 			$path = $this->stripPath( $val, $this->dir );
@@ -266,7 +265,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 		// with a ParserTestFiles key that will no longer validate.
 	}
 
-	protected function handleCredits( $realName, $value ) {
+	protected function handleCredits( string $realName, array $value ) {
 		$keys = array_keys( $value );
 		$this->json['type'] = $keys[0];
 		$values = array_values( $value );
@@ -277,7 +276,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 		}
 	}
 
-	public function handleHooks( $realName, $value ) {
+	public function handleHooks( string $realName, array $value ) {
 		foreach ( $value as $hookName => &$handlers ) {
 			if ( $hookName === 'UnitTestsList' ) {
 				$this->output( "Note: the UnitTestsList hook is no longer necessary as " .
@@ -341,7 +340,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 		}
 	}
 
-	protected function needsComposerAutoloader( $path ) {
+	protected function needsComposerAutoloader( string $path ): bool {
 		$path .= '/composer.json';
 		if ( file_exists( $path ) ) {
 			// assume that the composer.json file is in the root of the extension path

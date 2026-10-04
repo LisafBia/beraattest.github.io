@@ -20,6 +20,22 @@ abstract class MaintenanceBaseTestCase extends MediaWikiIntegrationTestCase {
 		parent::setUp();
 
 		$this->maintenance = $this->createMaintenance();
+		// Ensure that fatalError() doesn't die, so we can test this
+		// maintenance class. (This is redundant with ::createMaintenance
+		// but is present to ensure isTesting is set even if subclass
+		// overwrites ::createMaintenance.)
+		$this->maintenance->isTesting = true;
+	}
+
+	protected function assertPostConditions(): void {
+		// This is smelly, but maintenance scripts usually produce output, so
+		// we anticipate and ignore with a regex that will catch everything.
+		//
+		// If you call $this->expectOutputRegex in your subclass, this guard
+		// is overridden, and your specific pattern will be respected.
+		if ( !$this->hasExpectationOnOutput() ) {
+			$this->expectOutputRegex( '/.*/' );
+		}
 	}
 
 	/**
@@ -29,15 +45,6 @@ abstract class MaintenanceBaseTestCase extends MediaWikiIntegrationTestCase {
 	protected function tearDown(): void {
 		if ( $this->maintenance ) {
 			$this->maintenance->cleanupChanneled();
-		}
-
-		// This is smelly, but maintenance scripts usually produce output, so
-		// we anticipate and ignore with a regex that will catch everything.
-		//
-		// If you call $this->expectOutputRegex in your subclass, this guard
-		// won't be triggered, and your specific pattern will be respected.
-		if ( !$this->hasExpectationOnOutput() ) {
-			$this->expectOutputRegex( '/.*/' );
 		}
 
 		parent::tearDown();
@@ -51,7 +58,7 @@ abstract class MaintenanceBaseTestCase extends MediaWikiIntegrationTestCase {
 	 * If you need to change the way your maintenance class is constructed,
 	 * override createMaintenance.
 	 *
-	 * @return string Class name
+	 * @return class-string<Maintenance> Class name
 	 */
 	abstract protected function getMaintenanceClass();
 
@@ -61,34 +68,25 @@ abstract class MaintenanceBaseTestCase extends MediaWikiIntegrationTestCase {
 	 * @return Maintenance The Maintenance instance to test.
 	 */
 	protected function createMaintenance() {
-		$className = $this->getMaintenanceClass();
+		return $this->createMaintenanceInternal( $this->getMaintenanceClass() );
+	}
+
+	/**
+	 * Called by setUp to initialize $this->maintenance.
+	 *
+	 * @param class-string $className
+	 * @return Maintenance The Maintenance instance to test.
+	 */
+	protected function createMaintenanceInternal( string $className ) {
 		$obj = new $className();
 
 		// We use TestingAccessWrapper in order to access protected internals
 		// such as `output()`.
-		return TestingAccessWrapper::newFromObject( $obj );
-	}
-
-	/**
-	 * Asserts the output before and after simulating shutdown
-	 *
-	 * This function simulates shutdown of self::maintenance.
-	 *
-	 * @param string $preShutdownOutput Expected output before simulating shutdown
-	 * @param bool $expectNLAppending Whether or not shutdown simulation is expected
-	 *   to add a newline to the output. If false, $preShutdownOutput is the
-	 *   expected output after shutdown simulation. Otherwise,
-	 *   $preShutdownOutput with an appended newline is the expected output
-	 *   after shutdown simulation.
-	 */
-	protected function assertOutputPrePostShutdown( $preShutdownOutput, $expectNLAppending ) {
-		$this->assertEquals( $preShutdownOutput, $this->getActualOutput(),
-				"Output before shutdown simulation" );
-
-		$this->maintenance->cleanupChanneled();
-
-		$postShutdownOutput = $preShutdownOutput . ( $expectNLAppending ? "\n" : "" );
-		$this->expectOutputString( $postShutdownOutput );
+		$wrapper = TestingAccessWrapper::newFromObject( $obj );
+		// Ensure that fatalError() doesn't die, so we can test this
+		// maintenance class.
+		$wrapper->isTesting = true;
+		return $wrapper;
 	}
 
 	/**

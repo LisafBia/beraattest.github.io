@@ -2,21 +2,7 @@
 /**
  * Delete old (non-current) revisions from the database
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  * @author Rob Church <robchur@gmail.com>
@@ -46,10 +32,10 @@ class DeleteOldRevisions extends Maintenance {
 		$this->doDelete( $this->hasOption( 'delete' ), $this->getArgs( 'page_id' ) );
 	}
 
-	private function doDelete( $delete = false, $pageIds = [] ) {
+	private function doDelete( bool $delete = false, array $pageIds = [] ) {
 		# Data should come off the master, wrapped in a transaction
 		$dbw = $this->getPrimaryDB();
-		$this->beginTransaction( $dbw, __METHOD__ );
+		$this->beginTransactionRound( __METHOD__ );
 
 		$pageConds = [];
 		$revConds = [];
@@ -63,16 +49,12 @@ class DeleteOldRevisions extends Maintenance {
 
 		# Get "active" revisions from the page table
 		$this->output( "Searching for active revisions..." );
-		$res = $dbw->newSelectQueryBuilder()
+		$latestRevs = $dbw->newSelectQueryBuilder()
 			->select( 'page_latest' )
 			->from( 'page' )
 			->where( $pageConds )
 			->caller( __METHOD__ )
-			->fetchResultSet();
-		$latestRevs = [];
-		foreach ( $res as $row ) {
-			$latestRevs[] = $row->page_latest;
-		}
+			->fetchFieldValues();
 		$this->output( "done.\n" );
 
 		# Get all revisions that aren't in this set
@@ -80,16 +62,12 @@ class DeleteOldRevisions extends Maintenance {
 		if ( count( $latestRevs ) > 0 ) {
 			$revConds[] = $dbw->expr( 'rev_id', '!=', $latestRevs );
 		}
-		$res = $dbw->newSelectQueryBuilder()
+		$oldRevs = $dbw->newSelectQueryBuilder()
 			->select( 'rev_id' )
 			->from( 'revision' )
 			->where( $revConds )
 			->caller( __METHOD__ )
-			->fetchResultSet();
-		$oldRevs = [];
-		foreach ( $res as $row ) {
-			$oldRevs[] = $row->rev_id;
-		}
+			->fetchFieldValues();
 		$this->output( "done.\n" );
 
 		# Inform the user of what we're going to do
@@ -111,7 +89,7 @@ class DeleteOldRevisions extends Maintenance {
 		}
 
 		# Purge redundant text records
-		$this->commitTransaction( $dbw, __METHOD__ );
+		$this->commitTransactionRound( __METHOD__ );
 		if ( $delete ) {
 			$this->purgeRedundantText( true );
 		}

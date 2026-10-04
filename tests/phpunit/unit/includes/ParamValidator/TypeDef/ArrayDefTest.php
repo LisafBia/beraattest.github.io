@@ -16,7 +16,7 @@ class ArrayDefTest extends TypeDefUnitTestCase {
 		return new ArrayDef( $callbacks );
 	}
 
-	private function makeValidationException( $schemaSettings, $property, $pointer, $message, $constraint ) {
+	private static function makeValidationException( $schemaSettings, $property, $pointer, $message, $constraint ) {
 		return new ValidationException(
 			DataMessageValue::new(
 				'schema-validation-failed',
@@ -36,7 +36,7 @@ class ArrayDefTest extends TypeDefUnitTestCase {
 		);
 	}
 
-	public function provideValidate() {
+	public static function provideValidate() {
 		yield 'assoc array' => [ [ 'x' => 1 ], [ 'x' => 1 ], ];
 		yield 'indexed array' => [ [ 'x' ], [ 'x' ], ];
 		yield 'array' => [ [], [], ];
@@ -85,7 +85,7 @@ class ArrayDefTest extends TypeDefUnitTestCase {
 			[ ArrayDef::PARAM_SCHEMA => [ 'type' => [ 'object' ], 'required' => [ 'key1' ] ] ]
 		];
 		$missingSchemaSettings = [ ArrayDef::PARAM_SCHEMA => [ 'type' => [ 'object' ], 'required' => [ 'required' ] ] ];
-		$schemaValidationFailed = $this->makeValidationException(
+		$schemaValidationFailed = self::makeValidationException(
 			$missingSchemaSettings, 'required', '/required', 'The property required is required', 'required'
 		);
 
@@ -126,7 +126,7 @@ class ArrayDefTest extends TypeDefUnitTestCase {
 		];
 	}
 
-	public function provideListSchema() {
+	public static function provideListSchema() {
 		yield 'simple list of strings' => [
 			'string',
 			[
@@ -171,7 +171,7 @@ class ArrayDefTest extends TypeDefUnitTestCase {
 		$this->assertArrayEquals( $expect, $paramSchema );
 	}
 
-	public function provideMapSchema() {
+	public static function provideMapSchema() {
 		yield 'simple map of strings' => [
 			'string',
 			[
@@ -216,7 +216,7 @@ class ArrayDefTest extends TypeDefUnitTestCase {
 		$this->assertArrayEquals( $expect, $paramSchema );
 	}
 
-	public function provideObjectSchema() {
+	public static function provideObjectSchema() {
 		yield 'object with two required properties, one an integer and another an enum' => [
 			[ 'a' => 'integer', 'b' => [ 'enum' => [ 'x', 'y', 'z' ] ] ],
 			[],
@@ -292,7 +292,7 @@ class ArrayDefTest extends TypeDefUnitTestCase {
 		$this->assertArrayEquals( $expect, $paramSchema );
 	}
 
-	public function provideInvalidObjectSchema() {
+	public static function provideInvalidObjectSchema() {
 		yield 'object with property defined as both required and optional' => [
 			[ 'a' => 'integer' ],
 			[ 'a' => 'integer' ],

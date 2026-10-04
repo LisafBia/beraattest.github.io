@@ -1,24 +1,11 @@
 <?php
 /**
- * Find all rows in the categorylinks table whose collation is out-of-date
- * (cl_collation != $wgCategoryCollation) and repopulate cl_sortkey
+ * Find all rows in the configured source table (default: categorylinks)
+ * whose collation is out-of-date (collation_name != $wgCategoryCollation)
+ * and repopulate cl_sortkey
  * using the page title and cl_sortkey_prefix.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  * @author Aryeh Gregor (Simetrical)
@@ -28,17 +15,21 @@
 require_once __DIR__ . '/Maintenance.php';
 // @codeCoverageIgnoreEnd
 
+use MediaWiki\Collation\Collation;
+use MediaWiki\Deferred\LinksUpdate\LinksTable;
+use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Storage\NameTableStore;
 use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Title\Title;
-use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\IMaintainableDatabase;
+use Wikimedia\Rdbms\IReadableDatabase;
 use Wikimedia\Rdbms\IResultWrapper;
 
 /**
- * Maintenance script that will find all rows in the categorylinks table
- * whose collation is out-of-date.
+ * Maintenance script that will find all rows in the configured source table
+ * (default: categorylinks) whose collation is out-of-date.
  *
  * @ingroup Maintenance
  */
@@ -67,21 +58,26 @@ class UpdateCollation extends Maintenance {
 	/** @var string|null */
 	private $targetTable;
 
-	/** @var IDatabase */
+	/** @var string */
+	private $table;
+
+	private bool $normalization = false;
+
+	/** @var IReadableDatabase */
 	private $dbr;
 
 	/** @var IMaintainableDatabase */
 	private $dbw;
 
-	/** @var NamespaceInfo */
-	private $namespaceInfo;
+	private NamespaceInfo $namespaceInfo;
+	private NameTableStore $collationNameStore;
 
 	public function __construct() {
 		parent::__construct();
 
 		$this->addDescription( <<<TEXT
 This script will find all rows in the categorylinks table whose collation is
-out-of-date (cl_collation is not the same as \$wgCategoryCollation) and
+out-of-date (collation_name is not the same as \$wgCategoryCollation) and
 repopulate cl_sortkey using the page title and cl_sortkey_prefix. If all
 collations are up-to-date, it will do nothing.
 TEXT
@@ -99,8 +95,13 @@ TEXT
 			'use instead of $wgCategoryCollation. Usually you should not use this, ' .
 			'you should just update $wgCategoryCollation in LocalSettings.php.',
 			false, true );
-		$this->addOption( 'target-table', 'Copy rows from categorylinks into the ' .
+		$this->addOption( 'table', 'Table relative to which updates are generated. This ' .
+			'table will be updated in place, unless --target-table is set. Defaults to ' .
+			'categorylinks.', false, true );
+		$this->addOption( 'target-table', 'Copy rows from table into the ' .
 			'specified table instead of updating them in place.', false, true );
+		$this->addOption( 'only-migrate-normalization', 'Only backfill cl_collation_id ' .
+			'field from cl_collation', false );
 		$this->addOption( 'remote', 'Use Shellbox to calculate the new sort keys ' .
 			'remotely.' );
 		$this->addOption( 'dry-run', 'Don\'t actually change the collations, just ' .
@@ -114,6 +115,24 @@ TEXT
 	private function init() {
 		$services = $this->getServiceContainer();
 		$this->namespaceInfo = $services->getNamespaceInfo();
+
+		$lbFactory = $this->getServiceContainer()->getDBLoadBalancerFactory();
+
+		// Get the actual database domain ID from a connection to the virtual domain
+		$this->dbr = $lbFactory->getReplicaDatabase( LinksTable::VIRTUAL_DOMAIN );
+		$dbDomain = $this->dbr->getDomainID();
+		$linksLb = $lbFactory->getLoadBalancer( LinksTable::VIRTUAL_DOMAIN );
+
+		$this->collationNameStore = new NameTableStore(
+			$linksLb,
+			$this->getServiceContainer()->getMainWANObjectCache(),
+			LoggerFactory::getInstance( 'SecondaryDataUpdate' ),
+			'collation',
+			'collation_id',
+			'collation_name',
+			null,
+			$dbDomain
+		);
 
 		if ( $this->hasOption( 'target-collation' ) ) {
 			$this->collationName = $this->getOption( 'target-collation' );
@@ -134,21 +153,27 @@ TEXT
 		$this->force = $this->getOption( 'force' );
 		$this->dryRun = $this->getOption( 'dry-run' );
 		$this->verboseStats = $this->getOption( 'verbose-stats' );
-		$this->dbw = $this->getPrimaryDB();
-		$this->dbr = $this->getReplicaDB();
+		$this->dbw = $linksLb->getMaintenanceConnectionRef( DB_PRIMARY, [], $dbDomain );
+		$this->table = $this->getOption( 'table', 'categorylinks' );
 		$this->targetTable = $this->getOption( 'target-table' );
+		$this->normalization = $this->getOption( 'only-migrate-normalization', false );
 	}
 
 	public function execute() {
 		$this->init();
 		$batchSize = $this->getBatchSize();
 
+		if ( $this->normalization ) {
+			$this->runNormalizationMigration();
+			return;
+		}
+
 		if ( $this->targetTable ) {
 			if ( !$this->dbw->tableExists( $this->targetTable, __METHOD__ ) ) {
 				$this->output( "Creating table {$this->targetTable}\n" );
 				$this->dbw->query(
 					'CREATE TABLE ' . $this->dbw->tableName( $this->targetTable ) .
-					' LIKE ' . $this->dbw->tableName( 'categorylinks' ),
+					' LIKE ' . $this->dbw->tableName( $this->table ),
 					__METHOD__
 				);
 			}
@@ -157,9 +182,9 @@ TEXT
 		$collationConds = [];
 		if ( !$this->force && !$this->targetTable ) {
 			if ( $this->hasOption( 'previous-collation' ) ) {
-				$collationConds['cl_collation'] = $this->getOption( 'previous-collation' );
+				$collationConds['collation_name'] = $this->getOption( 'previous-collation' );
 			} else {
-				$collationConds[] = $this->dbr->expr( 'cl_collation', '!=', $this->collationName );
+				$collationConds[] = $this->dbr->expr( 'collation_name', '!=', $this->collationName );
 			}
 		}
 		$maxPageId = (int)$this->dbr->newSelectQueryBuilder()
@@ -179,11 +204,11 @@ TEXT
 			}
 			$res = $this->dbw->newSelectQueryBuilder()
 				->select( [
-					'cl_from', 'cl_to', 'cl_sortkey_prefix', 'cl_collation',
-					'cl_sortkey', $clType, 'cl_timestamp',
-					'page_namespace', 'page_title'
+					'cl_from', 'cl_target_id', 'cl_sortkey_prefix', 'cl_sortkey', $clType,
+					'cl_timestamp', 'collation_name', 'page_namespace', 'page_title'
 				] )
-				->from( 'categorylinks' )
+				->from( $this->table )
+				->join( 'collation', null, 'cl_collation_id = collation_id' )
 				// per T58041
 				->straightJoin( 'page', null, 'cl_from = page_id' )
 				->where( $collationConds )
@@ -226,11 +251,11 @@ TEXT
 	 */
 	private function updateBatch( IResultWrapper $res ) {
 		if ( !$this->dryRun ) {
-			$this->beginTransaction( $this->dbw, __METHOD__ );
+			$this->beginTransactionRound( __METHOD__ );
 		}
 		foreach ( $res as $row ) {
 			$title = Title::newFromRow( $row );
-			if ( !$row->cl_collation ) {
+			if ( !$row->collation_name ) {
 				# This is an old-style row, so the sortkey needs to be
 				# converted.
 				if ( $row->cl_sortkey === $title->getText()
@@ -258,23 +283,24 @@ TEXT
 				// other fields, if any, those usually only happen when upgrading old MediaWikis.)
 				$this->numRowsProcessed += ( $row->cl_sortkey !== $newSortKey );
 			} else {
+				$collationId = $this->collationNameStore->acquireId( $this->collationName );
 				$this->dbw->newUpdateQueryBuilder()
-					->update( 'categorylinks' )
+					->update( $this->table )
 					->set( [
 						'cl_sortkey' => $newSortKey,
 						'cl_sortkey_prefix' => $prefix,
-						'cl_collation' => $this->collationName,
+						'cl_collation_id' => $collationId,
 						'cl_type' => $type,
 						'cl_timestamp = cl_timestamp',
 					] )
-					->where( [ 'cl_from' => $row->cl_from, 'cl_to' => $row->cl_to ] )
+					->where( [ 'cl_from' => $row->cl_from, 'cl_target_id' => $row->cl_target_id ] )
 					->caller( __METHOD__ )
 					->execute();
 				$this->numRowsProcessed++;
 			}
 		}
 		if ( !$this->dryRun ) {
-			$this->commitTransaction( $this->dbw, __METHOD__ );
+			$this->commitTransactionRound( __METHOD__ );
 		}
 	}
 
@@ -298,12 +324,13 @@ TEXT
 			// Truncate to 230 bytes to avoid DB error
 			$newSortKey = substr( $newSortKey, 0, 230 );
 			$type = $this->namespaceInfo->getCategoryLinkType( $row->page_namespace );
+			$collationId = $this->collationNameStore->acquireId( $this->collationName );
 			$rowsToInsert[] = [
 				'cl_from' => $row->cl_from,
-				'cl_to' => $row->cl_to,
+				'cl_target_id' => $row->cl_target_id,
 				'cl_sortkey' => $newSortKey,
 				'cl_sortkey_prefix' => $row->cl_sortkey_prefix,
-				'cl_collation' => $this->collationName,
+				'cl_collation_id' => $collationId,
 				'cl_type' => $type,
 				'cl_timestamp' => $row->cl_timestamp
 			];
@@ -311,14 +338,14 @@ TEXT
 		if ( $this->dryRun ) {
 			$this->numRowsProcessed += count( $rowsToInsert );
 		} else {
-			$this->beginTransaction( $this->dbw, __METHOD__ );
+			$this->beginTransactionRound( __METHOD__ );
 			$this->dbw->newInsertQueryBuilder()
 				->insertInto( $this->targetTable )
 				->ignore()
 				->rows( $rowsToInsert )
 				->caller( __METHOD__ )->execute();
 			$this->numRowsProcessed += $this->dbw->affectedRows();
-			$this->commitTransaction( $this->dbw, __METHOD__ );
+			$this->commitTransactionRound( __METHOD__ );
 		}
 	}
 
@@ -363,7 +390,6 @@ TEXT
 			}
 			$val = $this->sizeHistogram[$i] ?? 0;
 			for ( $coarseIndex = 0; $coarseIndex < $numBins - 1; $coarseIndex++ ) {
-				// @phan-suppress-next-line PhanTypePossiblyInvalidDimOffset False positive
 				if ( $coarseBoundaries[$coarseIndex] > $i ) {
 					$coarseHistogram[$coarseIndex] += $val;
 					break;
@@ -382,7 +408,6 @@ TEXT
 		$prevBoundary = 0;
 		for ( $coarseIndex = 0; $coarseIndex < $numBins; $coarseIndex++ ) {
 			$val = $coarseHistogram[$coarseIndex] ?? 0;
-			// @phan-suppress-next-line PhanTypePossiblyInvalidDimOffset False positive
 			$boundary = $coarseBoundaries[$coarseIndex];
 			$this->output(
 				sprintf( "%-10s %-10d |%s\n",
@@ -392,6 +417,70 @@ TEXT
 				)
 			);
 			$prevBoundary = $boundary;
+		}
+	}
+
+	private function runNormalizationMigration() {
+		if ( !$this->dbw->fieldExists( $this->table, 'cl_collation', __METHOD__ ) ) {
+			$this->output( "The cl_collation column appears to already be normalized. Skipping.\n" );
+			return;
+		}
+		if ( !$this->dbw->fieldExists( $this->table, 'cl_collation_id', __METHOD__ ) ) {
+			$this->output( "The cl_collation_id column doesn't exist. Run update.php to create it.\n" );
+			return;
+		}
+		if ( !$this->dbw->tableExists( 'collation', __METHOD__ ) ) {
+			$this->output( "The collation table doesn't exist. Run update.php to create it.\n" );
+			return;
+		}
+
+		$maxPageId = (int)$this->dbr->newSelectQueryBuilder()
+			->select( 'MAX(page_id)' )
+			->from( 'page' )
+			->caller( __METHOD__ )->fetchField();
+		$batchValue = 0;
+		$batchSize = $this->getBatchSize();
+
+		do {
+			$this->output( "Selecting next $batchSize pages from cl_from = $batchValue... " );
+
+			$res = $this->dbw->newSelectQueryBuilder()
+				->select( [ 'cl_collation' ] )
+				->distinct()
+				->from( $this->table )
+				->where( [ 'cl_collation_id' => 0 ] )
+				->andWhere(
+					$this->dbw->expr( 'cl_from', '>=', $batchValue )
+						->and( 'cl_from', '<', $batchValue + $this->getBatchSize() )
+				)
+				->caller( __METHOD__ )->fetchResultSet();
+			$this->output( "processing... " );
+
+			if ( $res->numRows() && !$this->dryRun ) {
+				foreach ( $res as $row ) {
+					$collationName = $row->cl_collation;
+					$collationId = $this->collationNameStore->acquireId( $collationName );
+					$this->dbw->newUpdateQueryBuilder()
+						->update( $this->table )
+						->set( [ 'cl_collation_id' => $collationId ] )
+						->where( [ 'cl_collation' => $collationName ] )
+						->andWhere(
+							$this->dbw->expr( 'cl_from', '>=', $batchValue )
+								->and( 'cl_from', '<', $batchValue + $this->getBatchSize() )
+						)
+						->caller( __METHOD__ )->execute();
+					$this->numRowsProcessed += $this->dbw->affectedRows();
+				}
+
+				$this->waitForReplication();
+			}
+			$batchValue += $this->getBatchSize();
+
+			$this->output( "{$this->numRowsProcessed} done.\n" );
+		} while ( $maxPageId >= $batchValue );
+
+		if ( !$this->dryRun ) {
+			$this->output( "{$this->numRowsProcessed} rows processed\n" );
 		}
 	}
 }

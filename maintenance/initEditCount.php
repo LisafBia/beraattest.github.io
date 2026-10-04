@@ -3,21 +3,7 @@
  * Init the user_editcount database field based on the number of rows in the
  * revision table.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
@@ -30,6 +16,7 @@ use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\WikiMap\WikiMap;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\RawSQLValue;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 class InitEditCount extends Maintenance {
 	public function __construct() {
@@ -65,16 +52,16 @@ class InitEditCount extends Maintenance {
 				->from( 'user' )
 				->caller( __METHOD__ )->fetchField();
 
-			$start = microtime( true );
+			$start = ConvertibleTimestamp::hrtime();
 			$migrated = 0;
 			for ( $min = 0; $min <= $lastUser; $min += $chunkSize ) {
 				$max = $min + $chunkSize;
 
 				$result = $dbr->newSelectQueryBuilder()
-					->select( [ 'user_id', 'user_editcount' => "COUNT(actor_rev_user.actor_user)" ] )
+					->select( [ 'user_id', 'user_editcount' => 'COUNT(rev_actor)' ] )
 					->from( 'user' )
-					->leftJoin( 'revision', 'rev', "user_id = actor_rev_user.actor_user" )
-					->join( 'actor', 'actor_rev_user', 'actor_rev_user.actor_id = rev_actor' )
+					->join( 'actor', 'actor_rev_user', 'user_id = actor_rev_user.actor_user' )
+					->leftJoin( 'revision', 'rev', 'actor_rev_user.actor_id = rev.rev_actor' )
 					->where( $dbr->expr( 'user_id', '>', $min )->and( 'user_id', '<=', $max ) )
 					->groupBy( 'user_id' )
 					->caller( __METHOD__ )->fetchResultSet();
@@ -88,7 +75,7 @@ class InitEditCount extends Maintenance {
 					++$migrated;
 				}
 
-				$delta = microtime( true ) - $start;
+				$delta = ( ConvertibleTimestamp::hrtime() - $start ) / 1e9;
 				$rate = ( $delta == 0.0 ) ? 0.0 : $migrated / $delta;
 				$this->output( sprintf( "%s %d (%0.1f%%) done in %0.1f secs (%0.3f accounts/sec).\n",
 					WikiMap::getCurrentWikiDbDomain()->getId(),

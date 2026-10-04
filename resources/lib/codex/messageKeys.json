@@ -1,10 +1,13 @@
 [
+	"cdx-breadcrumb-navigation-label",
+	"cdx-breadcrumb-overflow-label",
 	"cdx-chip-input-chip-added",
 	"cdx-chip-input-chip-removed",
 	"cdx-dialog-close-button-label",
 	"cdx-input-chip-aria-description",
 	"cdx-label-optional-flag",
 	"cdx-message-dismiss-button-label",
+	"cdx-popover-close-button-label",
 	"cdx-search-input-search-button-label",
 	"cdx-table-pager-button-first-page",
 	"cdx-table-pager-button-last-page",

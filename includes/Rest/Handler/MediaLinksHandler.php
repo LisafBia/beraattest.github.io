@@ -2,30 +2,27 @@
 
 namespace MediaWiki\Rest\Handler;
 
-use MediaFileTrait;
+use MediaWiki\Deferred\LinksUpdate\ImageLinksTable;
+use MediaWiki\FileRepo\RepoGroup;
 use MediaWiki\Page\ExistingPageRecord;
 use MediaWiki\Page\PageLookup;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\Response;
 use MediaWiki\Rest\SimpleHandler;
-use RepoGroup;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\Rdbms\IConnectionProvider;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Handler class for Core REST API endpoints that perform operations on revisions
  */
 class MediaLinksHandler extends SimpleHandler {
-	use MediaFileTrait;
+	use \MediaWiki\FileRepo\File\MediaFileTrait;
 
 	/** int The maximum number of media links to return */
 	private const MAX_NUM_LINKS = 100;
-
-	private IConnectionProvider $dbProvider;
-	private RepoGroup $repoGroup;
-	private PageLookup $pageLookup;
 
 	/**
 	 * @var ExistingPageRecord|false|null
@@ -33,18 +30,12 @@ class MediaLinksHandler extends SimpleHandler {
 	private $page = false;
 
 	public function __construct(
-		IConnectionProvider $dbProvider,
-		RepoGroup $repoGroup,
-		PageLookup $pageLookup
+		private readonly IConnectionProvider $dbProvider,
+		private readonly RepoGroup $repoGroup,
+		private readonly PageLookup $pageLookup,
 	) {
-		$this->dbProvider = $dbProvider;
-		$this->repoGroup = $repoGroup;
-		$this->pageLookup = $pageLookup;
 	}
 
-	/**
-	 * @return ExistingPageRecord|null
-	 */
 	private function getPage(): ?ExistingPageRecord {
 		if ( $this->page === false ) {
 			$this->page = $this->pageLookup->getExistingPageByText(
@@ -94,13 +85,17 @@ class MediaLinksHandler extends SimpleHandler {
 	 * @return array the results
 	 */
 	private function getDbResults( int $pageId ) {
-		return $this->dbProvider->getReplicaDatabase()->newSelectQueryBuilder()
-			->select( 'il_to' )
+		$dbr = $this->dbProvider->getReplicaDatabase( ImageLinksTable::VIRTUAL_DOMAIN );
+
+		return $dbr->newSelectQueryBuilder()
+			->select( 'lt_title' )
 			->from( 'imagelinks' )
-			->where( [ 'il_from' => $pageId ] )
-			->orderBy( 'il_to' )
+			->join( 'linktarget', null, 'il_target_id = lt_id' )
+			->where( [ 'il_from' => $pageId, 'lt_namespace' => NS_FILE ] )
+			->orderBy( 'lt_title' )
 			->limit( $this->getMaxNumLinks() + 1 )
-			->caller( __METHOD__ )->fetchFieldValues();
+			->caller( __METHOD__ )
+			->fetchFieldValues();
 	}
 
 	/**
@@ -123,10 +118,14 @@ class MediaLinksHandler extends SimpleHandler {
 			$this->getAuthority()->getUser(),
 			'imagesize'
 		);
+
+		// Normalize thumbnail sizes
+		[ $maxNormalizedWidth, $maxNormalizedHeight ] = self::getNormalizedThumbLimits( $maxWidth );
+
 		$transforms = [
 			'preferred' => [
-				'maxWidth' => $maxWidth,
-				'maxHeight' => $maxHeight,
+				'maxWidth' => $maxNormalizedWidth,
+				'maxHeight' => $maxNormalizedHeight
 			]
 		];
 		$response = [];
@@ -141,10 +140,12 @@ class MediaLinksHandler extends SimpleHandler {
 		return $response;
 	}
 
+	/** @inheritDoc */
 	public function needsWriteAccess() {
 		return false;
 	}
 
+	/** @inheritDoc */
 	public function getParamSettings() {
 		return [
 			'title' => [
@@ -152,6 +153,7 @@ class MediaLinksHandler extends SimpleHandler {
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-media-links-title' ),
+				Handler::PARAM_EXAMPLE => 'Jupiter',
 			],
 		];
 	}
@@ -167,7 +169,7 @@ class MediaLinksHandler extends SimpleHandler {
 		}
 
 		// XXX: use hash of the rendered HTML?
-		return '"' . $page->getLatest() . '@' . wfTimestamp( TS_MW, $page->getTouched() ) . '"';
+		return '"' . $page->getLatest() . '@' . wfTimestamp( TS::MW, $page->getTouched() ) . '"';
 	}
 
 	/**
@@ -196,6 +198,6 @@ class MediaLinksHandler extends SimpleHandler {
 	}
 
 	public function getResponseBodySchemaFileName( string $method ): ?string {
-		return 'includes/Rest/Handler/Schema/MediaLinks.json';
+		return __DIR__ . '/Schema/MediaLinks.json';
 	}
 }

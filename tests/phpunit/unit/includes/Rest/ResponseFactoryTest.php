@@ -5,6 +5,7 @@ namespace MediaWiki\Tests\Rest;
 use ArrayIterator;
 use Exception;
 use InvalidArgumentException;
+use MediaWiki\Rest\ErrorFormatterV1;
 use MediaWiki\Rest\HttpException;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\RedirectException;
@@ -29,7 +30,13 @@ class ResponseFactoryTest extends MediaWikiUnitTestCase {
 	}
 
 	private function createResponseFactory() {
-		return new ResponseFactory( [ $this->getDummyTextFormatter() ] );
+		$textFormatters = [ $this->getDummyTextFormatter() ];
+		// Supply tracing data so that 5xx errors carry a reqId, mirroring
+		// production where Router::getTracingData() provides the request id.
+		return new ResponseFactory(
+			$textFormatters,
+			new ErrorFormatterV1( $textFormatters, false, [ 'request_id' => 'test-request-id' ] )
+		);
 	}
 
 	/** @dataProvider provideEncodeJson */
@@ -148,6 +155,19 @@ class ResponseFactoryTest extends MediaWikiUnitTestCase {
 		$data = json_decode( $body->getContents(), true );
 		$this->assertSame( 415, $data['httpCode'] );
 		$this->assertSame( '...', $data['message'] );
+		$this->assertArrayNotHasKey( 'reqId', $data );
+	}
+
+	public function testCreateFatalHttpError() {
+		$rf = $this->createResponseFactory();
+		$response = $rf->createHttpError( 501, [ 'message' => '...' ] );
+		$this->assertSame( 501, $response->getStatusCode() );
+		$body = $response->getBody();
+		$body->rewind();
+		$data = json_decode( $body->getContents(), true );
+		$this->assertSame( 501, $data['httpCode'] );
+		$this->assertSame( '...', $data['message'] );
+		$this->assertArrayHasKey( 'reqId', $data );
 	}
 
 	public function testCreateFromExceptionUnlogged() {
@@ -170,6 +190,7 @@ class ResponseFactoryTest extends MediaWikiUnitTestCase {
 		$data = json_decode( $body->getContents(), true );
 		$this->assertSame( 500, $data['httpCode'] );
 		$this->assertSame( 'Error: exception of type Exception', $data['message'] );
+		$this->assertArrayHasKey( 'reqId', $data );
 	}
 
 	public function testCreateFromExceptionWrapped() {

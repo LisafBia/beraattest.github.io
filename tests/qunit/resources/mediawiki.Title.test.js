@@ -158,6 +158,19 @@
 		} );
 	} );
 
+	QUnit.test( 'NFC normalization', ( assert ) => {
+		assert.strictEqual(
+			mw.Title.newFromText( 'a\u0301' ).getMain(),
+			'\u00C1',
+			'NFD input at the start should be normalized and capitalized to NFC'
+		);
+		assert.strictEqual(
+			mw.Title.newFromText( 'page_a\u0301' ).getMain(),
+			'Page_\u00E1',
+			'NFD input in the middle should be normalized to NFC'
+		);
+	} );
+
 	QUnit.test( 'makeTitle', ( assert ) => {
 		const NS_MAIN = 0,
 			NS_TALK = 1,
@@ -301,21 +314,40 @@
 		assert.strictEqual( title.toString(), 'Penguins:Flightless_yet_cute.jpg' );
 	} );
 
+	// T409154
+	QUnit.test( 'Namespace matches Object.prototype property', ( assert ) => {
+		let title;
+
+		// Namespace is not registered
+		title = new mw.Title( 'constructor:foo' );
+		assert.strictEqual( title.toString(), 'Constructor:foo' );
+		assert.strictEqual( title.getMainText(), 'Constructor:foo' );
+		assert.strictEqual( title.getNamespaceId(), 0 );
+
+		// Namespace is registered
+		mw.config.get( 'wgFormattedNamespaces' )[ 102 ] = 'Constructor';
+		mw.config.get( 'wgNamespaceIds' ).constructor = 102;
+		title = new mw.Title( 'constructor:foo' );
+		assert.strictEqual( title.toString(), 'Constructor:Foo' );
+		assert.strictEqual( title.getMainText(), 'Foo' );
+		assert.strictEqual( title.getNamespaceId(), 102 );
+	} );
+
 	QUnit.test( 'isTalkPage/getTalkPage/getSubjectPage', ( assert ) => {
 		let title = new mw.Title( 'User:Foo' );
-		assert.strictEqual( title.isTalkPage(), false, 'Non-talk page detected as such' );
+		assert.false( title.isTalkPage(), 'Non-talk page detected as such' );
 		assert.strictEqual( title.getSubjectPage().getPrefixedText(), 'User:Foo', 'getSubjectPage on a subject page is a no-op' );
 
 		title = title.getTalkPage();
 		assert.strictEqual( title.getPrefixedText(), 'User talk:Foo', 'getTalkPage creates correct title' );
 		assert.strictEqual( title.getTalkPage().getPrefixedText(), 'User talk:Foo', 'getTalkPage on a talk page is a no-op' );
-		assert.strictEqual( title.isTalkPage(), true, 'Talk page is detected as such' );
+		assert.true( title.isTalkPage(), 'Talk page is detected as such' );
 
 		title = title.getSubjectPage();
 		assert.strictEqual( title.getPrefixedText(), 'User:Foo', 'getSubjectPage creates correct title' );
 
 		title = new mw.Title( 'Special:AllPages' );
-		assert.strictEqual( title.isTalkPage(), false, 'Special page is not a talk page' );
+		assert.false( title.isTalkPage(), 'Special page is not a talk page' );
 		assert.strictEqual( title.getTalkPage(), null, 'getTalkPage not valid for this namespace' );
 		assert.strictEqual( title.getSubjectPage().getPrefixedText(), 'Special:AllPages', 'getSubjectPage is self for special pages' );
 
@@ -333,13 +365,13 @@
 
 	QUnit.test( 'wantSignaturesNamespace', ( assert ) => {
 		mw.config.set( 'wgExtraSignatureNamespaces', [] );
-		assert.strictEqual( mw.Title.wantSignaturesNamespace( 0 ), false, 'Main namespace has no signatures' );
-		assert.strictEqual( mw.Title.wantSignaturesNamespace( 1 ), true, 'Talk namespace has signatures' );
-		assert.strictEqual( mw.Title.wantSignaturesNamespace( 2 ), false, 'NS2 has no signatures' );
-		assert.strictEqual( mw.Title.wantSignaturesNamespace( 3 ), true, 'NS3 has signatures' );
+		assert.false( mw.Title.wantSignaturesNamespace( 0 ), 'Main namespace has no signatures' );
+		assert.true( mw.Title.wantSignaturesNamespace( 1 ), 'Talk namespace has signatures' );
+		assert.false( mw.Title.wantSignaturesNamespace( 2 ), 'NS2 has no signatures' );
+		assert.true( mw.Title.wantSignaturesNamespace( 3 ), 'NS3 has signatures' );
 
 		mw.config.set( 'wgExtraSignatureNamespaces', [ 0 ] );
-		assert.strictEqual( mw.Title.wantSignaturesNamespace( 0 ), true, 'Main namespace has signatures when explicitly defined' );
+		assert.true( mw.Title.wantSignaturesNamespace( 0 ), 'Main namespace has signatures when explicitly defined' );
 	} );
 
 	QUnit.test( 'Throw error on invalid title', ( assert ) => {
@@ -351,7 +383,7 @@
 		assert.strictEqual( mw.Title.phpCharToUpper( '\uD801\uDC38' ), '\uD801\uDC10', 'U+10438 (DESERET SMALL LETTER H) 𐐸 -> U+10410 (DESERET CAPITAL LETTER H) 𐐐' );
 	} );
 
-	QUnit.test( 'Case-sensivity', ( assert ) => {
+	QUnit.test( 'Case-sensitivity', ( assert ) => {
 		// Default config
 		mw.config.set( 'wgCaseSensitiveNamespaces', [] );
 
@@ -407,7 +439,7 @@
 		// Empty registry, checks default to null
 
 		let title = new mw.Title( 'Some random page', 4 );
-		assert.strictEqual( title.exists(), null, 'Return null with empty existance registry' );
+		assert.strictEqual( title.exists(), null, 'Return null with empty existence registry' );
 
 		// Basic registry, checks default to boolean
 		mw.Title.exist.set( [ 'Does_exist', 'User_talk:NeilK', 'Wikipedia:Sandbox_rules' ], true );

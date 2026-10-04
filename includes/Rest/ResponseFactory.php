@@ -2,14 +2,11 @@
 
 namespace MediaWiki\Rest;
 
-use HttpStatus;
 use InvalidArgumentException;
-use MediaWiki\Language\LanguageCode;
-use MWExceptionHandler;
 use stdClass;
 use Throwable;
 use Wikimedia\Message\ITextFormatter;
-use Wikimedia\Message\MessageValue;
+use Wikimedia\Message\MessageSpecifier;
 
 /**
  * Generates standardized response objects.
@@ -18,31 +15,21 @@ class ResponseFactory {
 	private const CT_HTML = 'text/html; charset=utf-8';
 	private const CT_JSON = 'application/json';
 
-	/** @var ITextFormatter[] */
-	private $textFormatters;
-
-	/** @var bool Whether to send exception backtraces to the client */
-	private $showExceptionDetails = false;
+	private readonly ErrorFormatter $errorFormatter;
 
 	/**
-	 * @param ITextFormatter[] $textFormatters
-	 *
-	 * If there is a relative preference among the input text formatters, the formatters should
-	 * be ordered from most to least preferred.
+	 * @param ITextFormatter[] $textFormatters Only used to build a default ErrorFormatter
+	 *   when $errorFormatter is omitted; ignored otherwise. If there is a relative preference
+	 *   among the input text formatters, the formatters should be ordered from most to least
+	 *   preferred.
+	 * @param ErrorFormatter|null $errorFormatter Defaults to the legacy error shape if omitted,
+	 *   for backwards compatibility with callers constructing ResponseFactory directly.
 	 */
-	public function __construct( $textFormatters ) {
-		$this->textFormatters = $textFormatters;
-	}
-
-	/**
-	 * Control whether web responses may include a exception messager and backtrace
-	 *
-	 * @see $wgShowExceptionDetails
-	 * @since 1.39
-	 * @param bool $showExceptionDetails
-	 */
-	public function setShowExceptionDetails( bool $showExceptionDetails ): void {
-		$this->showExceptionDetails = $showExceptionDetails;
+	public function __construct(
+		array $textFormatters,
+		?ErrorFormatter $errorFormatter = null,
+	) {
+		$this->errorFormatter = $errorFormatter ?? new ErrorFormatterV1( $textFormatters, false );
 	}
 
 	/**
@@ -187,41 +174,81 @@ class ResponseFactory {
 	}
 
 	/**
-	 * Create a HTTP 4xx or 5xx response.
-	 * @param int $errorCode HTTP error code
-	 * @param array $bodyData An array of data to be included in the JSON response
+	 * @param int $errorCode
+	 * @param array $bodyData
 	 * @return Response
 	 */
-	public function createHttpError( $errorCode, array $bodyData = [] ) {
-		if ( $errorCode < 400 || $errorCode >= 600 ) {
-			throw new InvalidArgumentException( 'error code must be 4xx or 5xx' );
-		}
-		$response = $this->createJson( $bodyData + [
-			'httpCode' => $errorCode,
-			'httpReason' => HttpStatus::getMessage( $errorCode )
-		] );
+	private function wrapHttpError( int $errorCode, array $bodyData = [] ): Response {
+		$response = $this->createJson( $bodyData );
+
 		// TODO add link to error code documentation
 		$response->setStatus( $errorCode );
 		return $response;
 	}
 
 	/**
+	 * Create a HTTP 4xx or 5xx response.
+	 * @param int $errorCode HTTP error code
+	 * @param array $bodyData An array of data to be included in the JSON response
+	 * @return Response
+	 */
+	public function createHttpError( $errorCode, array $bodyData = [] ) {
+		$bodyData = $this->errorFormatter->formatErrorBody( $errorCode, $bodyData );
+
+		return $this->wrapHttpError( $errorCode, $bodyData );
+	}
+
+	/**
+	 * @param HttpException $exception
+	 * @return Response
+	 */
+	private function formatHttpException( HttpException $exception, array $extraData = [] ): Response {
+		return $this->wrapHttpError(
+			$exception->getCode(),
+			$this->errorFormatter->formatHttpException(
+				$exception->getCode(),
+				$exception,
+				$extraData
+			)
+		);
+	}
+
+	private function formatException( Throwable $exception, array $extraData = [] ): Response {
+		return $this->wrapHttpError(
+			500,
+			$this->errorFormatter->formatException( 500, $exception, $extraData )
+		);
+	}
+
+	private function formatLocalizedHttpException(
+		LocalizedHttpException $exception,
+		array $extraData = []
+	): Response {
+		return $this->wrapHttpError(
+			$exception->getCode(),
+			$this->errorFormatter->formatLocalizedHttpException(
+				$exception->getCode(), $exception, $extraData
+			),
+		);
+	}
+
+	/**
 	 * Create an HTTP 4xx or 5xx response with error message localisation
 	 *
 	 * @param int $errorCode
-	 * @param MessageValue $messageValue
+	 * @param MessageSpecifier $messageValue Prior to MediaWiki 1.47 this had to be a MessageValue
 	 * @param array $extraData An array of additional data to be included in the JSON response
 	 *
 	 * @return Response
 	 */
 	public function createLocalizedHttpError(
 		$errorCode,
-		MessageValue $messageValue,
+		MessageSpecifier $messageValue,
 		array $extraData = []
 	) {
-		return $this->createHttpError(
+		return $this->wrapHttpError(
 			$errorCode,
-			array_merge( $extraData, $this->formatMessage( $messageValue ) )
+			$this->errorFormatter->formatLocalizedHttpError( $errorCode, $messageValue, $extraData )
 		);
 	}
 
@@ -233,48 +260,26 @@ class ResponseFactory {
 	 * @return Response
 	 */
 	public function createFromException( Throwable $exception, array $extraData = [] ) {
-		if ( $exception instanceof LocalizedHttpException ) {
-			$response = $this->createLocalizedHttpError(
-				$exception->getCode(),
-				$exception->getMessageValue(),
-				$exception->getErrorData() + $extraData + [
-					'errorKey' => $exception->getErrorKey(),
-				]
-			);
-		} elseif ( $exception instanceof ResponseException ) {
-			return $exception->getResponse();
-		} elseif ( $exception instanceof RedirectException ) {
-			$response = $this->createRedirect( $exception->getTarget(), $exception->getCode() );
-		} elseif ( $exception instanceof HttpException ) {
-			if ( in_array( $exception->getCode(), [ 204, 304 ], true ) ) {
-				$response = $this->create();
-				$response->setStatus( $exception->getCode() );
-			} else {
-				$response = $this->createHttpError(
-					$exception->getCode(),
-					array_merge(
-						[ 'message' => $exception->getMessage() ],
-						$exception->getErrorData()
-					)
+		switch ( true ) {
+			case $exception instanceof LocalizedHttpException:
+				return $this->formatLocalizedHttpException(
+					$exception, $extraData
 				);
-			}
-		} elseif ( $this->showExceptionDetails ) {
-			$response = $this->createHttpError( 500, [
-				'message' => 'Error: exception of type ' . get_class( $exception ) . ': '
-					. $exception->getMessage(),
-				'exception' => MWExceptionHandler::getStructuredExceptionData(
-					$exception,
-					MWExceptionHandler::CAUGHT_BY_OTHER
-				)
-			] );
-			// XXX: should we try to do something useful with ILocalizedException?
-			// XXX: should we try to do something useful with common MediaWiki errors like ReadOnlyError?
-		} else {
-			$response = $this->createHttpError( 500, [
-				'message' => 'Error: exception of type ' . get_class( $exception ),
-			] );
+			case $exception instanceof ResponseException:
+				return $exception->getResponse();
+			case $exception instanceof RedirectException:
+				return $this->createRedirect( $exception->getTarget(), $exception->getCode() );
+			case $exception instanceof HttpException:
+				if ( in_array( $exception->getCode(), [ 204, 304 ], true ) ) {
+					$response = $this->create();
+					$response->setStatus( $exception->getCode() );
+				} else {
+					$response = $this->formatHttpException( $exception, $extraData );
+				}
+				return $response;
+			default:
+				return $this->formatException( $exception, $extraData );
 		}
-		return $response;
 	}
 
 	/**
@@ -322,44 +327,46 @@ class ResponseFactory {
 	}
 
 	/**
-	 * Tries to return the formatted string(s) for a message value object using the
+	 * Returns an array of all language codes supported by this instance's text formatters,
+	 * in fallback order. Useful for constructing cache keys.
+	 *
+	 * @return string[]
+	 */
+	public function getLangCodes(): array {
+		return $this->errorFormatter->getLangCodes();
+	}
+
+	/**
+	 * Tries to return the formatted string(s) for a message object using the
 	 * response factory's text formatters. The returned array will either be empty (if there are
 	 * no text formatters), or have exactly one key, "messageTranslations", whose value
 	 * is an array of formatted strings, keyed by the associated language code.
 	 *
-	 * @param MessageValue $messageValue the message value object to format
+	 * @param MessageSpecifier $messageValue The message object to format.
+	 *   Prior to MediaWiki 1.47 this had to be a MessageValue.
 	 *
 	 * @return array
 	 */
-	public function formatMessage( MessageValue $messageValue ): array {
-		if ( !$this->textFormatters ) {
-			// For unit tests
-			return [];
-		}
-		$translations = [];
-		foreach ( $this->textFormatters as $formatter ) {
-			$lang = LanguageCode::bcp47( $formatter->getLangCode() );
-			$messageText = $formatter->format( $messageValue );
-			$translations[$lang] = $messageText;
-		}
-		return [ 'messageTranslations' => $translations ];
+	public function formatMessage( MessageSpecifier $messageValue ): array {
+		return $this->errorFormatter->formatMessage( $messageValue );
 	}
 
 	/**
-	 * Tries to return one formatted string for a message value object. Return value will be:
+	 * Tries to return one formatted string for a message object. Return value will be:
 	 *   1) the formatted string for $preferredLang, if $preferredLang is supplied and the
 	 *      formatted string for that language is available.
 	 *   2) the first available formatted string, if any are available.
 	 *   3) the message key string, if no formatted strings are available.
 	 * Callers who need more specific control should call formatMessage() instead.
 	 *
-	 * @param MessageValue $messageValue the message value object to format
+	 * @param MessageSpecifier $messageValue The message object to format.
+	 *   Prior to MediaWiki 1.47 this had to be a MessageValue
 	 * @param string $preferredlang preferred language for the formatted string, if available
 	 *
 	 * @return string
 	 */
 	public function getFormattedMessage(
-		MessageValue $messageValue, string $preferredlang = ''
+		MessageSpecifier $messageValue, string $preferredlang = ''
 	): string {
 		$strings = $this->formatMessage( $messageValue );
 		if ( !$strings ) {
@@ -400,27 +407,39 @@ class ResponseFactory {
 			],
 			'schemas' => [
 				'GenericErrorResponseModel' => [
-					'description' => 'Generic error response body',
-					'required' => [ 'httpCode', 'httpMessage' ],
+					'x-i18n-description' => 'rest-openapispec-genericerrorresponse-desc',
+					'required' => [ 'httpCode' ],
 					'properties' => [
 						'httpCode' => [
-							'type' => 'integer'
+							'type' => 'integer',
+							'x-i18n-description' => 'rest-openapispec-genericerrorresponse-property-desc-httpCode',
+							'example' => 500
 						],
 						'httpMessage' => [
-							'type' => 'string'
+							'type' => 'string',
+							'x-i18n-description' => 'rest-openapispec-genericerrorresponse-property-desc-httpMessage',
+							'example' => 'Internal Server Error'
 						],
 						'message' => [
-							'type' => 'string'
+							'type' => 'string',
+							'x-i18n-description' => 'rest-openapispec-genericerrorresponse-property-desc-message',
+							'example' => 'An unexpected error occurred'
 						],
 						'messageTranslations' => [
 							'type' => 'object',
 							'additionalProperties' => [
 								'type' => 'string'
+							],
+							// phpcs:ignore -- ignore the line being too long, for readability of the i18n key
+							'x-i18n-description' => 'rest-openapispec-genericerrorresponse-property-desc-messageTranslations',
+							'example' => [
+								'en' => 'An unexpected error occurred',
+								'es' => 'Ocurrió un error inesperado'
 							]
 						],
 					]
 				]
-			],
+			]
 		];
 	}
 

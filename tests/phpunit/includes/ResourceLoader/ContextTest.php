@@ -41,6 +41,7 @@ class ContextTest extends TestCase {
 		// Request parameters
 		$this->assertEquals( [], $ctx->getModules() );
 		$this->assertEquals( 'qqx', $ctx->getLanguage() );
+		$this->assertEquals( 'qqx', $ctx->getLanguageCode()->toBcp47Code() );
 		$this->assertSame( 0, $ctx->getDebug() );
 		$this->assertNull( $ctx->getOnly() );
 		$this->assertEquals( 'fallback', $ctx->getSkin() );
@@ -85,6 +86,7 @@ class ContextTest extends TestCase {
 		);
 		$this->assertSame( 0, $ctx->getDebug() );
 		$this->assertEquals( 'zh', $ctx->getLanguage() );
+		$this->assertEquals( 'zh', $ctx->getLanguageCode()->toBcp47Code() );
 		$this->assertEquals( 'styles', $ctx->getOnly() );
 		$this->assertEquals( 'fallback', $ctx->getSkin() );
 		$this->assertNull( $ctx->getUser() );
@@ -93,6 +95,26 @@ class ContextTest extends TestCase {
 		$this->assertEquals( 'ltr', $ctx->getDirection() );
 		$this->assertEquals( 'zh|fallback|0||styles|||||', $ctx->getHash() );
 		$this->assertSame( [ 'lang' => 'zh' ], $ctx->getReqBase() );
+	}
+
+	/** @dataProvider provideGetLanguageCode */
+	public function testGetLanguageCode( string $requestLanguage, string $expectedLanguageCode ): void {
+		$ctx = new Context( self::getResourceLoader(), new FauxRequest( [ 'lang' => $requestLanguage ] ) );
+
+		$this->assertSame( $expectedLanguageCode, $ctx->getLanguageCode()->toBcp47Code() );
+	}
+
+	public static function provideGetLanguageCode(): array {
+		return [
+			'Language code differs from BCP47 code' => [
+				'requestLanguage' => 'zh-cn',
+				'expectedLanguageCode' => 'zh-Hans-CN',
+			],
+			'Language code is the same as the BCP47 code' => [
+				'requestLanguage' => 'es',
+				'expectedLanguageCode' => 'es',
+			],
+		];
 	}
 
 	public static function provideDirection() {
@@ -104,18 +126,14 @@ class ContextTest extends TestCase {
 			[ 'lang' => 'he' ],
 			'rtl',
 		];
-		yield 'explicit LTR' => [
-			[ 'lang' => 'he', 'dir' => 'ltr' ],
-			'ltr',
-		];
-		yield 'explicit RTL' => [
-			[ 'lang' => 'en', 'dir' => 'rtl' ],
+		yield 'RTL variant of LTR language' => [
+			[ 'lang' => 'en-rtl' ],
 			'rtl',
 		];
 		// Not supported, but tested to cover the case and detect change
-		yield 'invalid dir' => [
-			[ 'lang' => 'he', 'dir' => 'xyz' ],
-			'rtl',
+		yield 'invalid language' => [
+			[ 'lang' => 'invalid-xyz' ],
+			'ltr',
 		];
 	}
 
@@ -125,6 +143,22 @@ class ContextTest extends TestCase {
 	public function testDirection( array $params, $expected ) {
 		$ctx = new Context( self::getResourceLoader(), new FauxRequest( $params ) );
 		$this->assertEquals( $expected, $ctx->getDirection() );
+	}
+
+	public static function provideDebugFromString() {
+		yield [ 'true', 2 ];
+		yield [ 'false', 0 ];
+		yield [ '1', 2 ];
+		yield [ '0', 0 ];
+
+		yield [ '2', 2 ];
+		yield [ '10', 0 ];
+	}
+
+	/** @dataProvider provideDebugFromString */
+	public function testDebugFromString( string $param, int $expected ) {
+		$ctx = new Context( self::getResourceLoader(), new FauxRequest( [ 'debug' => $param ] ) );
+		$this->assertSame( $expected, $ctx->getDebug() );
 	}
 
 	public function testShouldInclude() {
@@ -178,27 +212,20 @@ class ContextTest extends TestCase {
 		$this->assertSame( '{"x":"A"}', $json );
 
 		// Regression: https://phabricator.wikimedia.org/T329330
-		$json = @$ctx->encodeJson( [
-			'x' => 'A',
-			'y' => "Foo\x80\xf0Bar",
-			'z' => 'C',
-		] );
-		$this->assertSame( '{"x":"A","y":null,"z":"C"}', $json, 'Ignore invalid UTF-8' );
-	}
-
-	public function testEncodeJsonWarning() {
-		$ctx = new Context( self::getResourceLoader(), new FauxRequest( [] ) );
+		$data = [
+			'wgHolly' => 'Golightly',
+			'wgFred' => "Foo\x80\xf0Bar",
+			'wgPaul' => 'Baby',
+		];
+		$json = @$ctx->encodeJson( $data );
+		$this->assertSame( '{"wgHolly":"Golightly","wgFred":null,"wgPaul":"Baby"}', $json );
 
 		$this->expectPHPError(
 			E_USER_WARNING,
-			static function () use ( $ctx ) {
-				$ctx->encodeJson( [
-					'x' => 'A',
-					'y' => "Foo\x80\xf0Bar",
-					'z' => 'C',
-				] );
+			static function () use ( $ctx, $data ) {
+				$ctx->encodeJson( $data );
 			},
-			'encodeJson partially failed: Malformed UTF-8'
+			'Failed to JSON encode wgFred: Malformed UTF-8'
 		);
 	}
 

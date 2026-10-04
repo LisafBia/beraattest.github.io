@@ -1,6 +1,4 @@
-'use strict';
-
-const Page = require( 'wdio-mediawiki/Page' );
+import Page from 'wdio-mediawiki/Page.js';
 
 class BlockPage extends Page {
 	get target() {
@@ -11,12 +9,16 @@ class BlockPage extends Page {
 		return $( '.mw-block-messages' );
 	}
 
+	get userLookupItem() {
+		return $( '.cdx-menu-item--enabled' );
+	}
+
 	get activeBlocksHeader() {
 		return $( '.mw-block-log__type-active .cdx-accordion__header' );
 	}
 
 	get addBlockButton() {
-		return $( '.mw-block-log__create-button' );
+		return $( '.mw-block__create-button' );
 	}
 
 	get otherReasonInput() {
@@ -38,21 +40,15 @@ class BlockPage extends Page {
 
 	async block( target, expiry, reason ) {
 		await this.open( expiry );
-		await browser.waitUntil(
-			async () => ( await this.target.isDisplayed() ),
-			{ timeout: 5000 }
-		);
+		await this.target.waitForDisplayed();
 		await this.target.setValue( target );
+		await this.userLookupItem.waitForClickable();
+
 		// Remove focus from input. Temporary workaround until T382093 is resolved.
 		await $( 'body' ).click();
-		await browser.waitUntil(
-			async () => ( await this.activeBlocksHeader.isClickable() ),
-			{ timeout: 5000 }
-		);
-		await this.addBlockButton.click();
 		await this.otherReasonInput.setValue( reason );
 		await this.submitButton.click();
 	}
 }
 
-module.exports = new BlockPage();
+export default new BlockPage();

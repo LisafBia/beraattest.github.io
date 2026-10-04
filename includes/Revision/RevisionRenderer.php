@@ -2,21 +2,7 @@
 /**
  * This file is part of MediaWiki.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -27,9 +13,13 @@ use MediaWiki\Content\Renderer\ContentRenderer;
 use MediaWiki\Html\Html;
 use MediaWiki\Parser\ParserOptions;
 use MediaWiki\Parser\ParserOutput;
+use MediaWiki\Parser\Parsoid\PageBundleParserOutputConverter;
 use MediaWiki\Permissions\Authority;
+use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use Wikimedia\Assert\Assert;
+use Wikimedia\Parsoid\Core\HtmlPageBundle;
 use Wikimedia\Rdbms\ILoadBalancer;
 
 /**
@@ -42,7 +32,7 @@ use Wikimedia\Rdbms\ILoadBalancer;
  *
  * @since 1.32
  */
-class RevisionRenderer {
+class RevisionRenderer implements LoggerAwareInterface {
 
 	/** @var LoggerInterface */
 	private $saveParseLogger;
@@ -78,41 +68,38 @@ class RevisionRenderer {
 		$this->saveParseLogger = new NullLogger();
 	}
 
-	/**
-	 * @param LoggerInterface $saveParseLogger
-	 */
-	public function setLogger( LoggerInterface $saveParseLogger ) {
+	/** @inheritDoc */
+	public function setLogger( LoggerInterface $saveParseLogger ): void {
 		$this->saveParseLogger = $saveParseLogger;
 	}
 
-	// phpcs:disable Generic.Files.LineLength.TooLong
 	/**
 	 * @param RevisionRecord $rev
 	 * @param ParserOptions|null $options
 	 * @param Authority|null $forPerformer User for privileged access. Default is unprivileged
-	 *        (public) access, unless the 'audience' hint is set to something else RevisionRecord::RAW.
+	 *   (public) access, unless the 'audience' hint is set to something else RevisionRecord::RAW.
+	 * @phpcs:ignore Generic.Files.LineLength.TooLong
 	 * @param array{use-master?:bool,audience?:int,known-revision-output?:ParserOutput,causeAction?:?string,previous-output?:?ParserOutput} $hints
 	 *   Hints given as an associative array. Known keys:
-	 *      - 'use-master' Use primary DB when rendering for the parser cache during save.
-	 *        Default is to use a replica.
-	 *      - 'audience' the audience to use for content access. Default is
-	 *        RevisionRecord::FOR_PUBLIC if $forUser is not set, RevisionRecord::FOR_THIS_USER
-	 *        if $forUser is set. Can be set to RevisionRecord::RAW to disable audience checks.
-	 *      - 'known-revision-output' a combined ParserOutput for the revision, perhaps from
-	 *        some cache. the caller is responsible for ensuring that the ParserOutput indeed
-	 *        matched the $rev and $options. This mechanism is intended as a temporary stop-gap,
-	 *        for the time until caches have been changed to store RenderedRevision states instead
-	 *        of ParserOutput objects.
-	 *      - 'previous-output' A previously-rendered ParserOutput for this page. This
-	 *        can be used by Parsoid for selective updates.
-	 *      - 'causeAction' the reason for rendering. This should be informative, for used for
-	 *        logging and debugging.
+	 *   - 'use-master' Use primary DB when rendering for the parser cache during save.
+	 *     Default is to use a replica.
+	 *   - 'audience' the audience to use for content access. Default is
+	 *     RevisionRecord::FOR_PUBLIC if $forUser is not set, RevisionRecord::FOR_THIS_USER
+	 *     if $forUser is set. Can be set to RevisionRecord::RAW to disable audience checks.
+	 *   - 'known-revision-output' a combined ParserOutput for the revision, perhaps from
+	 *     some cache. the caller is responsible for ensuring that the ParserOutput indeed
+	 *     matched the $rev and $options. This mechanism is intended as a temporary stop-gap,
+	 *     for the time until caches have been changed to store RenderedRevision states instead
+	 *     of ParserOutput objects.
+	 *   - 'previous-output' A previously-rendered ParserOutput for this page. This
+	 *     can be used by Parsoid for selective updates.
+	 *   - 'causeAction' the reason for rendering. This should be informative, for used for
+	 *     logging and debugging.
 	 *
 	 * @return RenderedRevision|null The rendered revision, or null if the audience checks fails.
 	 * @throws BadRevisionException
 	 * @throws RevisionAccessException
 	 */
-	// phpcs:enable Generic.Files.LineLength.TooLong
 	public function getRenderedRevision(
 		RevisionRecord $rev,
 		?ParserOptions $options = null,
@@ -120,7 +107,9 @@ class RevisionRenderer {
 		array $hints = []
 	) {
 		if ( $rev->getWikiId() !== $this->dbDomain ) {
-			throw new InvalidArgumentException( 'Mismatching wiki ID ' . $rev->getWikiId() );
+			throw new InvalidArgumentException(
+				"Mismatching wiki ID rev={$rev->getWikiId()}, this={$this->dbDomain}"
+			);
 		}
 
 		$audience = $hints['audience']
@@ -184,7 +173,7 @@ class RevisionRenderer {
 		return $renderedRevision;
 	}
 
-	private function getSpeculativeRevId( $dbIndex ) {
+	private function getSpeculativeRevId( int $dbIndex ): int {
 		// Use a separate primary DB connection in order to see the latest data, by avoiding
 		// stale data from REPEATABLE-READ snapshots.
 		$flags = ILoadBalancer::CONN_TRX_AUTOCOMMIT;
@@ -197,7 +186,7 @@ class RevisionRenderer {
 			->caller( __METHOD__ )->fetchField();
 	}
 
-	private function getSpeculativePageId( $dbIndex ) {
+	private function getSpeculativePageId( int $dbIndex ): int {
 		// Use a separate primary DB connection in order to see the latest data, by avoiding
 		// stale data from REPEATABLE-READ snapshots.
 		$flags = ILoadBalancer::CONN_TRX_AUTOCOMMIT;
@@ -232,9 +221,7 @@ class RevisionRenderer {
 		$previousOutputs = $this->splitSlotOutput( $rrev, $options, $hints['previous-output'] ?? null );
 
 		// short circuit if there is only the main slot
-		// T351026 hack: if use-parsoid is set, only return main slot output for now
-		// T351113 will remove this hack.
-		if ( array_keys( $slots ) === [ SlotRecord::MAIN ] || $options->getUseParsoid() ) {
+		if ( array_keys( $slots ) === [ SlotRecord::MAIN ] ) {
 			$h = [ 'previous-output' => $previousOutputs[SlotRecord::MAIN] ] + $hints;
 			return $rrev->getSlotParserOutput( SlotRecord::MAIN, $h );
 		}
@@ -244,11 +231,52 @@ class RevisionRenderer {
 			$slots = [ SlotRecord::MAIN => $slots[SlotRecord::MAIN] ] + $slots;
 		}
 
+		if ( $options->getUseParsoid() ) {
+			$combinedOutput = null;
+			$oldWatcher = false;
+			$options = $rrev->getOptions();
+
+			foreach ( $slots as $role => $slot ) {
+				$h = [ 'previous-output' => $previousOutputs[$role] ] + $hints;
+				$out = $rrev->getSlotParserOutput( $role, $h );
+
+				if ( $combinedOutput === null ) {
+					$combinedOutput = clone $out;
+					$oldWatcher = $options->registerWatcher( $combinedOutput->recordOption( ... ) );
+					if ( $withHtml ) {
+						// The isset above when moving the main slot to the front
+						// implies that we should record the first role for splitting
+						$combinedOutput->setExtensionData( 'core:slots:first', $role );
+					}
+				} else {
+					if ( $withHtml ) {
+						Assert::invariant(
+							!$out->getContentHolder()->isParsoidContent(),
+							"T438406: Can't combine Parsoid output until we figure " .
+								"out what to do with the PageBundle."
+						);
+						$fragmentName = "slot-$role";
+						$combinedOutput->getContentHolder()->setAsHtmlString(
+							$fragmentName,
+							$out->getContentHolderText(),
+						);
+						$combinedOutput->appendExtensionData( 'core:slots', $role );
+					}
+					$out->collectMetadata( $combinedOutput );
+				}
+			}
+
+			if ( $oldWatcher !== false ) {
+				$options->registerWatcher( $oldWatcher );
+			}
+			return $combinedOutput;
+		}
+
 		$combinedOutput = new ParserOutput( null );
 		$slotOutput = [];
 
 		$options = $rrev->getOptions();
-		$options->registerWatcher( [ $combinedOutput, 'recordOption' ] );
+		$options->registerWatcher( $combinedOutput->recordOption( ... ) );
 
 		foreach ( $slots as $role => $slot ) {
 			$h = [ 'previous-output' => $previousOutputs[$role] ] + $hints;
@@ -256,6 +284,7 @@ class RevisionRenderer {
 			$slotOutput[$role] = $out;
 
 			// XXX: should the SlotRoleHandler be able to intervene here?
+			// XXX: this should probably just use ParserOutput::collectMetadata
 			$combinedOutput->mergeInternalMetaDataFrom( $out );
 			$combinedOutput->mergeTrackingMetaDataFrom( $out );
 		}
@@ -279,18 +308,19 @@ class RevisionRenderer {
 					// skip header for the first slot
 					$first = false;
 				} else {
-					// NOTE: this placeholder is hydrated by ParserOutput::getText().
+					// NOTE: this placeholder is hydrated by HydrateHeaderPlaceholders.
 					$headText = Html::element( 'mw:slotheader', [], $role );
 					$html .= Html::rawElement( 'h1', [ 'class' => 'mw-slot-header' ], $headText );
+					$combinedOutput->appendExtensionData( 'core:slots', $role );
 				}
 
 				// XXX: do we want to put a wrapper div around the output?
 				// Do we want to let $roleHandler do that?
-				$html .= $out->getRawText();
+				$html .= $out->getContentHolderText();
 				$combinedOutput->mergeHtmlMetaDataFrom( $out );
 			}
 
-			$combinedOutput->setRawText( $html );
+			$combinedOutput->setContentHolderText( $html );
 		}
 
 		$options->registerWatcher( null );
@@ -301,11 +331,10 @@ class RevisionRenderer {
 	 * This reverses ::combineSlotOutput() in order to enable selective
 	 * update of individual slots.
 	 *
-	 * @todo Currently this doesn't do much other than disable selective
-	 * update if there is more than one slot.  But in the case where
-	 * slot combination is reversible, this should reverse it and attempt
-	 * to reconstruct the original split ParserOutputs from the merged
-	 * ParserOutput.
+	 * @todo Currently, for legacy output, slot combination is not reversible.
+	 * For Parsoid output, the original split ParserOutputs are reconstructed
+	 * from the combined ParserOutput.  However, the munged metadata on the
+	 * combined ParserOutput isn't yet untangled.
 	 *
 	 * @param RenderedRevision $rrev
 	 * @param ParserOptions $options
@@ -314,7 +343,9 @@ class RevisionRenderer {
 	 * @return array<string,?ParserOutput> A mapping from role name to a
 	 *   previous ParserOutput for that slot in the previous parse
 	 */
-	private function splitSlotOutput( RenderedRevision $rrev, ParserOptions $options, ?ParserOutput $previousOutput ) {
+	private function splitSlotOutput(
+		RenderedRevision $rrev, ParserOptions $options, ?ParserOutput $previousOutput
+	) {
 		// If there is no previous parse, then there is nothing to split.
 		$revision = $rrev->getRevision();
 		$revslots = $revision->getSlots();
@@ -323,13 +354,35 @@ class RevisionRenderer {
 		}
 
 		// short circuit if there is only the main slot
-		// T351026 hack: if use-parsoid is set, only return main slot output for now
-		// T351113 will remove this hack.
-		if ( $revslots->getSlotRoles() === [ SlotRecord::MAIN ] || $options->getUseParsoid() ) {
+		if ( $revslots->getSlotRoles() === [ SlotRecord::MAIN ] ) {
 			return [ SlotRecord::MAIN => $previousOutput ];
 		}
 
-		// @todo Currently slot combination is not reversible
-		return array_fill_keys( $revslots->getSlotRoles(), null );
+		if ( !$options->getUseParsoid() ) {
+			// @todo Currently slot combination is not reversible
+			return array_fill_keys( $revslots->getSlotRoles(), null );
+		}
+
+		// FIXME: While the below splits out the html, it's unclear what to do about
+		// the metadata that is collected along the way
+
+		// Extension data was only set when the ParserOutput was combined $withHtml
+		$first = $previousOutput->getExtensionData( 'core:slots:first' ) ?? SlotRecord::MAIN;
+		$slotOutput = [ $first => $previousOutput ];
+		$contentHolder = $previousOutput->getContentHolder();
+
+		foreach ( $previousOutput->getExtensionData( 'core:slots' ) ?? [] as $role => $value ) {
+			$fragmentName = "slot-$role";
+			$html = $contentHolder->getAsHtmlString( $fragmentName ) ?? '';
+			$contentHolder->setAsHtmlString( $fragmentName, null );
+
+			$slotOutput[$role] = PageBundleParserOutputConverter::parserOutputFromPageBundle(
+				HtmlPageBundle::newEmpty( $html ),
+				// T438406: We've asserted this when combining
+				isParsoidContent: false,
+			);
+		}
+
+		return $slotOutput;
 	}
 }

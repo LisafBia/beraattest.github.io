@@ -74,7 +74,7 @@ if ( $logDir ) {
 	$splitGroupLogId = getenv( 'MW_PHPUNIT_SPLIT_GROUP_ID' );
 
 	foreach ( $logFileNames as $key => $logFileName ) {
-		if ( $splitGroupLogId ) {
+		if ( $splitGroupLogId !== false ) {
 			$logFileNames[$key] = "$logDir/$logFileName.split-group-$splitGroupLogId.log";
 		} else {
 			$logFileNames[$key] = "$logDir/$logFileName.log";
@@ -114,11 +114,6 @@ foreach ( $wgRateLimits as $right => &$limit ) {
 // https://www.mediawiki.org/wiki/Manual:JavaScript_unit_testing
 $wgEnableJavaScriptTest = true;
 
-// Enable development/experimental endpoints
-$wgRestAPIAdditionalRouteFiles[] = 'includes/Rest/coreDevelopmentRoutes.json';
-$wgRestAPIAdditionalRouteFiles[] = 'includes/Rest/content.v1.json';
-$wgRestAPIAdditionalRouteFiles[] = 'includes/Rest/specs.v0.json';
-
 // Greatly raise the limits on short/long term login attempts,
 // so that automated tests run in parallel don't error.
 $wgPasswordAttemptThrottle = [
@@ -139,6 +134,9 @@ $wgMaxArticleSize = 20; // in Kilobyte
 $wgParsoidSettings['wt2htmlLimits']['wikitextSize'] = 20 * 1024; // $wgMaxArticleSize, in byte
 $wgParsoidSettings['html2wtLimits']['htmlSize'] = 100 * 1024; // in characters!
 
+// Enable linting, so we can test it.
+$wgParsoidSettings['linting'] = true;
+
 // Enable Vue dev mode by default, so that Vue devtools are functional.
 $wgVueDevelopmentMode = true;
 
@@ -152,7 +150,7 @@ $wgTempAccountNameAcquisitionThrottle = [];
  * (Must reference a Phabricator ticket)
  */
 
-global $wgSQLMode, $wgDBStrictWarnings, $wgLocalisationCacheConf, $wgCiteBookReferencing,
+global $wgSQLMode, $wgDBStrictWarnings, $wgLocalisationCacheConf, $wgCiteSubReferencing,
 	$wgCacheDirectory, $wgEnableUploads, $wgUsePigLatinVariant,
 	$wgVisualEditorEnableWikitext, $wgDefaultUserOptions, $wgAutoCreateTempUser;
 
@@ -163,8 +161,8 @@ $wgDBStrictWarnings = true;
 // Localisation Cache to StaticArray (T218207)
 $wgLocalisationCacheConf['store'] = 'array';
 
-// Experimental Book Referencing feature (T236255)
-$wgCiteBookReferencing = true;
+// Experimental sub-referencing feature in Cite (T236255)
+$wgCiteSubReferencing = true;
 
 // The default value is false, but for development it is useful to set this to the system temp
 // directory by default (T218207)
@@ -187,3 +185,13 @@ $wgDefaultUserOptions['visualeditor-newwikitext'] = 0;
 
 // Enable creation of temp user accounts on edit (T355880, T359043)
 $wgAutoCreateTempUser['enabled'] = true;
+
+// Make sure Mocha tests can create language links by defining an interwiki
+// prefix that matches a known language code.
+$wgHooks['InterwikiLoadPrefix'][] = static function ( $prefix, &$iwData ) {
+	if ( $prefix === 'en-x-piglatin' ) {
+		$iwData['iw_url'] = 'https://piggy.wikipedia.org/wiki/$1';
+		return false;
+	}
+	return true;
+};

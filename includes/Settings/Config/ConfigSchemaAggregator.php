@@ -79,7 +79,6 @@ class ConfigSchemaAggregator implements ConfigSchema {
 	 *
 	 * @return void
 	 * @throws SettingsBuilderException if a conflict is detected
-	 *
 	 */
 	private function setListValueInternal( $schema, &$target, $key, $fieldName, $sourceName ) {
 		if ( array_key_exists( $fieldName, $schema ) ) {
@@ -253,8 +252,6 @@ class ConfigSchemaAggregator implements ConfigSchema {
 
 	/**
 	 * Get all defined default values.
-	 *
-	 * @return array
 	 */
 	public function getDefaults(): array {
 		return $this->defaults;

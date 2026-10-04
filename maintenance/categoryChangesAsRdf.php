@@ -1,29 +1,18 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  */
 
 use MediaWiki\Category\CategoriesRdf;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\RecentChanges\RecentChange;
+use MediaWiki\Utils\BatchRowIterator;
 use MediaWiki\Utils\MWTimestamp;
 use Wikimedia\Purtle\RdfWriter;
 use Wikimedia\Purtle\TurtleRdfWriter;
 use Wikimedia\Rdbms\IReadableDatabase;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -114,10 +103,10 @@ SPARQLD;
 		$now = new MWTimestamp();
 		$rcMaxAge = $this->getConfig()->get( MainConfigNames::RCMaxAge );
 
-		if ( (int)$now->getTimestamp( TS_UNIX ) - (int)$startTS->getTimestamp( TS_UNIX ) > $rcMaxAge ) {
+		if ( (int)$now->getTimestamp( TS::UNIX ) - (int)$startTS->getTimestamp( TS::UNIX ) > $rcMaxAge ) {
 			$this->error( "Start timestamp too old, maximum RC age is $rcMaxAge!" );
 		}
-		if ( (int)$now->getTimestamp( TS_UNIX ) - (int)$endTS->getTimestamp( TS_UNIX ) > $rcMaxAge ) {
+		if ( (int)$now->getTimestamp( TS::UNIX ) - (int)$endTS->getTimestamp( TS::UNIX ) > $rcMaxAge ) {
 			$this->error( "End timestamp too old, maximum RC age is $rcMaxAge!" );
 		}
 
@@ -202,7 +191,7 @@ SPARQLD;
 	 */
 	private function writeParentCategories( IReadableDatabase $dbr, $pages ) {
 		foreach ( $this->getCategoryLinksIterator( $dbr, array_keys( $pages ), __METHOD__ ) as $row ) {
-			$this->categoriesRdf->writeCategoryLinkData( $pages[$row->cl_from], $row->cl_to );
+			$this->categoriesRdf->writeCategoryLinkData( $pages[$row->cl_from], $row->lt_title );
 		}
 	}
 
@@ -213,7 +202,7 @@ SPARQLD;
 	 */
 	public function updateTS( $timestamp ) {
 		$dumpUrl = '<' . $this->categoriesRdf->getDumpURI() . '>';
-		$ts = wfTimestamp( TS_ISO_8601, $timestamp );
+		$ts = wfTimestamp( TS::ISO_8601, $timestamp );
 		$tsQuery = <<<SPARQL
 DELETE {
   $dumpUrl schema:dateModified ?o .
@@ -272,7 +261,7 @@ SPARQL;
 		$it = $this->setupChangesIterator( $dbr, [], $fname );
 		$it->sqb->conds( [
 			'rc_namespace' => NS_CATEGORY,
-			'rc_new' => 1,
+			'rc_source' => RecentChange::SRC_NEW,
 		] );
 		return $it;
 	}
@@ -291,9 +280,8 @@ SPARQL;
 		);
 		$it->sqb->conds( [
 			'rc_namespace' => NS_CATEGORY,
-			'rc_new' => 0,
+			'rc_source' => RecentChange::SRC_LOG,
 			'rc_log_type' => 'move',
-			'rc_type' => RC_LOG,
 		] );
 		$it->sqb->join( 'page', null, 'rc_cur_id = page_id' );
 		$this->addIndex( $it );
@@ -313,10 +301,9 @@ SPARQL;
 				->select( [ 'rc_cur_id', 'rc_title' ] )
 				->where( [
 					'rc_namespace' => NS_CATEGORY,
-					'rc_new' => 0,
+					'rc_source' => RecentChange::SRC_LOG,
 					'rc_log_type' => 'delete',
 					'rc_log_action' => 'delete',
-					'rc_type' => RC_LOG,
 					// We will fetch ones that do not have page record. If they do,
 					// this means they were restored, thus restoring handler will pick it up.
 					'NOT EXISTS (SELECT * FROM page WHERE page_id = rc_cur_id)',
@@ -340,10 +327,9 @@ SPARQL;
 		$it = $this->setupChangesIterator( $dbr, [], $fname );
 		$it->sqb->conds( [
 			'rc_namespace' => NS_CATEGORY,
-			'rc_new' => 0,
+			'rc_source' => RecentChange::SRC_LOG,
 			'rc_log_type' => 'delete',
 			'rc_log_action' => 'restore',
-			'rc_type' => RC_LOG,
 			// We will only fetch ones that have page record
 			'EXISTS (SELECT page_id FROM page WHERE page_id = rc_cur_id)',
 		] );
@@ -354,16 +340,15 @@ SPARQL;
 	/**
 	 * Fetch categorization changes or edits
 	 * @param IReadableDatabase $dbr
-	 * @param int $type
+	 * @param string $source
 	 * @param string $fname Name of the calling function
 	 * @return BatchRowIterator
 	 */
-	protected function getChangedCatsIterator( IReadableDatabase $dbr, $type, $fname ) {
+	protected function getChangedCatsIterator( IReadableDatabase $dbr, $source, $fname ) {
 		$it = $this->setupChangesIterator( $dbr, [], $fname );
 		$it->sqb->conds( [
 			'rc_namespace' => NS_CATEGORY,
-			'rc_new' => 0,
-			'rc_type' => $type,
+			'rc_source' => $source,
 		] );
 		$this->addIndex( $it );
 		return $it;
@@ -383,11 +368,10 @@ SPARQL;
 
 	/**
 	 * Need to force index, somehow on terbium the optimizer chooses wrong one
-	 * @param BatchRowIterator $it
 	 */
 	private function addIndex( BatchRowIterator $it ) {
 		$it->sqb->options( [
-			'USE INDEX' => [ 'recentchanges' => 'rc_new_name_timestamp' ]
+			'USE INDEX' => [ 'recentchanges' => 'rc_source_name_timestamp' ]
 		] );
 	}
 
@@ -399,17 +383,21 @@ SPARQL;
 	 * @return Traversable
 	 */
 	protected function getCategoryLinksIterator( IReadableDatabase $dbr, array $ids, $fname ) {
+		$qb = $dbr->newSelectQueryBuilder()
+			->select( [ 'cl_from', 'lt_title' ] )
+			->from( 'categorylinks' )
+			->join( 'linktarget', null, 'cl_target_id=lt_id' )
+			->where( [
+				'cl_type' => 'subcat',
+				'cl_from' => $ids
+			] )
+			->caller( $fname );
+			$primaryKey = [ 'cl_from', 'cl_target_id' ];
+
 		$it = new BatchRowIterator(
 			$dbr,
-			$dbr->newSelectQueryBuilder()
-				->from( 'categorylinks' )
-				->select( [ 'cl_from', 'cl_to' ] )
-				->where( [
-					'cl_type' => 'subcat',
-					'cl_from' => $ids
-				] )
-				->caller( $fname ),
-			[ 'cl_from', 'cl_to' ],
+			$qb,
+			$primaryKey,
 			$this->mBatchSize
 		);
 		return new RecursiveIteratorIterator( $it );
@@ -554,7 +542,7 @@ SPARQL;
 		// aren't actually interesting for us. Some way to know which are interesting?
 		// We can capture recategorization on the next step, but not change in hidden status.
 
-		foreach ( $this->getChangedCatsIterator( $dbr, RC_EDIT, __METHOD__ ) as $batch ) {
+		foreach ( $this->getChangedCatsIterator( $dbr, RecentChange::SRC_EDIT, __METHOD__ ) as $batch ) {
 			$pages = [];
 			$deleteUrls = [];
 			foreach ( $batch as $row ) {
@@ -585,7 +573,7 @@ SPARQL;
 		// Categorization change can add new parents and change counts
 		// for the parent category.
 
-		foreach ( $this->getChangedCatsIterator( $dbr, RC_CATEGORIZE, __METHOD__ ) as $batch ) {
+		foreach ( $this->getChangedCatsIterator( $dbr, RecentChange::SRC_CATEGORIZE, __METHOD__ ) as $batch ) {
 			/*
 			 * Note that on categorization event, cur_id points to
 			 * the child page, not the parent category!

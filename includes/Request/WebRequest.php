@@ -5,37 +5,24 @@
  * Copyright © 2003 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\Request;
 
-use FatalError;
+use MediaWiki\Exception\FatalError;
+use MediaWiki\Exception\MWException;
+use MediaWiki\Hook\GetSecurityLogContextHook;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\Http\Telemetry;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Session\Session;
 use MediaWiki\Session\SessionId;
-use MediaWiki\Session\SessionManager;
 use MediaWiki\User\UserIdentity;
-use MWException;
 use Wikimedia\IPUtils;
+use Wikimedia\ObjectCache\HashBagOStuff;
 
 // The point of this class is to be a wrapper around super globals
 // phpcs:disable MediaWiki.Usage.SuperGlobalsUsage.SuperGlobals
@@ -67,6 +54,12 @@ class WebRequest {
 	 * @var (string|string[])[]
 	 */
 	protected $queryParams;
+
+	/**
+	 * The values from $_POST only.
+	 * @var (string|string[])[]
+	 */
+	protected $postParams;
 
 	/**
 	 * Lazy-initialized request headers indexed by upper-case header name
@@ -105,17 +98,16 @@ class WebRequest {
 	protected $protocol;
 
 	/**
-	 * @var SessionId|null Session ID to use for this
-	 *  request. We can't save the session directly due to reference cycles not
-	 *  working too well (slow GC).
-	 *
-	 * TODO: Investigate whether this GC slowness concern (added in a73c5b7395 with regard to
-	 * PHP 5.6) still applies in PHP 7.2+.
+	 * @var SessionId|null Session ID to use for this request.
 	 */
-	protected $sessionId = null;
+	protected ?SessionId $sessionId = null;
+	/**
+	 * @var Session|null Session to use for this request.
+	 */
+	protected ?Session $session = null;
 
-	/** @var bool Whether this HTTP request is "safe" (even if it is an HTTP post) */
-	protected $markedAsSafe = false;
+	/** Cache variable for getSecurityLogContext(). */
+	private ?HashBagOStuff $securityLogContext;
 
 	/**
 	 * @codeCoverageIgnore
@@ -127,6 +119,7 @@ class WebRequest {
 		// We don't use $_REQUEST here to avoid interference from cookies...
 		$this->data = $_POST + $_GET;
 
+		$this->postParams = $_POST;
 		$this->queryAndPathParams = $this->queryParams = $_GET;
 	}
 
@@ -492,19 +485,15 @@ class WebRequest {
 	 *
 	 * @since 1.28
 	 * @param string $name
-	 * @param string|null $default Deprecated since 1.43. Use ?? $default instead.
-	 * @return string|null The value, or $default if none set
+	 * @return string|null The value, or null if none set
 	 * @return-taint tainted
 	 */
-	public function getRawVal( $name, $default = null ): ?string {
+	public function getRawVal( $name ): ?string {
 		$name = strtr( $name, '.', '_' ); // See comment in self::getGPCVal()
-		if ( isset( $this->data[$name] ) && !is_array( $this->data[$name] ) ) {
-			$val = $this->data[$name];
-		} else {
-			$val = $default;
+		if ( !isset( $this->data[$name] ) || is_array( $this->data[$name] ) ) {
+			return null;
 		}
-
-		return $val === null ? null : (string)$val;
+		return (string)$this->data[$name];
 	}
 
 	/**
@@ -558,7 +547,9 @@ class WebRequest {
 	}
 
 	/**
-	 * Set an arbitrary value into our get/post data.
+	 * Set an arbitrary value into our get/post data. Values set using this
+	 * method will be available vis getVal() and getValues() but not
+	 * getQueryValues() or getPostValues().
 	 *
 	 * @param string $key Key name to use
 	 * @param mixed $value Value to set
@@ -620,7 +611,8 @@ class WebRequest {
 	public function getIntArray( $name, $default = null ) {
 		$val = $this->getArray( $name, $default );
 		if ( is_array( $val ) ) {
-			$val = array_map( 'intval', $val );
+			// Drop multi-dimensional array elements
+			$val = array_map( intval( ... ), array_filter( $val, is_string( ... ) ) );
 		}
 		return $val;
 	}
@@ -781,7 +773,7 @@ class WebRequest {
 	 * @return (string|string[])[] Might contain arrays in case there was a `&param[]=…` parameter
 	 */
 	public function getPostValues() {
-		return $_POST;
+		return $this->postParams;
 	}
 
 	/**
@@ -852,21 +844,28 @@ class WebRequest {
 	 * This might unpersist an existing session if it was invalid.
 	 *
 	 * @since 1.27
-	 * @note For performance, keep the session locally if you will be making
-	 *  much use of it instead of calling this method repeatedly.
 	 * @return Session
 	 */
 	public function getSession(): Session {
-		if ( $this->sessionId !== null ) {
-			$session = SessionManager::singleton()->getSessionById( (string)$this->sessionId, true, $this );
-			if ( $session ) {
-				return $session;
-			}
+		$sessionId = $this->getSessionId();
+		$sessionManager = MediaWikiServices::getInstance()->getSessionManager();
+
+		// Destroy the old session if someone has set a new session ID
+		if ( $this->session && $sessionId && $this->session->getId() !== $sessionId->getId() ) {
+			$this->session = null;
 		}
 
-		$session = SessionManager::singleton()->getSessionForRequest( $this );
-		$this->sessionId = $session->getSessionId();
-		return $session;
+		// Look up session by ID if provided
+		if ( !$this->session && $sessionId ) {
+			$this->session = $sessionManager->getSessionById( $sessionId->getId(), true, $this );
+		}
+
+		// If it was not provided, or a session with that ID doesn't exist, create a new one
+		if ( !$this->session ) {
+			$this->session = $sessionManager->getSessionForRequest( $this );
+			$this->sessionId = $this->session->getSessionId();
+		}
+		return $this->session;
 	}
 
 	/**
@@ -918,21 +917,6 @@ class WebRequest {
 		} else {
 			return $default;
 		}
-	}
-
-	/**
-	 * Get a cookie set with SameSite=None.
-	 *
-	 * @deprecated since 1.42 use getCookie(), but note the different $prefix default
-	 *
-	 * @param string $key The name of the cookie
-	 * @param string $prefix A prefix to use, empty by default
-	 * @param mixed|null $default What to return if the value isn't found
-	 * @return mixed Cookie value or $default if the cookie is not set
-	 */
-	public function getCrossSiteCookie( $key, $prefix = '', $default = null ) {
-		wfDeprecated( __METHOD__, '1.42' );
-		return $this->getCookie( $key, $prefix, $default );
 	}
 
 	/**
@@ -1416,52 +1400,6 @@ class WebRequest {
 	}
 
 	/**
-	 * Whether this request should be identified as being "safe"
-	 *
-	 * This means that the client is not requesting any state changes and that database writes
-	 * are not inherently required. Ideally, no visible updates would happen at all. If they
-	 * must, then they should not be publicly attributed to the end user.
-	 *
-	 * In more detail:
-	 *   - Cache populations and refreshes MAY occur.
-	 *   - Private user session updates and private server logging MAY occur.
-	 *   - Updates to private viewing activity data MAY occur via DeferredUpdates.
-	 *   - Other updates SHOULD NOT occur (e.g. modifying content assets).
-	 *
-	 * @deprecated since 1.41, use hasSafeMethod() instead.
-	 *
-	 * @return bool
-	 * @see https://tools.ietf.org/html/rfc7231#section-4.2.1
-	 * @see https://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html
-	 * @since 1.28
-	 */
-	public function isSafeRequest() {
-		wfDeprecated( __METHOD__, '1.41' );
-		if ( $this->markedAsSafe && $this->wasPosted() ) {
-			return true; // marked as a "safe" POST
-		}
-
-		return $this->hasSafeMethod();
-	}
-
-	/**
-	 * Mark this request as identified as being nullipotent even if it is a POST request
-	 *
-	 * POST requests are often used due to the need for a client payload, even if the request
-	 * is otherwise equivalent to a "safe method" request.
-	 *
-	 * @deprecated since 1.41
-	 *
-	 * @see https://tools.ietf.org/html/rfc7231#section-4.2.1
-	 * @see https://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html
-	 * @since 1.28
-	 */
-	public function markAsSafeRequest() {
-		wfDeprecated( __METHOD__, '1.41' );
-		$this->markedAsSafe = true;
-	}
-
-	/**
 	 * Determine if the request URL matches one of a given set of canonical CDN URLs.
 	 *
 	 * MediaWiki uses this to determine whether to set a long 'Cache-Control: s-maxage='
@@ -1506,6 +1444,68 @@ class WebRequest {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Returns an array suitable for addition to a PSR-3 log context that will contain information
+	 * about the request that is useful when investigating security or abuse issues (IP, user agent
+	 * etc).
+	 *
+	 * @param ?UserIdentity $user The user whose action is being logged. Optional; passing it will
+	 *   result in more context information. The user is not required to exist locally. It must
+	 *   have a name though (ie. it should not have the IP address as its name; temp users are
+	 *   allowed).
+	 * @return array By default it will have the following keys:
+	 *   - clientIp: the IP address (as in WebRequest::getIP())
+	 *   - ua: the User-Agent header (or the Api-User-Agent header when using the action API)
+	 *   - originalUserAgent: the User-Agent header (only when Api-User-Agent is also present)
+	 *   Furthermore, when $user has been provided:
+	 *   - user: the username
+	 *   - user_exists_locally: whether the user account exists on the current wiki
+	 *   More fields can be added via the GetSecurityLogContext hook.
+	 *
+	 * @since 1.45 (also backported to 1.43.9, 1.44.6)
+	 * @see GetSecurityLogContextHook
+	 */
+	public function getSecurityLogContext( ?UserIdentity $user = null ): array {
+		$this->securityLogContext ??= new HashBagOStuff( [ 'maxKeys' => 5 ] );
+		$cacheKey = $user
+			? $this->securityLogContext->makeKey( 'user', $user->getName() )
+			: $this->securityLogContext->makeKey( 'anon', '-' );
+		if ( $this->securityLogContext->hasKey( $cacheKey ) ) {
+			return $this->securityLogContext->get( $cacheKey );
+		}
+
+		$context = [
+			'clientIp' => $this->getIP(),
+		];
+
+		$userAgent = $this->getHeader( 'User-Agent' );
+		$apiUserAgent = null;
+		if ( defined( 'MW_API' ) ) {
+			// matches ApiMain::getUserAgent()
+			$apiUserAgent = $this->getHeader( 'Api-User-Agent' );
+		}
+		$context['ua'] = $apiUserAgent ?: $userAgent;
+		if ( $apiUserAgent ) {
+			$context['originalUserAgent'] = $userAgent;
+		}
+
+		$services = MediaWikiServices::getInstance();
+		if ( $user ) {
+			$context += [
+				'user' => $user->getName(),
+				'user_exists_locally' => $user->isRegistered(),
+				'user_is_bot' => $services->getUserFactory()->newFromUserIdentity( $user )->isBot(),
+			];
+		}
+
+		$info = [ 'request' => $this, 'user' => $user ];
+		$hookRunner = new HookRunner( $services->getHookContainer() );
+		$hookRunner->onGetSecurityLogContext( $info, $context );
+
+		$this->securityLogContext->set( $cacheKey, $context );
+		return $context;
 	}
 }
 

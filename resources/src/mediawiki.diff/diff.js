@@ -2,10 +2,13 @@
  * JavaScript for diff views
  */
 const inlineFormatToggle = require( './inlineFormatToggle.js' );
+const undoButtonToggle = require( './undoButtonToggle.js' );
 
 ( function () {
 	$( () => {
 		/**
+		 * Get the diff side of the given node, or undefined if the node is outside the diff.
+		 *
 		 * @param {Node} node
 		 * @return {string|undefined}
 		 * @ignore
@@ -22,22 +25,17 @@ const inlineFormatToggle = require( './inlineFormatToggle.js' );
 		}
 
 		/**
-		 * @return {string|undefined}
-		 * @ignore
-		 */
-		function getCurrentlyLockedSide() {
-			return $( '.diff' ).attr( 'data-selected-side' );
-		}
-
-		/**
 		 * @param {string|undefined} side Either "added" or "deleted", or undefined to unset.
 		 * @ignore
 		 */
 		function setSideLock( side ) {
-			$( '.diff' ).attr( 'data-selected-side', side );
+			$( '.diff' ).attr( 'data-selected-side', side || null );
 		}
 
 		/**
+		 * When the user clicks somewhere, check whether the node belongs to the diff. If it does, lock the
+		 * selection to that side of the diff. If it doesn't, unlock selection.
+		 *
 		 * @param {MouseEvent} e
 		 * @ignore
 		 */
@@ -46,24 +44,38 @@ const inlineFormatToggle = require( './inlineFormatToggle.js' );
 				// Right click.
 				return;
 			}
-			const clickSide = getNodeSide( e.target );
-			if ( getCurrentlyLockedSide() !== clickSide ) {
-				document.getSelection().removeAllRanges();
+			if ( !e.target || e.target.nodeType === Node.TEXT_NODE ) {
+				// Ignore, see T406613.
+				return;
 			}
+			const clickSide = getNodeSide( e.target );
 			setSideLock( clickSide );
 		}
 
+		/**
+		 * When a new selection is started, see if the anchor node belongs to the diff, and if so lock the selection
+		 * to that side. If the anchor is outside the diff, clear any previously set locking.
+		 *
+		 * @ignore
+		 */
 		function selectionHandler() {
-			const textNode = document.getSelection().anchorNode;
+			// Different browsers behave differently when handling the `selectionstart` event. For example, in
+			// Chrome 135, the `getSelection()` call would not return the currently-starting selection, but some
+			// random outdated value from a previous selection, or just nothing. In Firefox 137, instead, it sees
+			// the current selection. Other browsers are untested. Enqueue the processing in a timeout so that
+			// hopefully all browsers see the expected value.
+			setTimeout( () => {
+				const anchorNode = document.getSelection().anchorNode;
 
-			if ( !textNode ) {
-				return;
-			}
+				if ( !anchorNode ) {
+					return;
+				}
 
-			setSideLock( getNodeSide( textNode ) );
+				setSideLock( getNodeSide( anchorNode ) );
+			}, 0 );
 		}
 
-		$( document ).on( 'selectionchange', selectionHandler );
+		$( document ).on( 'selectstart', selectionHandler );
 		$( document ).on( 'mousedown', maybeClearSelectProtection );
 
 		$( document ).on(
@@ -119,5 +131,9 @@ const inlineFormatToggle = require( './inlineFormatToggle.js' );
 		mw.loader.using( 'oojs-ui' ).then( () => {
 			inlineFormatToggle( $inlineToggleSwitchLayout );
 		} );
+	}
+	const $undoButton = $( '.mw-diff-undo' );
+	if ( $undoButton.length ) {
+		undoButtonToggle( $undoButton );
 	}
 }() );

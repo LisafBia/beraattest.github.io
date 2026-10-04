@@ -22,6 +22,7 @@ use Wikimedia\ParamValidator\ParamValidator;
  */
 class IntegerDef extends NumericDef {
 
+	/** @inheritDoc */
 	public function validate( $name, $value, array $settings, array $options ) {
 		if ( is_int( $value ) ) {
 			$ret = $value;
@@ -48,7 +49,10 @@ class IntegerDef extends NumericDef {
 			if ( is_array( $value ) || !preg_match( '/^[+-]?\d+$/D', $value ) ) {
 				$this->fatal( 'badinteger', $name, $value, $settings, $options );
 			} else {
-				$ret = intval( $value, 10 );
+				// Value is string and may exceed native int bounds.
+				// Ignore cast warnings, we will check if that happens later.
+				// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+				$ret = @intval( $value, 10 );
 			}
 		}
 
@@ -63,6 +67,7 @@ class IntegerDef extends NumericDef {
 		return $this->checkRange( $ret, $name, $value, $settings, $options );
 	}
 
+	/** @inheritDoc */
 	public function getHelpInfo( $name, array $settings, array $options ) {
 		$info = parent::getHelpInfo( $name, $settings, $options );
 
@@ -72,6 +77,7 @@ class IntegerDef extends NumericDef {
 		return $info;
 	}
 
+	/** @inheritDoc */
 	public function stringifyValue( $name, $value, array $settings, array $options ) {
 		if ( !is_array( $value ) ) {
 			return parent::stringifyValue( $name, $value, $settings, $options );

@@ -36,16 +36,22 @@ const slice = Array.prototype.slice,
 			CONTENTLANGUAGE: mw.config.get( 'wgContentLanguage' )
 		},
 		// Whitelist for allowed HTML elements in wikitext.
-		// Self-closing tags are not currently supported.
 		// Filled in with server-side data below
 		allowedHtmlElements: [],
+		// Whitelist for allowed self-closing elements.
+		// We're not using server data here because we don't want to allow <meta> or <link>.
+		allowedSelfClosingHtmlElements: [
+			'br',
+			'wbr',
+			'hr'
+		],
 		// Key tag name, value allowed attributes for that tag.
-		// See Sanitizer::setupAttributeWhitelist
+		// See Sanitizer::setupAttributesAllowedInternal
 		allowedHtmlCommonAttributes: [
 			// HTML
 			'id',
 			'class',
-			'style',
+			// 'style' attribute is not allowed because it is difficult to sanitize (T251032)
 			'lang',
 			'dir',
 			'title',
@@ -98,7 +104,7 @@ function appendWithoutParsing( $parent, children ) {
 	}
 
 	for ( i = 0, len = children.length; i < len; i++ ) {
-		if ( typeof children[ i ] !== 'object' ) {
+		if ( children[ i ] !== Object( children[ i ] ) ) {
 			children[ i ] = document.createTextNode( children[ i ] );
 		}
 		if ( children[ i ] instanceof $ && children[ i ].hasClass( 'mediaWiki_htmlEmitter' ) ) {
@@ -285,7 +291,7 @@ function Parser( options ) {
 	this.settings.onlyCurlyBraceTransform = ( this.settings.format === 'text' || this.settings.format === 'escaped' );
 	this.astCache = {};
 
-	this.emitter = new HtmlEmitter( this.settings.language, this.settings.magic );
+	this.emitter = new HtmlEmitter( this.settings.language, this.settings.magic, this.settings.messages );
 }
 
 Parser.prototype = {
@@ -336,7 +342,7 @@ Parser.prototype = {
 	 * n.b. We want to move this functionality to the server. Nothing here is required to be on the client.
 	 *
 	 * @param {string} input Message string wikitext
-	 * @throws Error
+	 * @throws {Error} Parse error
 	 * @return {any} abstract syntax tree
 	 */
 	wikiTextToAst: function ( input ) {
@@ -505,7 +511,7 @@ Parser.prototype = {
 			const result = nOrMore( 1, escapedOrLiteralWithoutSpace )();
 			return result === null ? null : result.join( '' );
 		}
-		// Used to define "literals" within template parameters. The pipe character is the parameter delimeter, so by default
+		// Used to define "literals" within template parameters. The pipe character is the parameter delimiter, so by default
 		// it is not a literal in the parameter
 		function literalWithoutBar() {
 			const result = nOrMore( 1, escapedOrLiteralWithoutBar )();
@@ -706,7 +712,7 @@ Parser.prototype = {
 		 * Checks if HTML is allowed
 		 *
 		 * @param {string} startTagName HTML start tag name
-		 * @param {string} endTagName HTML start tag name
+		 * @param {string|null} endTagName HTML end tag name, or null for self-closing tags
 		 * @param {Object} attributes array of consecutive key value pairs,
 		 *  with index 2 * n being a name and 2 * n + 1 the associated value
 		 * @return {boolean} true if this is HTML is allowed, false otherwise
@@ -714,22 +720,19 @@ Parser.prototype = {
 		 */
 		function isAllowedHtml( startTagName, endTagName, attributes ) {
 			startTagName = startTagName.toLowerCase();
-			endTagName = endTagName.toLowerCase();
-			if ( startTagName !== endTagName || settings.allowedHtmlElements.indexOf( startTagName ) === -1 ) {
+			const isSelfClosing = endTagName === null;
+			if (
+				( isSelfClosing && !settings.allowedSelfClosingHtmlElements.includes( startTagName ) ) ||
+				( !isSelfClosing && ( startTagName !== endTagName.toLowerCase() || !settings.allowedHtmlElements.includes( startTagName ) ) )
+			) {
 				return false;
 			}
-
-			const badStyle = /[\000-\010\013\016-\037\177]|expression|filter\s*:|accelerator\s*:|-o-link\s*:|-o-link-source\s*:|-o-replace\s*:|url\s*\(|image\s*\(|image-set\s*\(/i;
 
 			let attributeName;
 			for ( let i = 0, len = attributes.length; i < len; i += 2 ) {
 				attributeName = attributes[ i ];
-				if ( settings.allowedHtmlCommonAttributes.indexOf( attributeName ) === -1 &&
-					( settings.allowedHtmlAttributesByElement[ startTagName ] || [] ).indexOf( attributeName ) === -1 ) {
-					return false;
-				}
-				if ( attributeName === 'style' && attributes[ i + 1 ].search( badStyle ) !== -1 ) {
-					mw.log( 'HTML tag not parsed due to dangerous style attribute' );
+				if ( !settings.allowedHtmlCommonAttributes.includes( attributeName ) &&
+					!( settings.allowedHtmlAttributesByElement[ startTagName ] || [] ).includes( attributeName ) ) {
 					return false;
 				}
 			}
@@ -744,6 +747,7 @@ Parser.prototype = {
 		}
 
 		const openHtmlStartTag = makeStringParser( '<' );
+		const optionalWhitespace = makeRegexParser( /\s*/ );
 		const optionalForwardSlash = makeRegexParser( /^\/?/ );
 		const openHtmlEndTag = makeStringParser( '</' );
 		const closeHtmlTag = makeRegexParser( /^\s*>/ );
@@ -761,6 +765,7 @@ Parser.prototype = {
 				openHtmlStartTag,
 				asciiAlphabetLiteral,
 				htmlAttributes,
+				optionalWhitespace,
 				optionalForwardSlash,
 				closeHtmlTag
 			] );
@@ -771,6 +776,16 @@ Parser.prototype = {
 
 			const endOpenTagPos = pos;
 			const startTagName = parsedOpenTagResult[ 1 ];
+			const wrappedAttributes = parsedOpenTagResult[ 2 ];
+			const attributes = wrappedAttributes.slice( 1 );
+
+			// Handle self-closing elements before parsing any contents
+			if ( settings.allowedSelfClosingHtmlElements.includes( startTagName ) ) {
+				if ( isAllowedHtml( startTagName, null, attributes ) ) {
+					return [ 'HTMLELEMENT', startTagName, wrappedAttributes ];
+				}
+				return [ 'CONCAT', input.slice( startOpenTagPos, endOpenTagPos ) ];
+			}
 
 			const parsedHtmlContents = nOrMore( 0, expression )();
 
@@ -789,8 +804,6 @@ Parser.prototype = {
 
 			const endCloseTagPos = pos;
 			const endTagName = parsedCloseTagResult[ 1 ];
-			const wrappedAttributes = parsedOpenTagResult[ 2 ];
-			const attributes = wrappedAttributes.slice( 1 );
 			if ( isAllowedHtml( startTagName, endTagName, attributes ) ) {
 				return [ 'HTMLELEMENT', startTagName, wrappedAttributes,
 					...parsedHtmlContents ];
@@ -900,8 +913,9 @@ Parser.prototype = {
  * @class
  * @param {mw.language} language
  * @param {Object.<string,string>} [magic]
+ * @param {mw.Map} [messages]
  */
-function HtmlEmitter( language, magic ) {
+function HtmlEmitter( language, magic, messages ) {
 	this.language = language;
 	for ( const key in ( magic || {} ) ) {
 		const val = magic[ key ];
@@ -909,6 +923,8 @@ function HtmlEmitter( language, magic ) {
 			return val;
 		};
 	}
+
+	this.map = messages || mw.messages;
 
 	/**
 	 * (We put this method definition here, and not in prototype, to make sure it's not overwritten by any magic.)
@@ -1094,7 +1110,7 @@ HtmlEmitter.prototype = {
 		let page = textify( nodes[ 0 ] );
 		// Strip leading ':', which is used to suppress special behavior in wikitext links,
 		// e.g. [[:Category:Foo]] or [[:File:Foo.jpg]]
-		if ( page.charAt( 0 ) === ':' ) {
+		if ( page.startsWith( ':' ) ) {
 			page = page.slice( 1 );
 		}
 		const title = new mw.Title( page );
@@ -1182,7 +1198,9 @@ HtmlEmitter.prototype = {
 
 				if ( target.search( new RegExp( '^(/|' + mw.config.get( 'wgUrlProtocols' ) + ')' ) ) !== -1 ) {
 					$el.attr( 'href', target );
-					if ( target.search( '^' + mw.config.get( 'wgArticlePath' ).replace( /\$1/g, '.+?' ) + '$' ) === -1 ) {
+					const externalRegex = '^(?:' + mw.config.get( 'wgArticlePath' ).replace( /\$1/g, '.+?' ) +
+						'|' + mw.config.get( 'wgScript' ) + '.+?)$';
+					if ( target.search( externalRegex ) === -1 ) {
 						$el.addClass( 'external' );
 					}
 				} else {
@@ -1358,7 +1376,7 @@ HtmlEmitter.prototype = {
 	 */
 	int: function ( nodes ) {
 		const msg = textify( nodes[ 0 ] );
-		return getMessageFunction()( mwString.lcFirst( msg ) );
+		return getMessageFunction( { messages: this.map } )( mwString.lcFirst( msg ) );
 	},
 
 	/**
@@ -1502,8 +1520,8 @@ mw.Message.prototype.parser = function ( format ) {
 		(
 			// jqueryMsg parser is needed for messages containing wikitext
 			!/\{\{|[<>[&]/.test( this.map.get( this.key ) ) &&
-			// jqueryMsg parser is needed when jQuery objects or DOM nodes are passed in as parameters
-			!this.parameters.some( ( param ) => param instanceof $ || ( param && param.nodeType !== undefined ) )
+			// jqueryMsg parser is needed when objects (e.g. jQuery objects or DOM nodes) are passed in as parameters
+			!this.parameters.some( ( param ) => param === Object( param ) )
 		)
 	) {
 		return oldParser.call( this, format );
@@ -1518,26 +1536,7 @@ mw.Message.prototype.parser = function ( format ) {
 	}
 	return this.map[ format ]( this.key, this.parameters );
 };
-
-/**
- * Parse the message to DOM nodes, rather than HTML string like {@link mw.Message#parse}.
- *
- * This method is only available when jqueryMsg is loaded.
- *
- * @example
- * const msg = mw.message( 'key' );
- * mw.loader.using(`mediawiki.jqueryMsg`).then(() => {
- *   if ( msg.isParseable() ) {
- *     const $node = msg.parseDom();
- *     $node.appendTo('body');
- *   }
- * })
- *
- * @since 1.27
- * @method parseDom
- * @memberof mw.Message.prototype
- * @return {jQuery}
- */
+// Replace parseDom with the "real" version
 mw.Message.prototype.parseDom = ( function () {
 	let failableParserFn;
 
@@ -1569,7 +1568,7 @@ mw.Message.prototype.parseDom = ( function () {
  * @return {boolean}
  */
 mw.Message.prototype.isParseable = function () {
-	const parser = new Parser();
+	const parser = new Parser( { messages: this.map } );
 	try {
 		parser.parse( this.key, this.parameters );
 		return true;

@@ -2,7 +2,7 @@
 
 namespace MediaWiki\Rest\Handler;
 
-use ChangeTags;
+use MediaWiki\ChangeTags\ChangeTags;
 use MediaWiki\Page\ExistingPageRecord;
 use MediaWiki\Page\PageLookup;
 use MediaWiki\Permissions\GroupPermissionsLookup;
@@ -19,13 +19,12 @@ use MediaWiki\Storage\NameTableStore;
 use MediaWiki\Storage\NameTableStoreFactory;
 use MediaWiki\Title\TitleFormatter;
 use Wikimedia\Message\MessageValue;
-use Wikimedia\Message\ParamType;
-use Wikimedia\Message\ScalarParam;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\Rdbms\IConnectionProvider;
 use Wikimedia\Rdbms\IDBAccessObject;
 use Wikimedia\Rdbms\IResultWrapper;
 use Wikimedia\Rdbms\RawSQLExpression;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Handler class for Core REST API endpoints that perform operations on revisions
@@ -35,13 +34,7 @@ class PageHistoryHandler extends SimpleHandler {
 	private const REVISIONS_RETURN_LIMIT = 20;
 	private const ALLOWED_FILTER_TYPES = [ 'anonymous', 'bot', 'reverted', 'minor' ];
 
-	private RevisionStore $revisionStore;
-	private NameTableStore $changeTagDefStore;
-	private GroupPermissionsLookup $groupPermissionsLookup;
-	private IConnectionProvider $dbProvider;
-	private PageLookup $pageLookup;
-	private TitleFormatter $titleFormatter;
-	private PageRestHelperFactory $helperFactory;
+	private readonly NameTableStore $changeTagDefStore;
 
 	/**
 	 * @var ExistingPageRecord|false|null
@@ -50,45 +43,28 @@ class PageHistoryHandler extends SimpleHandler {
 
 	/**
 	 * RevisionStore $revisionStore
-	 *
-	 * @param RevisionStore $revisionStore
-	 * @param NameTableStoreFactory $nameTableStoreFactory
-	 * @param GroupPermissionsLookup $groupPermissionsLookup
-	 * @param IConnectionProvider $dbProvider
-	 * @param PageLookup $pageLookup
-	 * @param TitleFormatter $titleFormatter
-	 * @param PageRestHelperFactory $helperFactory
 	 */
 	public function __construct(
-		RevisionStore $revisionStore,
+		private readonly RevisionStore $revisionStore,
 		NameTableStoreFactory $nameTableStoreFactory,
-		GroupPermissionsLookup $groupPermissionsLookup,
-		IConnectionProvider $dbProvider,
-		PageLookup $pageLookup,
-		TitleFormatter $titleFormatter,
-		PageRestHelperFactory $helperFactory
+		private readonly GroupPermissionsLookup $groupPermissionsLookup,
+		private readonly IConnectionProvider $dbProvider,
+		private readonly PageLookup $pageLookup,
+		private readonly TitleFormatter $titleFormatter,
+		private readonly PageRestHelperFactory $helperFactory,
 	) {
-		$this->revisionStore = $revisionStore;
 		$this->changeTagDefStore = $nameTableStoreFactory->getChangeTagDef();
-		$this->groupPermissionsLookup = $groupPermissionsLookup;
-		$this->dbProvider = $dbProvider;
-		$this->pageLookup = $pageLookup;
-		$this->titleFormatter = $titleFormatter;
-		$this->helperFactory = $helperFactory;
 	}
 
 	private function getRedirectHelper(): PageRedirectHelper {
 		return $this->helperFactory->newPageRedirectHelper(
 			$this->getResponseFactory(),
 			$this->getRouter(),
-			$this->getPath(),
+			$this->getRoutePath(),
 			$this->getRequest()
 		);
 	}
 
-	/**
-	 * @return ExistingPageRecord|null
-	 */
 	private function getPage(): ?ExistingPageRecord {
 		if ( $this->page === false ) {
 			$this->page = $this->pageLookup->getExistingPageByText(
@@ -126,7 +102,7 @@ class PageHistoryHandler extends SimpleHandler {
 			foreach ( ChangeTags::REVERT_TAGS as $tagName ) {
 				try {
 					$tagIds[] = $this->changeTagDefStore->getId( $tagName );
-				} catch ( NameTableAccessException $exception ) {
+				} catch ( NameTableAccessException ) {
 					// If no revisions are tagged with a name, no tag id will be present
 				}
 			}
@@ -136,16 +112,13 @@ class PageHistoryHandler extends SimpleHandler {
 
 		if ( !$page ) {
 			throw new LocalizedHttpException(
-				new MessageValue( 'rest-nonexistent-title',
-					[ new ScalarParam( ParamType::PLAINTEXT, $title ) ]
-				),
+				( new MessageValue( 'rest-nonexistent-title' ) )->plaintextParams( $title ),
 				404
 			);
 		}
 		if ( !$this->getAuthority()->authorizeRead( 'read', $page ) ) {
 			throw new LocalizedHttpException(
-				new MessageValue( 'rest-permission-denied-title',
-					[ new ScalarParam( ParamType::PLAINTEXT, $title ) ] ),
+				( new MessageValue( 'rest-permission-denied-title' ) )->plaintextParams( $title ),
 				403
 			);
 		}
@@ -169,9 +142,8 @@ class PageHistoryHandler extends SimpleHandler {
 			);
 			if ( !$rev ) {
 				throw new LocalizedHttpException(
-					new MessageValue( 'rest-nonexistent-title-revision',
-						[ $relativeRevId, new ScalarParam( ParamType::PLAINTEXT, $title ) ]
-					),
+					( new MessageValue( 'rest-nonexistent-title-revision', [ $relativeRevId ] ) )
+						->plaintextParams( $title ),
 					404
 				);
 			}
@@ -310,7 +282,7 @@ class PageHistoryHandler extends SimpleHandler {
 
 				$revision = [
 					'id' => $rev->getId(),
-					'timestamp' => wfTimestamp( TS_ISO_8601, $rev->getTimestamp() ),
+					'timestamp' => wfTimestamp( TS::ISO_8601, $rev->getTimestamp() ),
 					'minor' => $rev->isMinor(),
 					'size' => $rev->getSize()
 				];
@@ -421,10 +393,12 @@ class PageHistoryHandler extends SimpleHandler {
 		return $response;
 	}
 
+	/** @inheritDoc */
 	public function needsWriteAccess() {
 		return false;
 	}
 
+	/** @inheritDoc */
 	public function getParamSettings() {
 		return [
 			'title' => [
@@ -432,24 +406,28 @@ class PageHistoryHandler extends SimpleHandler {
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-pagehistory-title' ),
+				Handler::PARAM_EXAMPLE => 'Jupiter',
 			],
 			'older_than' => [
 				self::PARAM_SOURCE => 'query',
 				ParamValidator::PARAM_TYPE => 'integer',
 				ParamValidator::PARAM_REQUIRED => false,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-pagehistory-older-than' ),
+				Handler::PARAM_EXAMPLE => 939967546,
 			],
 			'newer_than' => [
 				self::PARAM_SOURCE => 'query',
 				ParamValidator::PARAM_TYPE => 'integer',
 				ParamValidator::PARAM_REQUIRED => false,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-pagehistory-newer-than' ),
+				Handler::PARAM_EXAMPLE => 939967600,
 			],
 			'filter' => [
 				self::PARAM_SOURCE => 'query',
 				ParamValidator::PARAM_TYPE => self::ALLOWED_FILTER_TYPES,
 				ParamValidator::PARAM_REQUIRED => false,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-pagehistory-filter' ),
+				Handler::PARAM_EXAMPLE => 'bot',
 			],
 		];
 	}
@@ -479,7 +457,7 @@ class PageHistoryHandler extends SimpleHandler {
 			return null;
 		}
 
-		$rev = $this->revisionStore->getKnownCurrentRevision( $page );
+		$rev = $this->revisionStore->getKnownLatestRevision( $page );
 		return $rev->getTimestamp();
 	}
 
@@ -491,6 +469,6 @@ class PageHistoryHandler extends SimpleHandler {
 	}
 
 	public function getResponseBodySchemaFileName( string $method ): ?string {
-		return 'includes/Rest/Handler/Schema/PageHistory.json';
+		return __DIR__ . '/Schema/PageHistory.json';
 	}
 }

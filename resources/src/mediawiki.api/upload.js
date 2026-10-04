@@ -5,8 +5,14 @@
 			filekey: true,
 			filename: true,
 			comment: true,
+			license: true,
+			copystatus: true,
+			source: true,
+			autotext: true,
+			tags: true,
 			text: true,
 			watchlist: true,
+			watchlistexpiry: true,
 			ignorewarnings: true,
 			chunk: true,
 			offset: true,
@@ -166,7 +172,7 @@
 				promise = next;
 			}
 
-			return deferred.promise( { abort: active.abort } );
+			return deferred.promise( { abort: () => active.abort() } );
 		},
 
 		/**
@@ -339,7 +345,9 @@
 						return $.Deferred().resolve( finishUpload );
 					}
 					return $.Deferred().reject( errorCode, result );
-				}
+				},
+				// jQuery's .then() only relays progress notifications with a filter.
+				( progressValue ) => progressValue
 			);
 		},
 

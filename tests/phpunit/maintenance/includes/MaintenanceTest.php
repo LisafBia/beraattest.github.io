@@ -2,10 +2,11 @@
 
 namespace MediaWiki\Tests\Maintenance\Includes;
 
-use AtomicSectionUpdate;
 use MediaWiki\Config\Config;
 use MediaWiki\Config\HashConfig;
+use MediaWiki\Deferred\AtomicSectionUpdate;
 use MediaWiki\Deferred\DeferredUpdates;
+use MediaWiki\MainConfigNames;
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Tests\Maintenance\MaintenanceBaseTestCase;
@@ -379,7 +380,7 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		$this->maintenance->output( "foo" );
 		$m2->output( "bar" );
 
-		$this->assertEquals( "foobar", $this->getActualOutput(),
+		$this->assertEquals( "foobar", $this->getActualOutputForAssertion(),
 			"Output before shutdown simulation (m2)" );
 		$m2->cleanupChanneled();
 		$this->assertOutputPrePostShutdown( "foobar", false );
@@ -391,7 +392,7 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		$this->maintenance->output( "foo", null );
 		$m2->output( "bar", null );
 
-		$this->assertEquals( "foobar", $this->getActualOutput(),
+		$this->assertEquals( "foobar", $this->getActualOutputForAssertion(),
 			"Output before shutdown simulation (m2)" );
 		$m2->cleanupChanneled();
 		$this->assertOutputPrePostShutdown( "foobar", false );
@@ -403,7 +404,7 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		$this->maintenance->output( "foo", "bazChannel" );
 		$m2->output( "bar", "bazChannel" );
 
-		$this->assertEquals( "foobar", $this->getActualOutput(),
+		$this->assertEquals( "foobar", $this->getActualOutputForAssertion(),
 			"Output before shutdown simulation (m2)" );
 		$m2->cleanupChanneled();
 		$this->assertOutputPrePostShutdown( "foobar\n", true );
@@ -415,7 +416,7 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		$this->maintenance->output( "foo\n", null );
 		$m2->output( "bar\n", null );
 
-		$this->assertEquals( "foo\nbar\n", $this->getActualOutput(),
+		$this->assertEquals( "foo\nbar\n", $this->getActualOutputForAssertion(),
 			"Output before shutdown simulation (m2)" );
 		$m2->cleanupChanneled();
 		$this->assertOutputPrePostShutdown( "foo\nbar\n", false );
@@ -427,7 +428,7 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		$this->maintenance->output( "foo\n", "bazChannel" );
 		$m2->output( "bar\n", "bazChannel" );
 
-		$this->assertEquals( "foobar", $this->getActualOutput(),
+		$this->assertEquals( "foobar", $this->getActualOutputForAssertion(),
 			"Output before shutdown simulation (m2)" );
 		$m2->cleanupChanneled();
 		$this->assertOutputPrePostShutdown( "foobar\n", true );
@@ -439,7 +440,7 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		$this->maintenance->outputChanneled( "foo" );
 		$m2->outputChanneled( "bar" );
 
-		$this->assertEquals( "foo\nbar\n", $this->getActualOutput(),
+		$this->assertEquals( "foo\nbar\n", $this->getActualOutputForAssertion(),
 			"Output before shutdown simulation (m2)" );
 		$m2->cleanupChanneled();
 		$this->assertOutputPrePostShutdown( "foo\nbar\n", false );
@@ -451,7 +452,7 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		$this->maintenance->outputChanneled( "foo", null );
 		$m2->outputChanneled( "bar", null );
 
-		$this->assertEquals( "foo\nbar\n", $this->getActualOutput(),
+		$this->assertEquals( "foo\nbar\n", $this->getActualOutputForAssertion(),
 			"Output before shutdown simulation (m2)" );
 		$m2->cleanupChanneled();
 		$this->assertOutputPrePostShutdown( "foo\nbar\n", false );
@@ -463,7 +464,7 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		$this->maintenance->outputChanneled( "foo", "bazChannel" );
 		$m2->outputChanneled( "bar", "bazChannel" );
 
-		$this->assertEquals( "foobar", $this->getActualOutput(),
+		$this->assertEquals( "foobar", $this->getActualOutputForAssertion(),
 			"Output before shutdown simulation (m2)" );
 		$m2->cleanupChanneled();
 		$this->assertOutputPrePostShutdown( "foobar\n", true );
@@ -475,22 +476,19 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		$this->maintenance->outputChanneled( "foo", "bazChannel" );
 		$m2->outputChanneled( "bar", "bazChannel" );
 
-		$this->assertEquals( "foobar", $this->getActualOutput(),
+		$this->assertEquals( "foobar", $this->getActualOutputForAssertion(),
 			"Output before first cleanup" );
 		$this->maintenance->cleanupChanneled();
-		$this->assertEquals( "foobar\n", $this->getActualOutput(),
+		$this->assertEquals( "foobar\n", $this->getActualOutputForAssertion(),
 			"Output after first cleanup" );
 		$m2->cleanupChanneled();
-		$this->assertEquals( "foobar\n\n", $this->getActualOutput(),
+		$this->assertEquals( "foobar\n\n", $this->getActualOutputForAssertion(),
 			"Output after second cleanup" );
 
 		$m2->cleanupChanneled();
 		$this->assertOutputPrePostShutdown( "foobar\n\n", false );
 	}
 
-	/**
-	 * @covers \MediaWiki\Maintenance\Maintenance::getConfig
-	 */
 	public function testGetConfig() {
 		$this->assertInstanceOf( Config::class, $this->maintenance->getConfig() );
 		$this->assertSame(
@@ -499,9 +497,6 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		);
 	}
 
-	/**
-	 * @covers \MediaWiki\Maintenance\Maintenance::setConfig
-	 */
 	public function testSetConfig() {
 		$conf = new HashConfig();
 		$this->maintenance->setConfig( $conf );
@@ -654,10 +649,10 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		$this->assertTrue( $testUser->equals( $this->maintenance->validateUserOption( "unused" ) ) );
 	}
 
-	public function testRunChildForNonExistentClass() {
+	public function testCreateChildForNonExistentClass() {
 		$this->expectCallToFatalError();
 		$this->expectOutputRegex( '/Cannot spawn child.*NonExistingTestClassForMaintenanceTest/' );
-		$this->maintenance->runChild( 'NonExistingTestClassForMaintenanceTest' );
+		$this->maintenance->createChild( 'NonExistingTestClassForMaintenanceTest' );
 	}
 
 	public function testSetAllowUnregisteredOptions() {
@@ -689,6 +684,12 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		// Regression test for the method breaking if no rows exist in the content_address table.
 		$this->maintenance->purgeRedundantText();
 		$this->expectOutputRegex( '/0 inactive items found[\s\S]*(?!Deleting)/' );
+	}
+
+	public function testPurgeRedundantTextWhenMiserMode() {
+		$this->overrideConfigValue( MainConfigNames::MiserMode, true );
+		$this->maintenance->purgeRedundantText();
+		$this->expectOutputString( "Not trying to purge text records on miser-mode wiki.\n" );
 	}
 
 	public function testDeleteOptionLoop() {
@@ -800,5 +801,27 @@ class MaintenanceTest extends MaintenanceBaseTestCase {
 		DeferredUpdates::tryOpportunisticExecute();
 		$this->assertSame( 0, DeferredUpdates::pendingUpdatesCount() );
 		$this->assertSame( 0, $runs );
+	}
+
+	/**
+	 * Asserts the output before and after simulating shutdown
+	 *
+	 * This function simulates shutdown of self::maintenance.
+	 *
+	 * @param string $preShutdownOutput Expected output before simulating shutdown
+	 * @param bool $expectNLAppending Whether or not shutdown simulation is expected
+	 *   to add a newline to the output. If false, $preShutdownOutput is the
+	 *   expected output after shutdown simulation. Otherwise,
+	 *   $preShutdownOutput with an appended newline is the expected output
+	 *   after shutdown simulation.
+	 */
+	private function assertOutputPrePostShutdown( $preShutdownOutput, $expectNLAppending ) {
+		$this->assertEquals( $preShutdownOutput, $this->getActualOutputForAssertion(),
+				"Output before shutdown simulation" );
+
+		$this->maintenance->cleanupChanneled();
+
+		$postShutdownOutput = $preShutdownOutput . ( $expectNLAppending ? "\n" : "" );
+		$this->expectOutputString( $postShutdownOutput );
 	}
 }

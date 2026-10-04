@@ -1,5 +1,5 @@
 <?php
-/** Minnan (Pe̍h-ōe-jī) (Bân-lâm-gú (Pe̍h-ōe-jī))
+/** Minnan (Pe̍h-ōe-jī) (Bân-lâm-gí (Pe̍h-ōe-jī))
  *
  * @file
  * @ingroup Languages
@@ -10,7 +10,7 @@
  * @author Winston Sung
  */
 
-$fallback = 'nan-latn, nan-latn-tailo, nan, nan-hant, cdo, zh-hant, zh, zh-hans';
+$fallback = 'nan-latn, nan-latn-tailo, nan, nan-hant, cdo-hant, zh-hant, zh, zh-hans';
 
 $namespaceNames = [
 	NS_MEDIA            => 'Mûi-thé',
@@ -55,8 +55,8 @@ $defaultDateFormat = 'nan-latn-pehoeji';
 
 $dateFormats = [
 	'nan-latn-pehoeji time' => 'H:i',
-	'nan-latn-pehoeji date' => 'Y-"nî" n-"goe̍h" j-"ji̍t" (l)',
-	'nan-latn-pehoeji monthonly' => 'Y-"nî" n-"goe̍h"',
-	'nan-latn-pehoeji both' => 'Y-"nî" n-"goe̍h" j-"ji̍t" (l) H:i',
-	'nan-latn-pehoeji pretty' => 'n-"goe̍h" j-"ji̍t"',
+	'nan-latn-pehoeji date' => 'Y "nî" n "goe̍h" j "ji̍t" (l)',
+	'nan-latn-pehoeji monthonly' => 'Y "nî" n "goe̍h"',
+	'nan-latn-pehoeji both' => 'Y "nî" n "goe̍h" j "ji̍t" (l) H:i',
+	'nan-latn-pehoeji pretty' => 'n "goe̍h" j "ji̍t"',
 ];

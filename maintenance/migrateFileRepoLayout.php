@@ -2,25 +2,16 @@
 /**
  * Copy all files in FileRepo to an originals container using SHA1 paths.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
+use MediaWiki\FileRepo\File\File;
+use MediaWiki\FileRepo\File\FileSelectQueryBuilder;
+use MediaWiki\FileRepo\File\LocalFile;
+use MediaWiki\FileRepo\FileBackendDBRepoWrapper;
+use MediaWiki\FileRepo\LocalRepo;
 use MediaWiki\Maintenance\Maintenance;
 use Wikimedia\FileBackend\FileBackend;
 
@@ -79,9 +70,7 @@ class MigrateFileRepoLayout extends Maintenance {
 		$batch = [];
 		$lastName = '';
 		do {
-			$res = $dbw->newSelectQueryBuilder()
-				->select( [ 'img_name', 'img_sha1' ] )
-				->from( 'image' )
+			$res = FileSelectQueryBuilder::newForFile( $dbw )
 				->where( $dbw->expr( 'img_name', '>', $lastName ) )
 				->andWhere( $conds )
 				->orderBy( 'img_name' )
@@ -93,9 +82,9 @@ class MigrateFileRepoLayout extends Maintenance {
 				/** @var LocalFile $file */
 				$file = $repo->newFile( $row->img_name );
 				// Check in case SHA1 rows are not populated for some files
-				$sha1 = strlen( $row->img_sha1 ) ? $row->img_sha1 : $file->getSha1();
+				$sha1 = $row->img_sha1 !== '' ? $row->img_sha1 : $file->getSha1();
 
-				if ( !strlen( $sha1 ) ) {
+				if ( $sha1 === '' ) {
 					$this->error( "Image SHA-1 not known for {$row->img_name}." );
 				} else {
 					if ( $oldLayout === 'sha1' ) {
@@ -122,7 +111,7 @@ class MigrateFileRepoLayout extends Maintenance {
 
 				foreach ( $file->getHistory() as $ofile ) {
 					$sha1 = $ofile->getSha1();
-					if ( !strlen( $sha1 ) ) {
+					if ( $sha1 === '' ) {
 						$this->error( "Image SHA-1 not set for {$ofile->getArchiveName()}." );
 						continue;
 					}
@@ -184,7 +173,7 @@ class MigrateFileRepoLayout extends Maintenance {
 			foreach ( $res as $row ) {
 				$lastId = $row->fa_id;
 				$sha1Key = $row->fa_storage_key;
-				if ( !strlen( $sha1Key ) ) {
+				if ( $sha1Key === '' ) {
 					$this->error( "Image SHA-1 not set for file #{$row->fa_id} (deleted)." );
 					continue;
 				}
@@ -227,7 +216,7 @@ class MigrateFileRepoLayout extends Maintenance {
 		$this->output( "Done (started $startTime)\n" );
 	}
 
-	protected function getRepo() {
+	protected function getRepo(): LocalRepo {
 		return $this->getServiceContainer()->getRepoGroup()->getLocalRepo();
 	}
 

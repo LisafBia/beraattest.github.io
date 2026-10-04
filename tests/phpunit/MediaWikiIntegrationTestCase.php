@@ -6,20 +6,27 @@ use MediaWiki\Config\HashConfig;
 use MediaWiki\Config\MultiConfig;
 use MediaWiki\Content\Content;
 use MediaWiki\Content\ContentHandler;
+use MediaWiki\Context\DerivativeContext;
 use MediaWiki\Context\RequestContext;
+use MediaWiki\DB\CloneDatabase;
 use MediaWiki\Deferred\DeferredUpdates;
-use MediaWiki\HookContainer\FauxGlobalHookArray;
+use MediaWiki\ExternalStore\ExternalStore;
+use MediaWiki\ExternalStore\ExternalStoreDB;
 use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\JobQueue\JobQueueMemory;
 use MediaWiki\Language\Language;
+use MediaWiki\Linker\Linker;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\Logger\LegacyLogger;
 use MediaWiki\Logger\LegacySpi;
 use MediaWiki\Logger\LogCapturingSpi;
 use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\Logger\LoggingContext;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageIdentity;
-use MediaWiki\Page\ProperPageIdentity;
+use MediaWiki\Page\PageReference;
+use MediaWiki\Page\WikiPage;
 use MediaWiki\Parser\ParserOptions;
 use MediaWiki\Permissions\Authority;
 use MediaWiki\Permissions\UltimateAuthority;
@@ -28,8 +35,10 @@ use MediaWiki\Registration\ExtensionRegistry;
 use MediaWiki\Request\FauxRequest;
 use MediaWiki\Request\WebRequest;
 use MediaWiki\Revision\RevisionRecord;
+use MediaWiki\RevisionDelete\RevisionDeleter;
 use MediaWiki\SiteStats\SiteStatsInit;
 use MediaWiki\Storage\PageUpdateStatus;
+use MediaWiki\Tests\Common\Parser\ParserTestRunner;
 use MediaWiki\Tests\Unit\DummyServicesTrait;
 use MediaWiki\Title\Title;
 use MediaWiki\User\User;
@@ -108,21 +117,17 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 */
 	private static $dbClone = null;
 
-	/**
-	 * @var array
-	 * @since 1.19
-	 * @deprecated since 1.41 Tables used are now detected automatically.
-	 */
-	protected $tablesUsed = []; // tables with data
-
 	/** @var bool */
 	private static $useTemporaryTables = true;
 	/** @var bool */
 	private static $dbSetup = false;
-	/** @var int */
-	private static $setupLevel = 0;
+	/** @var bool */
+	private static $setupWithoutTeardown = false;
 	/** @var string */
 	private static $oldTablePrefix = '';
+
+	private bool $testHasExpectationOnRegexOutput = false;
+	private bool $testHasExpectationOnStringOutput = false;
 
 	/**
 	 * Holds the paths of temporary files/directories created through getNewTempFile,
@@ -186,6 +191,11 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	private $temporaryHookHandlers = [];
 
 	/**
+	 * @var array[] listener registrations as a list of name/handler pairs.
+	 */
+	private $eventListeners = [];
+
+	/**
 	 * Table name prefix.
 	 */
 	public const DB_PREFIX = 'unittest_';
@@ -208,6 +218,15 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 * tearDownAfterClass method.
 	 */
 	private static array $dbDataOnceTables = [];
+
+	// State variables holding data associated with DB connections.
+
+	private static WeakMap $originalTablePrefixes;
+	private static WeakMap $curTestClasses;
+	private static WeakMap $activeSchemaOverrides;
+
+	/** @var string[] */
+	private array $warningsToPrint = [];
 
 	/**
 	 * @stable to call
@@ -243,9 +262,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		}
 
 		// Get the original service locator
-		if ( !self::$originalServices ) {
-			self::$originalServices = MediaWikiServices::getInstance();
-		}
+		self::$originalServices ??= MediaWikiServices::getInstance();
 	}
 
 	/**
@@ -405,8 +422,6 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 
 	/**
 	 * Returns the calling method, in a format suitable for page titles etc.
-	 *
-	 * @return string
 	 */
 	private function getCallerName(): string {
 		$classWithoutNamespace = ( new ReflectionClass( $this ) )->getShortName();
@@ -436,13 +451,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	): array {
 		$overrides = [];
 
-		if ( !$baseConfig ) {
-			if ( self::$originalServices ) {
-				$baseConfig = self::$originalServices->getMainConfig();
-			} else {
-				$baseConfig = MediaWikiServices::getInstance()->getMainConfig();
-			}
-		}
+		$baseConfig ??= ( self::$originalServices ?? MediaWikiServices::getInstance() )->getMainConfig();
 
 		/* Some functions require some kind of caching, and will end up using the db,
 		 * which we can't allow, as that would open a new connection for mysql.
@@ -541,15 +550,17 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 
 		// TODO: move global state into MediaWikiServices
 		RequestContext::resetMain();
-		if ( session_id() !== '' ) {
-			session_write_close();
-			session_id( '' );
-		}
 
 		$wgRequest = RequestContext::getMain()->getRequest();
-		MediaWiki\Session\SessionManager::resetCache();
 
 		TestUserRegistry::clear();
+		LoggerFactory::setContext( new LoggingContext() );
+
+		// Invalidate any Title objects cached by newFromText() or isMainPage() (T395214).
+		Title::clearCaches();
+
+		// Clear accessKeyCache in case a test changed the language or message override
+		Linker::$accesskeycache = [];
 	}
 
 	/**
@@ -561,11 +572,11 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 
 		$class = static::class;
 
-		$hasDataForTestClass = DynamicPropertyTestHelper::getDynamicProperty( $db, 'hasDataForTestClass' );
+		$hasDataForTestClass = self::$curTestClasses[$db] ?? null;
 
 		$first = $hasDataForTestClass !== $class;
 
-		DynamicPropertyTestHelper::setDynamicProperty( $db, 'hasDataForTestClass', $class );
+		self::$curTestClasses[$db] = $class;
 		return $first;
 	}
 
@@ -633,26 +644,23 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 * @before
 	 */
 	final protected function mediaWikiSetUp(): void {
-		if ( self::$setupLevel++ ) {
+		if ( self::$setupWithoutTeardown ) {
 			// Exceptions thrown from tearDown() cause mediaWikiTearDown() to be
 			// skipped. ChangedTablesTracker would throw an exception in that
 			// case, but let's throw a more informative error message here. (T354387)
+			self::$setupWithoutTeardown = false; // prevent extra reports in other tests (T384588)
 			throw new RuntimeException( 'mediaWikiSetUp() was called but not ' .
 				'mediaWikiTearDown() -- use assertPostConditions() instead of ' .
 				'tearDown() for post-test assertions.' );
 		}
-
-		if ( $this->tablesUsed && !self::isTestInDatabaseGroup() ) {
-			throw new LogicException(
-				get_class( $this ) . ' defines $tablesUsed but is not in the Database group'
-			);
-		}
+		self::$setupWithoutTeardown = true;
 
 		$this->overrideMwServices();
 		$this->maybeSetupDB();
 
 		$this->overriddenServices = [];
 		$this->temporaryHookHandlers = [];
+		$this->eventListeners = [];
 
 		// Cleaning up temporary files
 		foreach ( $this->tmpFiles as $fileName ) {
@@ -674,12 +682,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		self::resetNonServiceCaches();
 
 		// T46192 Do not attempt to send a real e-mail
-		$this->setTemporaryHook( 'AlternateUserMailer',
-			static function () {
-				return false;
-			}
-		);
-		ob_start( 'MediaWikiIntegrationTestCase::wfResetOutputBuffersBarrier' );
+		$this->setTemporaryHook( 'AlternateUserMailer', static fn () => false );
 	}
 
 	private function maybeSetupDB(): void {
@@ -734,14 +737,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	final protected function mediaWikiTearDown(): void {
 		global $wgRequest;
 
-		self::$setupLevel--;
-
-		$status = ob_get_status();
-		if ( isset( $status['name'] ) &&
-			$status['name'] === 'MediaWikiIntegrationTestCase::wfResetOutputBuffersBarrier'
-		) {
-			ob_end_flush();
-		}
+		self::$setupWithoutTeardown = false;
 
 		if ( self::needsDB() && $this->db ) {
 			// Clean up open transactions
@@ -783,12 +779,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 
 		// TODO: move global state into MediaWikiServices
 		RequestContext::resetMain();
-		if ( session_id() !== '' ) {
-			session_write_close();
-			session_id( '' );
-		}
 		$wgRequest = RequestContext::getMain()->getRequest();
-		MediaWiki\Session\SessionManager::resetCache();
 		ProfilingContext::destroySingleton();
 
 		// If anything changed the content language, we need to
@@ -800,6 +791,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		// We don't mind if we override already-overridden services during cleanup
 		$this->overriddenServices = [];
 		$this->temporaryHookHandlers = [];
+		$this->eventListeners = [];
 
 		if ( self::needsDB() ) {
 			$tablesUsed = ChangedTablesTracker::getTables( $this->db->getDomainID() );
@@ -809,8 +801,28 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 			self::resetDB( $this->db, $tablesUsed );
 		}
 
+		$this->testHasExpectationOnRegexOutput = false;
+		$this->testHasExpectationOnStringOutput = false;
+
 		self::restoreMwServices();
 		$this->localServices = null;
+
+		// Reset context user, which is probably 127.0.0.1, as its loaded
+		// data is probably not valid.
+		// @todo Should we start setting the user to something nondeterministic
+		//  to encourage tests to be updated to not depend on it?
+		$user = RequestContext::getMain()->getUser();
+		// This has to happen after restoreMwServices(), as it depends on various services actually
+		// working and not being poorly mocked, e.g. SessionManager.
+		$user->clearInstanceCache( $user->mFrom );
+
+		// Output any test warnings at the end of the run, so they're visible but not disruptive.
+		if ( $this->warningsToPrint ) {
+			print( "Some tests raised warnings:\n" );
+			foreach ( $this->warningsToPrint as $warning ) {
+				print( $warning );
+			}
+		}
 	}
 
 	/**
@@ -854,7 +866,6 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 * @param object|callable $service The service instance, or a callable that returns the service instance.
 	 *
 	 * @since 1.27
-	 *
 	 */
 	protected function setService( string $name, $service ) {
 		if ( !$this->localServices ) {
@@ -1121,7 +1132,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 				} else {
 					try {
 						$this->mwGlobals[$globalKey] = unserialize( serialize( $GLOBALS[$globalKey] ) );
-					} catch ( Exception $e ) {
+					} catch ( Exception ) {
 						$this->mwGlobals[$globalKey] = $GLOBALS[$globalKey];
 					}
 				}
@@ -1147,12 +1158,6 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		} else {
 			// NOTE: do not use array_merge, it screws up for numeric keys.
 			$merged = $GLOBALS[$name];
-
-			// HACK for fake $wgHooks. Replace it with the original array here,
-			// then let resetLegacyGlobals() turn it back into a fake.
-			if ( $merged instanceof FauxGlobalHookArray ) {
-				$merged = $merged->getOriginalArray();
-			}
 
 			if ( !is_array( $merged ) ) {
 				throw new RuntimeException( "MW global $name is not an array." );
@@ -1183,6 +1188,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	protected function resetServices() {
 		// Reset but don't destroy service instances supplied via setService().
 		$oldHookContainer = $this->localServices->getHookContainer();
+		$oldEventSource = $this->localServices->getDomainEventSource();
 		foreach ( $this->overriddenServices as $name ) {
 			$this->localServices->resetServiceForTesting( $name, false );
 		}
@@ -1203,6 +1209,15 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 				} else {
 					$newHookContainer->register( $name, $target );
 				}
+			}
+		}
+
+		// If the event source was reset, re-apply listeners.
+		$newEventSource = $this->localServices->getDomainEventDispatcher();
+		if ( $newEventSource !== $oldEventSource ) {
+			// the same hook may be cleared and registered several times
+			foreach ( $this->eventListeners as [ $type, $listener ] ) {
+				$newEventSource->registerListener( $type, $listener );
 			}
 		}
 
@@ -1338,6 +1353,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 
 		$oldConfigFactory = self::$originalServices->getConfigFactory();
 		$oldLoadBalancerFactory = self::$originalServices->getDBLoadBalancerFactory();
+		$oldLoadBalancerFactoryConfig = self::$originalServices->getDBLoadBalancerFactoryConfig();
 
 		$originalConfig = self::$originalServices->getBootstrapConfig();
 		$testConfig = new MultiConfig( [ $configOverrides, $originalConfig ] );
@@ -1384,6 +1400,13 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 				return $oldLoadBalancerFactory;
 			}
 		);
+		$newServices->resetServiceForTesting( 'DBLoadBalancerFactoryConfig' );
+		$newServices->redefineService(
+			'DBLoadBalancerFactoryConfig',
+			static function ( MediaWikiServices $services ) use ( $oldLoadBalancerFactoryConfig ) {
+				return $oldLoadBalancerFactoryConfig;
+			}
+		);
 
 		// Prevent real HTTP requests from tests
 		$newServices->resetServiceForTesting( 'HttpRequestFactory' );
@@ -1391,6 +1414,18 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 			'HttpRequestFactory',
 			static function ( MediaWikiServices $services ) {
 				return new NullHttpRequestFactory();
+			}
+		);
+
+		// Prevent CDN cache purge side effects from tests
+		$newServices->resetServiceForTesting( 'HTMLCacheUpdater' );
+		$newServices->redefineService(
+			'HTMLCacheUpdater',
+			static function ( MediaWikiServices $services ) {
+				return new NullHTMLCacheUpdater(
+					$services->getHookContainer(),
+					$services->getTitleFactory()
+				);
 			}
 		);
 
@@ -1410,7 +1445,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 * called from inside a test case, a data provider, or a setUp or tearDown method.
 	 *
 	 * @return bool true if the original service locator was restored,
-	 *         false if there was nothing too do.
+	 *         false if there was nothing to do.
 	 */
 	public static function restoreMwServices() {
 		if ( !self::$originalServices ) {
@@ -1432,16 +1467,6 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	}
 
 	private static function resetLegacyGlobals( MediaWikiServices $services ) {
-		// phpcs:disable MediaWiki.Usage.DeprecatedGlobalVariables.Deprecated$wgHooks
-		global $wgHooks;
-
-		$hooks = $wgHooks instanceof FauxGlobalHookArray ? $wgHooks->getOriginalArray() : $wgHooks;
-
-		$wgHooks = new FauxGlobalHookArray(
-			$services->getHookContainer(),
-			$hooks
-		);
-
 		ParserOptions::clearStaticCache();
 
 		// User objects may hold service references!
@@ -1548,12 +1573,10 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		$provider = LoggerFactory::getProvider();
 		if ( $provider instanceof LegacySpi || $provider instanceof LogCapturingSpi ) {
 			$prev = $provider->setLoggerForTest( $channel, $logger );
-			if ( !isset( $this->loggers[$channel] ) ) {
-				// Remember for restoreLoggers()
-				$this->loggers[$channel] = $prev;
-			}
+			// Remember for restoreLoggers()
+			$this->loggers[$channel] ??= $prev;
 		} else {
-			throw new LogicException( __METHOD__ . ': cannot set logger for ' . get_class( $provider ) );
+			throw new LogicException( "Cannot set logger for '$channel' via " . get_class( $provider ) );
 		}
 	}
 
@@ -1636,11 +1659,11 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 * Should be called from addDBData().
 	 *
 	 * @since 1.25 ($namespace in 1.28)
-	 * @param string|Title $title Page name or title
+	 * @param string|LinkTarget|PageIdentity $title Page name string or title object
 	 * @param string $text Page's content
 	 * @param int|null $namespace Namespace id (name cannot already contain namespace)
 	 * @param User|null $user If null, static::getTestSysop()->getUser() is used.
-	 * @return array Title object and page id
+	 * @return array{title: Title, id: int}
 	 */
 	protected function insertPage(
 		$title,
@@ -1652,23 +1675,30 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 			throw new RuntimeException( 'When testing with pages, the test must use @group Database.' );
 		}
 
-		if ( is_string( $title ) ) {
-			$title = Title::newFromText( $title, $namespace );
+		// If the first parameter isn't a Title, convert it to a Title.
+		// Note that Title implements PageIdentity, so passing in a Title is handled by this
+		// first condition.
+		if ( $title instanceof PageIdentity ) {
+			$titleObject = Title::newFromPageIdentity( $title );
+		} elseif ( $title instanceof LinkTarget ) {
+			$titleObject = Title::newFromLinkTarget( $title );
+		} elseif ( is_string( $title ) ) {
+			$titleObject = Title::newFromText( $title, $namespace );
+		} else {
+			throw new InvalidArgumentException(
+				'Title must be a string, LinkTarget, or PageIdentity, ' . get_debug_type( $title ) . ' given'
+			);
 		}
 
-		if ( !$user ) {
-			$user = static::getTestSysop()->getUser();
-		}
-		$comment = __METHOD__ . ': Sample page for unit test.';
-
-		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title );
-		$status = $page->doUserEditContent( ContentHandler::makeContent( $text, $title ), $user, $comment );
+		$user ??= static::getTestSysop()->getUser();
+		$editSummary = __METHOD__ . ': Sample page for unit test.';
+		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $titleObject );
+		$status = $page->doUserEditContent( ContentHandler::makeContent( $text, $titleObject ), $user, $editSummary );
 		if ( !$status->isOK() ) {
 			$this->fail( $status->getWikiText() );
 		}
-
 		return [
-			'title' => $title,
+			'title' => $titleObject,
 			'id' => $page->getId(),
 		];
 	}
@@ -1756,7 +1786,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		$prefix = null
 	) {
 		$prefix ??= self::dbPrefix();
-		$originalTablePrefix = DynamicPropertyTestHelper::getDynamicProperty( $db, 'originalTablePrefix' );
+		$originalTablePrefix = self::$originalTablePrefixes[$db] ?? null;
 
 		if ( $originalTablePrefix !== null ) {
 			return null;
@@ -1775,7 +1805,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		$dbClone->cloneTableStructure();
 
 		$db->tablePrefix( $prefix );
-		DynamicPropertyTestHelper::setDynamicProperty( $db, 'originalTablePrefix', $oldPrefix );
+		self::$originalTablePrefixes[$db] = $oldPrefix;
 
 		$lb = MediaWikiServices::getInstance()->getDBLoadBalancer();
 		$lb->setTempTablesOnlyMode( self::$useTemporaryTables, $db->getDomainID() );
@@ -1786,6 +1816,12 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		global $wgDBprefix;
 
 		self::$oldTablePrefix = $wgDBprefix;
+
+		// Initialize connection state variables here, as this method may be invoked
+		// from outside the MediaWikiIntegrationTestCase class hierarchy.
+		self::$originalTablePrefixes ??= new WeakMap();
+		self::$curTestClasses ??= new WeakMap();
+		self::$activeSchemaOverrides ??= new WeakMap();
 
 		$testPrefix ??= self::dbPrefix();
 
@@ -1985,15 +2021,14 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 * Applies the schema overrides returned by getSchemaOverrides(),
 	 * after undoing any previously applied schema overrides.
 	 * Called once per test class, just before addDataOnce().
-	 * @param IMaintainableDatabase $db
 	 */
 	private function setUpSchema( IMaintainableDatabase $db ) {
 		// Undo any active overrides.
-		$oldOverrides = DynamicPropertyTestHelper::getDynamicProperty( $db, 'activeSchemaOverrides' ) ?? self::SCHEMA_OVERRIDE_DEFAULTS;
+		$oldOverrides = self::$activeSchemaOverrides[$db] ?? self::SCHEMA_OVERRIDE_DEFAULTS;
 
 		if ( $oldOverrides['alter'] || $oldOverrides['create'] || $oldOverrides['drop'] ) {
 			$this->undoSchemaOverrides( $db, $oldOverrides );
-			DynamicPropertyTestHelper::unsetDynamicProperty( $db, 'activeSchemaOverrides' );
+			unset( self::$activeSchemaOverrides[$db] );
 		}
 
 		// Determine new overrides.
@@ -2043,7 +2078,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 			$db->sourceFile( $script, null, null, __METHOD__, $inputCallback );
 		}
 
-		DynamicPropertyTestHelper::setDynamicProperty( $db, 'activeSchemaOverrides', $overrides );
+		self::$activeSchemaOverrides[$db] = $overrides;
 	}
 
 	/**
@@ -2068,7 +2103,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 * @return array
 	 */
 	private static function listOriginalTables( IMaintainableDatabase $db ) {
-		$originalTablePrefix = DynamicPropertyTestHelper::getDynamicProperty( $db, 'originalTablePrefix' );
+		$originalTablePrefix = self::$originalTablePrefixes[$db] ?? null;
 		if ( $originalTablePrefix === null ) {
 			throw new LogicException( 'No original table prefix know, cannot list tables!' );
 		}
@@ -2106,7 +2141,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	private function recloneMockTables( IMaintainableDatabase $db, array $tables ) {
 		self::ensureMockDatabaseConnection( $db );
 
-		$originalTablePrefix = DynamicPropertyTestHelper::getDynamicProperty( $db, 'originalTablePrefix' );
+		$originalTablePrefix = self::$originalTablePrefixes[$db] ?? null;
 
 		if ( $originalTablePrefix === null ) {
 			throw new LogicException( 'No original table prefix know, cannot restore tables!' );
@@ -2136,15 +2171,6 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 
 		if ( in_array( 'user', $tablesUsed ) ) {
 			TestUserRegistry::clear();
-
-			// Reset context user, which is probably 127.0.0.1, as its loaded
-			// data is probably not valid. This used to manipulate $wgUser but
-			// since that is deprecated tests are more likely to be relying on
-			// RequestContext::getMain() instead.
-			// @todo Should we start setting the user to something nondeterministic
-			//  to encourage tests to be updated to not depend on it?
-			$user = RequestContext::getMain()->getUser();
-			$user->clearInstanceCache( $user->mFrom );
 		}
 
 		self::truncateTables( $tablesUsed, $db );
@@ -2297,6 +2323,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 * This method requires database support, which can be enabled with "@group Database".
 	 *
 	 * @since 1.20
+	 * @deprecated Since 1.47 Use $this->newSelectQueryBuilder()->...->assertResultSet() instead
 	 *
 	 * @param string|array $table The table(s) to query
 	 * @param string|array $fields The columns to include in the result (and to sort by)
@@ -2308,6 +2335,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	protected function assertSelect(
 		$table, $fields, $condition, array $expectedRows, array $options = [], array $join_conds = []
 	) {
+		wfDeprecated( __METHOD__, '1.47' );
 		if ( !self::needsDB() ) {
 			throw new LogicException( 'When testing database state, the test must use @group Database.' );
 		}
@@ -2365,6 +2393,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 * Values are compared with strict equality.
 	 *
 	 * @since 1.35
+	 * @deprecated Since 1.47 Use $this->assertArrayContains() instead
 	 *
 	 * @param array $expected
 	 * @param array $actual
@@ -2375,6 +2404,7 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		array $actual,
 		$message = ''
 	) {
+		wfDeprecated( __METHOD__, '1.47' );
 		$this->assertArrayContains( $expected, $actual, $message );
 	}
 
@@ -2386,16 +2416,10 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 * @since 1.20
 	 *
 	 * @param array $elements
-	 *
-	 * @return array
+	 * @return array[]
 	 */
-	protected function arrayWrap( array $elements ) {
-		return array_map(
-			static function ( $element ) {
-				return [ $element ];
-			},
-			$elements
-		);
+	protected static function arrayWrap( array $elements ) {
+		return array_map( static fn ( $element ) => [ $element ], $elements );
 	}
 
 	/**
@@ -2443,42 +2467,39 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 *
 	 * @return int The ID of the wikitext Namespace
 	 */
-	protected function getDefaultWikitextNS() {
-		global $wgNamespaceContentModels;
-
+	protected function getDefaultWikitextNS(): int {
 		static $wikitextNS = null; // this is not going to change
 		if ( $wikitextNS !== null ) {
 			return $wikitextNS;
 		}
 
 		// quickly short out on the most common case:
-		if ( !isset( $wgNamespaceContentModels[NS_MAIN] ) ) {
-			return NS_MAIN;
+		if ( $this->isWikitextNS( NS_MAIN ) ) {
+			$wikitextNS = NS_MAIN;
+			return $wikitextNS;
 		}
 
 		// NOTE: prefer content namespaces
 		$nsInfo = MediaWikiServices::getInstance()->getNamespaceInfo();
-		$namespaces = array_unique( array_merge(
-			$nsInfo->getContentNamespaces(),
-			[ NS_MAIN, NS_HELP, NS_PROJECT ], // prefer these
-			$nsInfo->getValidNamespaces()
-		) );
-
-		$namespaces = array_diff( $namespaces, [
-			NS_FILE, NS_CATEGORY, NS_MEDIAWIKI, NS_USER // don't mess with magic namespaces
+		$namespaces = array_unique( [
+			...$nsInfo->getContentNamespaces(),
+			// prefer these
+			NS_HELP,
+			NS_PROJECT,
+			// prefer non-talk pages
+			...array_filter( $nsInfo->getValidNamespaces(), $nsInfo->isSubject( ... ) ),
+			...$nsInfo->getValidNamespaces(),
 		] );
-
-		$talk = array_filter( $namespaces, static function ( $ns ) use ( $nsInfo ) {
-			return $nsInfo->isTalk( $ns );
-		} );
-
-		// prefer non-talk pages
-		$namespaces = array_diff( $namespaces, $talk );
-		$namespaces = array_merge( $namespaces, $talk );
 
 		// check the default content model of each namespace
 		foreach ( $namespaces as $ns ) {
-			if ( $this->isWikitextNS( $ns ) ) {
+			// don't mess with magic namespaces
+			if ( $ns !== NS_USER &&
+				$ns !== NS_FILE &&
+				$ns !== NS_MEDIAWIKI &&
+				$ns !== NS_CATEGORY &&
+				$this->isWikitextNS( $ns )
+			) {
 				$wikitextNS = $ns;
 				return $wikitextNS;
 			}
@@ -2537,16 +2558,6 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	}
 
 	/**
-	 * Used as a marker to prevent wfResetOutputBuffers from breaking PHPUnit.
-	 *
-	 * @param string $buffer
-	 * @return string
-	 */
-	public static function wfResetOutputBuffersBarrier( $buffer ) {
-		return $buffer;
-	}
-
-	/**
 	 * Registers the given hook handler for the duration of the current test case.
 	 *
 	 * @param string $hookName
@@ -2561,6 +2572,22 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		}
 		$this->localServices->getHookContainer()->register( $hookName, $handler );
 		$this->temporaryHookHandlers[] = [ $hookName, $handler ];
+	}
+
+	/**
+	 * Registers an event listener.
+	 *
+	 * @param string $eventType
+	 * @param callable $listener
+	 * @since 1.44
+	 */
+	protected function registerListener( $eventType, $listener ) {
+		$this->localServices->getDomainEventSource()->registerListener(
+			$eventType,
+			$listener
+		);
+
+		$this->eventListeners[] = [ $eventType, $listener ];
 	}
 
 	/**
@@ -2591,19 +2618,6 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	}
 
 	/**
-	 * Remove a temporary hook previously added with setTemporaryHook().
-	 *
-	 * @note This is implemented to remove ALL handlers for the given hook
-	 *       for the duration of the current test case.
-	 * @deprecated since 1.36, use clearHook() instead.
-	 *
-	 * @param string $hookName
-	 */
-	protected function removeTemporaryHook( $hookName ) {
-		$this->clearHook( $hookName );
-	}
-
-	/**
 	 * Edits or creates a page/revision. This method requires database support, which can be enabled with
 	 * "@group Database".
 	 *
@@ -2626,18 +2640,8 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		}
 
 		$services = $this->getServiceContainer();
-		if ( $page instanceof WikiPage ) {
-			$title = $page->getTitle();
-		} elseif ( $page instanceof PageIdentity ) {
-			$page = $services->getWikiPageFactory()->newFromTitle( $page );
-			$title = $page->getTitle();
-		} elseif ( $page instanceof LinkTarget ) {
-			$page = $services->getWikiPageFactory()->newFromLinkTarget( $page );
-			$title = $page->getTitle();
-		} else {
-			$title = $services->getTitleFactory()->newFromText( $page, $defaultNs );
-			$page = $services->getWikiPageFactory()->newFromTitle( $title );
-		}
+		$page = $this->makeWikiPage( $page, $defaultNs );
+		$title = $page->getTitle();
 
 		if ( is_string( $content ) ) {
 			$content = $services->getContentHandlerFactory()
@@ -2653,15 +2657,40 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	}
 
 	/**
-	 * @param ProperPageIdentity $page
+	 * Make a WikiPage from various types of thing
+	 *
+	 * @param string|PageIdentity|LinkTarget|WikiPage $page
+	 * @param int $defaultNs
+	 * @return WikiPage
+	 */
+	private function makeWikiPage( $page, $defaultNs = NS_MAIN ) {
+		$services = $this->getServiceContainer();
+		if ( $page instanceof WikiPage ) {
+			return $page;
+		} elseif ( $page instanceof PageReference ) {
+			return $services->getWikiPageFactory()->newFromTitle( $page );
+		} elseif ( $page instanceof LinkTarget ) {
+			return $services->getWikiPageFactory()->newFromLinkTarget( $page );
+		} else {
+			$title = $services->getTitleFactory()->newFromText( $page, $defaultNs );
+			return $services->getWikiPageFactory()->newFromTitle( $title );
+		}
+	}
+
+	/**
+	 * @param string|PageIdentity|LinkTarget|WikiPage $page
 	 * @param string $summary
 	 * @param Authority|null $deleter
 	 */
-	protected function deletePage( ProperPageIdentity $page, string $summary = '', ?Authority $deleter = null ): void {
+	protected function deletePage( $page, string $summary = '', ?Authority $deleter = null ): void {
+		$page = $this->makeWikiPage( $page );
 		$deleter ??= new UltimateAuthority( new UserIdentityValue( 0, 'MediaWiki default' ) );
-		MediaWikiServices::getInstance()->getDeletePageFactory()
+		$res = MediaWikiServices::getInstance()->getDeletePageFactory()
 			->newDeletePage( $page, $deleter )
 			->deleteUnsafe( $summary );
+		if ( !$res->isGood() ) {
+			$this->fail( "Could not delete page:\n$res" );
+		}
 	}
 
 	/**
@@ -2684,13 +2713,17 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 		// Make sure the context user is set to a named user account, otherwise
 		// ::createList will fail when temp accounts are enabled, because
 		// that generates a log entry which requires a named or temp account actor
-		RequestContext::getMain()->setUser( $this->getTestUser()->getUser() );
-		RevisionDeleter::createList(
-			'revision', RequestContext::getMain(), $rev->getPage(), [ $rev->getId() ]
+		$context = new DerivativeContext( RequestContext::getMain() );
+		$context->setAuthority( new UltimateAuthority( $this->getTestSysop()->getUser() ) );
+		$res = RevisionDeleter::createList(
+			'revision', $context, $rev->getPage(), [ $rev->getId() ]
 		)->setVisibility( [
 			'value' => $value,
 			'comment' => $comment,
 		] );
+		if ( !$res->isGood() ) {
+			$this->fail( "Could not perform revision delete:\n$res" );
+		}
 	}
 
 	/**
@@ -2715,14 +2748,14 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 	 * of jobs gets applied before trying to run jobs.
 	 *
 	 * @param array $assertOptions An associative array with the following options:
-	 *    - minJobs: The minimum number of jobs expected to be run, default 1
-	 *    - numJobs: The exact number of jobs expected to be run. If set, this
-	 *      overrides minJobs.
-	 *    - complete: Assert that the runner finished with "none-ready", which
-	 *      means execution stopped because the queue was empty. Default true.
-	 *    - ignoreErrorsMatchingFormat: Allow job errors where the error message
-	 *      matches the given format.
-	 * @param array $runOptions Options to pass through to JobRunner::run()
+	 *  - minJobs: The minimum number of jobs expected to be run, default 1
+	 *  - numJobs: The exact number of jobs expected to be run. If set, this
+	 *    overrides minJobs.
+	 *  - complete: Assert that the runner finished with "none-ready", which
+	 *    means execution stopped because the queue was empty. Default true.
+	 *  - ignoreErrorsMatchingFormat: Allow job errors where the error message
+	 *    matches the given format.
+	 * @param array $runOptions Options to pass through to {@link JobRunner::run()}
 	 *
 	 * @since 1.37
 	 */
@@ -2761,5 +2794,40 @@ abstract class MediaWikiIntegrationTestCase extends PHPUnit\Framework\TestCase {
 					"Error for job of type {$jobStatus['type']}" );
 			}
 		}
+	}
+
+	protected function addEndOfRunTestWarning( string $message ): void {
+		$this->warningsToPrint[] = $message;
+	}
+
+	/** @inheritDoc */
+	public function expectOutputRegex( string $expectedRegex ): void {
+		// This is necessary to avoid maintenance script tests silently not validating the output (T427952)
+		if ( $this->testHasExpectationOnStringOutput ) {
+			throw new LogicException( 'Cannot use both ::expectOutputRegex and ::expectOutputString together' );
+		}
+		$this->testHasExpectationOnRegexOutput = true;
+		parent::expectOutputRegex( $expectedRegex );
+	}
+
+	/** @inheritDoc */
+	public function expectOutputString( string $expectedString ): void {
+		// This is necessary to avoid maintenance script tests silently not validating the output (T427952)
+		if ( $this->testHasExpectationOnRegexOutput ) {
+			throw new LogicException( 'Cannot use both ::expectOutputRegex and ::expectOutputString together' );
+		}
+		$this->testHasExpectationOnStringOutput = true;
+		parent::expectOutputString( $expectedString );
+	}
+
+	/**
+	 * Returns whether the test has expectations on output.
+	 *
+	 * @stable to call
+	 */
+	public function hasExpectationOnOutput(): bool {
+		// If hasExpectationOnOutput is removed, we can use the properties that detect and fail if
+		// ::expectOutputString and ::expectOutputRegex are both called
+		return parent::hasExpectationOnOutput();
 	}
 }

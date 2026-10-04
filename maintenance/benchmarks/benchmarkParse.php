@@ -2,21 +2,7 @@
 /**
  * Benchmark script for parse operations
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @author Tim Starling <tstarling@wikimedia.org>
  * @ingroup Benchmark
@@ -26,13 +12,15 @@
 require_once __DIR__ . '/../Maintenance.php';
 // @codeCoverageIgnoreEnd
 
-use MediaWiki\Cache\LinkCache;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Page\LinkCache;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Title\Title;
 use Wikimedia\Rdbms\SelectQueryBuilder;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Maintenance script to benchmark how long it takes to parse a given title at an optionally
@@ -76,7 +64,7 @@ class BenchmarkParse extends Maintenance {
 
 	public function execute() {
 		if ( $this->hasOption( 'tpl-time' ) ) {
-			$this->templateTimestamp = wfTimestamp( TS_MW, strtotime( $this->getOption( 'tpl-time' ) ) );
+			$this->templateTimestamp = wfTimestamp( TS::MW, strtotime( $this->getOption( 'tpl-time' ) ) );
 			$hookContainer = $this->getHookContainer();
 			$hookContainer->register( 'BeforeParserFetchTemplateRevisionRecord', [ $this, 'onFetchTemplate' ] );
 		}
@@ -92,7 +80,7 @@ class BenchmarkParse extends Maintenance {
 
 		$revLookup = $this->getServiceContainer()->getRevisionLookup();
 		if ( $this->hasOption( 'page-time' ) ) {
-			$pageTimestamp = wfTimestamp( TS_MW, strtotime( $this->getOption( 'page-time' ) ) );
+			$pageTimestamp = wfTimestamp( TS::MW, strtotime( $this->getOption( 'page-time' ) ) );
 			$id = $this->getRevIdForTime( $title, $pageTimestamp );
 			if ( !$id ) {
 				$this->fatalError( "The page did not exist at that time" );
@@ -117,19 +105,19 @@ class BenchmarkParse extends Maintenance {
 			$this->fatalError( 'Invalid number of loops specified' );
 		}
 		$startUsage = getrusage();
-		$startTime = microtime( true );
+		$startTime = ConvertibleTimestamp::hrtime();
 		for ( $i = 0; $i < $loops; $i++ ) {
 			$this->runParser( $revision );
 		}
 		$endUsage = getrusage();
-		$endTime = microtime( true );
+		$endTime = ConvertibleTimestamp::hrtime();
 
 		printf( "CPU time = %.3f s, wall clock time = %.3f s\n",
 			// CPU time
 			( $endUsage['ru_utime.tv_sec'] + $endUsage['ru_utime.tv_usec'] * 1e-6
 			- $startUsage['ru_utime.tv_sec'] - $startUsage['ru_utime.tv_usec'] * 1e-6 ) / $loops,
 			// Wall clock time
-			( $endTime - $startTime ) / $loops
+			( $endTime - $startTime ) / 1e9 / $loops
 		);
 	}
 
@@ -157,14 +145,12 @@ class BenchmarkParse extends Maintenance {
 
 	/**
 	 * Parse the text from a given RevisionRecord
-	 *
-	 * @param RevisionRecord $revision
 	 */
 	private function runParser( RevisionRecord $revision ) {
 		$content = $revision->getContent( SlotRecord::MAIN );
 		$contentRenderer = $this->getServiceContainer()->getContentRenderer();
-		// @phan-suppress-next-line PhanTypeMismatchArgumentNullable getId does not return null here
-		$contentRenderer->getParserOutput( $content, $revision->getPage(), $revision->getId() );
+		// @phan-suppress-next-line PhanTypeMismatchArgumentNullable - $content is not null here
+		$contentRenderer->getParserOutput( $content, $revision->getPage(), $revision );
 		if ( $this->clearLinkCache ) {
 			$this->linkCache->clear();
 		}
@@ -179,6 +165,7 @@ class BenchmarkParse extends Maintenance {
 	 * @param bool &$skip
 	 * @param ?RevisionRecord &$revRecord
 	 * @return bool
+	 * @suppress PhanUnusedPrivateMethodParameter Used as callback with fix signature
 	 */
 	private function onFetchTemplate(
 		?LinkTarget $contextTitle,

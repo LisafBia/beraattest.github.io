@@ -5,6 +5,7 @@
  * @see bug T75181
  */
 
+use MediaWiki\ChangeTags\ChangeTags;
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Storage\NameTableAccessException;
 
@@ -28,7 +29,7 @@ class DeleteTag extends Maintenance {
 		$tag = $this->getArg( 0 );
 		try {
 			$tagId = $defStore->getId( $tag );
-		} catch ( NameTableAccessException $ex ) {
+		} catch ( NameTableAccessException ) {
 			$this->fatalError( "Tag '$tag' not found" );
 		}
 

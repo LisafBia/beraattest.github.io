@@ -23,8 +23,25 @@
 		mw.notify( $content, {
 			title: title,
 			classes: [ 'postedit-tempuserpopup' ],
-			autoHide: false
+			autoHide: true,
+			autoHideSeconds: 'long'
 		} );
+	};
+
+	mw.tempUserCreated.showCondensedPopup = ( {
+		title, classes = [], content, hideBackdrop, primaryActionLabel, primaryActionUrl
+	} ) => {
+		const Vue = require( 'vue' );
+		const UserCreatedPopover = require( './UserCreatedPopover.vue' );
+
+		Vue.createMwApp( UserCreatedPopover, {
+			title,
+			classes,
+			content,
+			hideBackdrop,
+			primaryActionLabel,
+			primaryActionUrl
+		} ).mount( document.body.appendChild( document.createElement( 'div' ) ) );
 	};
 
 }() );

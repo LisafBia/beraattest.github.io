@@ -12,7 +12,6 @@ use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\RequestData;
 use MediaWiki\Revision\MutableRevisionRecord;
 use MediaWiki\Revision\RevisionLookup;
-use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Session\Token;
 use MediaWiki\Status\Status;
 use MediaWiki\Tests\Unit\DummyServicesTrait;
@@ -21,8 +20,6 @@ use MockTitleTrait;
 use PHPUnit\Framework\MockObject\MockObject;
 use Wikimedia\Message\DataMessageValue;
 use Wikimedia\Message\MessageValue;
-use Wikimedia\Message\ParamType;
-use Wikimedia\Message\ScalarParam;
 
 /**
  * @covers \MediaWiki\Rest\Handler\CreationHandler
@@ -45,24 +42,23 @@ class CreationHandlerTest extends MediaWikiIntegrationTestCase {
 			CONTENT_MODEL_TEXT => true,
 		] );
 
-		$titleCodec = $this->getDummyMediaWikiTitleCodec();
+		$titleParser = $this->getDummyTitleParser();
+		$titleFormatter = $this->getDummyTitleFormatter();
 
 		/** @var RevisionLookup|MockObject $revisionLookup */
 		$revisionLookup = $this->createNoOpMock( RevisionLookup::class, [ 'getRevisionById' ] );
 		$revisionLookup->method( 'getRevisionById' )
 			->willReturnCallback( function ( $id ) {
 				$title = $this->makeMockTitle( __CLASS__ );
-				$rev = new MutableRevisionRecord( $title );
-				$rev->setId( $id );
-				$rev->setContent( SlotRecord::MAIN, new WikitextContent( "Content of revision $id" ) );
-				return $rev;
+				return MutableRevisionRecord::newFromContent( $title, new WikitextContent( "Content of revision $id" ) )
+					->setId( $id );
 			} );
 
 		$handler = new CreationHandler(
 			$config,
 			$contentHandlerFactory,
-			$titleCodec,
-			$titleCodec,
+			$titleParser,
+			$titleFormatter,
 			$revisionLookup
 		);
 
@@ -70,11 +66,6 @@ class CreationHandlerTest extends MediaWikiIntegrationTestCase {
 		$dummyModule = $this->getDummyApiModule( $apiMain, 'edit', $resultData, $throwException );
 
 		$handler->setApiMain( $apiMain );
-		$handler->overrideActionModule(
-			'edit',
-			'action',
-			$dummyModule
-		);
 
 		return $handler;
 	}
@@ -404,6 +395,15 @@ class CreationHandlerTest extends MediaWikiIntegrationTestCase {
 		];
 	}
 
+	public function testGetRequestBodyDescription() {
+		$handler = $this->newHandler( [] );
+
+		$this->assertEquals(
+			new MessageValue( 'rest-requestbody-desc-create-page' ),
+			$handler->getRequestBodyDescription()
+		);
+	}
+
 	/**
 	 * @dataProvider provideBodyValidation
 	 */
@@ -482,10 +482,8 @@ class CreationHandlerTest extends MediaWikiIntegrationTestCase {
 				Status::newFatal( 'apierror-badtoken', Message::plaintextParam( 'BAD' ) )
 			),
 			new LocalizedHttpException(
-				new MessageValue(
-					'apierror-badtoken',
-					[ new ScalarParam( ParamType::PLAINTEXT, 'BAD' ) ]
-				), 403
+				( new MessageValue( 'apierror-badtoken' ) )->plaintextParams( 'BAD' ),
+				403
 			),
 		];
 

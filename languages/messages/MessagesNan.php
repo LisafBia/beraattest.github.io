@@ -1,5 +1,5 @@
 <?php
-/** Minnan (閩南語 / Bân-lâm-gú)
+/** Minnan (閩南語 / Bân-lâm-gí)
  *
  * @file
  * @ingroup Languages
@@ -10,7 +10,7 @@
  * @author Winston Sung
  */
 
-$fallback = 'nan-latn-pehoeji, nan-latn-tailo, nan-hant, cdo, zh-hant, zh, zh-hans';
+$fallback = 'nan-latn-pehoeji, nan-latn-tailo, nan-hant, cdo-hant, zh-hant, zh, zh-hans';
 
 $namespaceNames = [
 	NS_MEDIA            => 'Mûi-thé',
@@ -29,17 +29,4 @@ $namespaceNames = [
 	NS_HELP_TALK        => 'Pang-chān_thó-lūn',
 	NS_CATEGORY         => 'Lūi-pia̍t',
 	NS_CATEGORY_TALK    => 'Lūi-pia̍t_thó-lūn',
-];
-
-$datePreferences = [
-	'default',
-	'ISO 8601',
-];
-
-$defaultDateFormat = 'nan';
-
-$dateFormats = [
-	'nan time' => 'H:i',
-	'nan date' => 'Y-"nî" n-"goe̍h" j-"ji̍t" (l)',
-	'nan both' => 'Y-"nî" n-"goe̍h" j-"ji̍t" (l) H:i',
 ];

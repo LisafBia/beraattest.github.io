@@ -1,4 +1,8 @@
 {
+  "_Icon-rtl.css": {
+    "file": "Icon-rtl.css",
+    "src": "_Icon-rtl.css"
+  },
   "_Icon.js": {
     "file": "Icon.js",
     "name": "Icon",
@@ -12,6 +16,24 @@
       "Icon-rtl.css"
     ]
   },
+  "_ToastDisplay-rtl.css": {
+    "file": "ToastDisplay-rtl.css",
+    "src": "_ToastDisplay-rtl.css"
+  },
+  "_ToastDisplay.js": {
+    "file": "ToastDisplay.js",
+    "name": "ToastDisplay",
+    "imports": [
+      "src/components/message/Message.vue",
+      "_constants.js",
+      "src/composables/useSplitAttributes.ts",
+      "_useToast.js",
+      "__plugin-vue_export-helper.js"
+    ],
+    "css": [
+      "ToastDisplay-rtl.css"
+    ]
+  },
   "__plugin-vue_export-helper.js": {
     "file": "_plugin-vue_export-helper.js",
     "name": "_plugin-vue_export-helper"
@@ -23,6 +45,17 @@
   "_floating-ui.dom.js": {
     "file": "floating-ui.dom.js",
     "name": "floating-ui.dom"
+  },
+  "_floating-ui.vue.js": {
+    "file": "floating-ui.vue.js",
+    "name": "floating-ui.vue",
+    "imports": [
+      "_floating-ui.dom.js"
+    ]
+  },
+  "_unwrapElement.js": {
+    "file": "unwrapElement.js",
+    "name": "unwrapElement"
   },
   "_useButtonGroupKeyboardNav.js": {
     "file": "useButtonGroupKeyboardNav.js",
@@ -58,9 +91,20 @@
     "file": "useOptionalModelWrapper.js",
     "name": "useOptionalModelWrapper"
   },
+  "_useScrollLock.js": {
+    "file": "useScrollLock.js",
+    "name": "useScrollLock",
+    "imports": [
+      "_unwrapElement.js"
+    ]
+  },
   "_useSlotContents.js": {
     "file": "useSlotContents.js",
     "name": "useSlotContents"
+  },
+  "_useToast.js": {
+    "file": "useToast.js",
+    "name": "useToast"
   },
   "src/components/accordion/Accordion.vue": {
     "file": "CdxAccordion.cjs",
@@ -70,6 +114,8 @@
     "imports": [
       "_Icon.js",
       "src/components/button/Button.vue",
+      "_useOptionalModelWrapper.js",
+      "_constants.js",
       "__plugin-vue_export-helper.js"
     ],
     "css": [
@@ -113,6 +159,7 @@
     "imports": [
       "_Icon.js",
       "src/components/thumbnail/Thumbnail.vue",
+      "_constants.js",
       "__plugin-vue_export-helper.js"
     ],
     "css": [
@@ -128,7 +175,6 @@
       "src/components/label/Label.vue",
       "_useLabelChecker.js",
       "src/composables/useModelWrapper.ts",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useFieldData.ts",
       "_constants.js",
       "__plugin-vue_export-helper.js"
@@ -143,9 +189,11 @@
     "src": "src/components/chip-input/ChipInput.vue",
     "isEntry": true,
     "imports": [
+      "_useSlotContents.js",
       "src/components/button/Button.vue",
       "_Icon.js",
       "src/composables/useI18n.ts",
+      "src/components/tooltip/Tooltip.ts",
       "__plugin-vue_export-helper.js",
       "_constants.js",
       "src/composables/useSplitAttributes.ts",
@@ -168,7 +216,6 @@
       "src/components/menu/Menu.vue",
       "src/components/text-input/TextInput.vue",
       "src/composables/useModelWrapper.ts",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useSplitAttributes.ts",
       "src/composables/useFieldData.ts",
       "src/composables/useFloatingMenu.ts",
@@ -187,9 +234,9 @@
     "imports": [
       "src/components/button/Button.vue",
       "_Icon.js",
-      "src/composables/useGeneratedId.ts",
       "_useI18nWithOverride.js",
       "src/composables/useResizeObserver.ts",
+      "_useScrollLock.js",
       "__plugin-vue_export-helper.js"
     ],
     "css": [
@@ -205,7 +252,6 @@
       "src/components/label/Label.vue",
       "src/components/message/Message.vue",
       "_constants.js",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useComputedDisabled.ts",
       "__plugin-vue_export-helper.js"
     ],
@@ -223,6 +269,21 @@
       "__plugin-vue_export-helper.js"
     ]
   },
+  "src/components/image/Image.vue": {
+    "file": "CdxImage.cjs",
+    "name": "CdxImage",
+    "src": "src/components/image/Image.vue",
+    "isEntry": true,
+    "imports": [
+      "_Icon.js",
+      "_constants.js",
+      "src/composables/useSplitAttributes.ts",
+      "__plugin-vue_export-helper.js"
+    ],
+    "css": [
+      "CdxImage-rtl.css"
+    ]
+  },
   "src/components/info-chip/InfoChip.vue": {
     "file": "CdxInfoChip.cjs",
     "name": "CdxInfoChip",
@@ -231,6 +292,8 @@
     "imports": [
       "_constants.js",
       "_Icon.js",
+      "_useSlotContents.js",
+      "src/components/tooltip/Tooltip.ts",
       "__plugin-vue_export-helper.js"
     ],
     "css": [
@@ -261,7 +324,6 @@
     "imports": [
       "src/components/menu/Menu.vue",
       "src/components/text-input/TextInput.vue",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useModelWrapper.ts",
       "_useOptionalModelWrapper.js",
       "src/composables/useSplitAttributes.ts",
@@ -280,11 +342,10 @@
     "src": "src/components/menu-button/MenuButton.vue",
     "isEntry": true,
     "imports": [
-      "src/components/toggle-button/ToggleButton.vue",
+      "src/components/button/Button.vue",
       "src/components/menu/Menu.vue",
       "src/composables/useFieldData.ts",
       "src/composables/useFloatingMenu.ts",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useModelWrapper.ts",
       "src/composables/useSplitAttributes.ts",
       "__plugin-vue_export-helper.js"
@@ -317,7 +378,6 @@
       "src/components/menu-item/MenuItem.vue",
       "_Icon.js",
       "src/components/progress-bar/ProgressBar.vue",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useIntersectionObserver.ts",
       "src/composables/useSplitAttributes.ts",
       "__plugin-vue_export-helper.js"
@@ -352,7 +412,6 @@
       "src/components/menu/Menu.vue",
       "src/composables/useFieldData.ts",
       "src/composables/useFloatingMenu.ts",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useModelWrapper.ts",
       "_useOptionalModelWrapper.js",
       "src/composables/useSplitAttributes.ts",
@@ -361,6 +420,27 @@
     ],
     "css": [
       "CdxMultiselectLookup-rtl.css"
+    ]
+  },
+  "src/components/popover/Popover.vue": {
+    "file": "CdxPopover.cjs",
+    "name": "CdxPopover",
+    "src": "src/components/popover/Popover.vue",
+    "isEntry": true,
+    "imports": [
+      "_floating-ui.vue.js",
+      "_Icon.js",
+      "src/components/button/Button.vue",
+      "_useI18nWithOverride.js",
+      "src/composables/useResizeObserver.ts",
+      "_useScrollLock.js",
+      "_unwrapElement.js",
+      "_constants.js",
+      "_floating-ui.dom.js",
+      "__plugin-vue_export-helper.js"
+    ],
+    "css": [
+      "CdxPopover-rtl.css"
     ]
   },
   "src/components/progress-bar/ProgressBar.vue": {
@@ -376,6 +456,21 @@
       "CdxProgressBar-rtl.css"
     ]
   },
+  "src/components/progress-indicator/ProgressIndicator.vue": {
+    "file": "CdxProgressIndicator.cjs",
+    "name": "CdxProgressIndicator",
+    "src": "src/components/progress-indicator/ProgressIndicator.vue",
+    "isEntry": true,
+    "imports": [
+      "src/components/label/Label.vue",
+      "_useLabelChecker.js",
+      "src/composables/useSplitAttributes.ts",
+      "__plugin-vue_export-helper.js"
+    ],
+    "css": [
+      "CdxProgressIndicator-rtl.css"
+    ]
+  },
   "src/components/radio/Radio.vue": {
     "file": "CdxRadio.cjs",
     "name": "CdxRadio",
@@ -385,7 +480,6 @@
       "src/components/label/Label.vue",
       "_useLabelChecker.js",
       "src/composables/useModelWrapper.ts",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useFieldData.ts",
       "_constants.js",
       "__plugin-vue_export-helper.js"
@@ -434,7 +528,6 @@
     "imports": [
       "_Icon.js",
       "src/components/menu/Menu.vue",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useModelWrapper.ts",
       "src/composables/useFieldData.ts",
       "src/composables/useSplitAttributes.ts",
@@ -488,7 +581,6 @@
       "_Icon.js",
       "src/components/button/Button.vue",
       "src/components/tab/Tab.vue",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useComputedDirection.ts",
       "_useOptionalModelWrapper.js",
       "src/composables/useIntersectionObserver.ts",
@@ -548,6 +640,41 @@
       "CdxThumbnail-rtl.css"
     ]
   },
+  "src/components/toast/Toast.vue": {
+    "file": "CdxToast.cjs",
+    "name": "CdxToast",
+    "src": "src/components/toast/Toast.vue",
+    "isEntry": true,
+    "imports": [
+      "_ToastDisplay.js",
+      "_constants.js",
+      "_useToast.js",
+      "__plugin-vue_export-helper.js"
+    ]
+  },
+  "src/components/toast/ToastContainer.vue": {
+    "file": "CdxToastContainer.cjs",
+    "name": "CdxToastContainer",
+    "src": "src/components/toast/ToastContainer.vue",
+    "isEntry": true,
+    "imports": [
+      "_ToastDisplay.js",
+      "_useToast.js",
+      "__plugin-vue_export-helper.js"
+    ],
+    "css": [
+      "CdxToastContainer-rtl.css"
+    ]
+  },
+  "src/components/toast/useToast.ts": {
+    "file": "useToast.cjs",
+    "name": "useToast",
+    "src": "src/components/toast/useToast.ts",
+    "isEntry": true,
+    "imports": [
+      "_useToast.js"
+    ]
+  },
   "src/components/toggle-button-group/ToggleButtonGroup.vue": {
     "file": "CdxToggleButtonGroup.cjs",
     "name": "CdxToggleButtonGroup",
@@ -569,6 +696,7 @@
     "src": "src/components/toggle-button/ToggleButton.vue",
     "isEntry": true,
     "imports": [
+      "_constants.js",
       "_useIconOnlyButton.js",
       "__plugin-vue_export-helper.js"
     ],
@@ -585,7 +713,6 @@
       "src/components/label/Label.vue",
       "_useLabelChecker.js",
       "src/composables/useModelWrapper.ts",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useSplitAttributes.ts",
       "src/composables/useFieldData.ts",
       "__plugin-vue_export-helper.js"
@@ -600,7 +727,7 @@
     "src": "src/components/tooltip/Tooltip.ts",
     "isEntry": true,
     "imports": [
-      "src/composables/useGeneratedId.ts",
+      "_constants.js",
       "_floating-ui.dom.js"
     ],
     "css": [
@@ -616,7 +743,6 @@
       "_Icon.js",
       "src/components/menu/Menu.vue",
       "src/components/search-input/SearchInput.vue",
-      "src/composables/useGeneratedId.ts",
       "src/composables/useSplitAttributes.ts",
       "src/composables/useI18n.ts",
       "_constants.js",
@@ -663,6 +789,8 @@
     "src": "src/composables/useFloatingMenu.ts",
     "isEntry": true,
     "imports": [
+      "_floating-ui.vue.js",
+      "_unwrapElement.js",
       "_floating-ui.dom.js"
     ]
   },

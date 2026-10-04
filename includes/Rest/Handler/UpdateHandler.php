@@ -10,9 +10,11 @@ use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
+use MediaWiki\Title\Title;
 use MediaWiki\Utils\MWTimestamp;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Core REST API endpoint that handles page updates (main slot only)
@@ -33,8 +35,6 @@ class UpdateHandler extends EditHandler {
 
 	/**
 	 * Sets the function to use for JSON diffs, for testing.
-	 *
-	 * @param callable $jsonDiffFunction
 	 */
 	public function setJsonDiffFunction( callable $jsonDiffFunction ) {
 		$this->jsonDiffFunction = $jsonDiffFunction;
@@ -50,6 +50,7 @@ class UpdateHandler extends EditHandler {
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
 				self::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-update-title' ),
+				self::PARAM_EXAMPLE => 'Wikipedia:Sandbox',
 			],
 		] + parent::getParamSettings();
 	}
@@ -63,17 +64,22 @@ class UpdateHandler extends EditHandler {
 				self::PARAM_SOURCE => 'body',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
-				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-update-source' )
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-source' ),
+				Handler::PARAM_EXAMPLE => 'Hello, world!',
 			],
 			'comment' => [
 				self::PARAM_SOURCE => 'body',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-comment' ),
+				Handler::PARAM_EXAMPLE => 'Testing out the REST API',
 			],
 			'content_model' => [
 				self::PARAM_SOURCE => 'body',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => false,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-contentmodel' ),
+				Handler::PARAM_EXAMPLE => 'wikitext',
 			],
 			'latest' => [
 				self::PARAM_SOURCE => 'body',
@@ -83,17 +89,24 @@ class UpdateHandler extends EditHandler {
 					[ 'id' => 'integer' ],
 					[ 'timestamp' => 'string' ], // from GET response, will be ignored
 				),
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-update-latest' ),
+				Handler::PARAM_EXAMPLE => [
+					'id' => 1347490218,
+					'timestamp' => '2026-04-07T01:20:41Z'
+				],
 			],
 		] + $this->getTokenParamDefinition();
+	}
+
+	public function getRequestBodyDescription(): MessageValue|string|null {
+		return new MessageValue( 'rest-requestbody-desc-update-page' );
 	}
 
 	/**
 	 * @inheritDoc
 	 */
 	protected function getActionModuleParameters() {
-		$body = $this->getValidatedBody();
-		'@phan-var array $body';
-
+		$body = $this->getValidatedBodyArray();
 		$title = $this->getTitleParameter();
 		$baseRevId = $body['latest']['id'] ?? 0;
 
@@ -140,11 +153,12 @@ class UpdateHandler extends EditHandler {
 			// We may want to signal this more explicitly to the client in the future.
 
 			$title = $this->titleParser->parseTitle( $this->getValidatedParams()['title'] );
+			$title = Title::newFromLinkTarget( $title );
 			$currentRev = $this->revisionLookup->getRevisionByTitle( $title );
 
 			$data['edit']['newrevid'] = $currentRev->getId();
 			$data['edit']['newtimestamp']
-				= MWTimestamp::convert( TS_ISO_8601, $currentRev->getTimestamp() );
+				= MWTimestamp::convert( TS::ISO_8601, $currentRev->getTimestamp() );
 		}
 
 		return parent::mapActionModuleResult( $data );
@@ -153,7 +167,7 @@ class UpdateHandler extends EditHandler {
 	/**
 	 * @inheritDoc
 	 */
-	protected function throwHttpExceptionForActionModuleError( IApiMessage $msg, $statusCode = 400 ) {
+	protected function throwHttpExceptionForActionModuleError( IApiMessage $msg, $statusCode = 0 ) {
 		$code = $msg->getApiCode();
 
 		// Provide a message instructing the client to provide the base revision ID for updates.
@@ -167,7 +181,7 @@ class UpdateHandler extends EditHandler {
 
 		if ( $code === 'editconflict' ) {
 			$data = $this->getConflictData();
-			throw new LocalizedHttpException( MessageValue::newFromSpecifier( $msg ), 409, $data );
+			throw new LocalizedHttpException( $msg, 409, $data );
 		}
 
 		parent::throwHttpExceptionForActionModuleError( $msg, $statusCode );
@@ -178,7 +192,7 @@ class UpdateHandler extends EditHandler {
 	 *
 	 * The resulting array contains the following keys:
 	 * - base: revision ID of the base revision
-	 * - current: revision ID of the current revision (new base after resolving the conflict)
+	 * - current: revision ID of the latest revision (new base after resolving the conflict)
 	 * - local: the difference between the content submitted and the base revision
 	 * - remote: the difference between the latest revision of the page and the base revision
 	 *
@@ -187,12 +201,12 @@ class UpdateHandler extends EditHandler {
 	 * @return array
 	 */
 	private function getConflictData() {
-		$body = $this->getValidatedBody();
-		'@phan-var array $body';
+		$body = $this->getValidatedBodyArray();
 		$baseRevId = $body['latest']['id'] ?? 0;
 		$title = $this->titleParser->parseTitle( $this->getValidatedParams()['title'] );
 
 		$baseRev = $this->revisionLookup->getRevisionById( $baseRevId );
+		$title = Title::newFromLinkTarget( $title );
 		$currentRev = $this->revisionLookup->getRevisionByTitle( $title );
 
 		if ( !$baseRev || !$currentRev ) {
@@ -258,6 +272,6 @@ class UpdateHandler extends EditHandler {
 	}
 
 	public function getResponseBodySchemaFileName( string $method ): ?string {
-		return 'includes/Rest/Handler/Schema/ExistingPageSource.json';
+		return __DIR__ . '/Schema/ExistingPageSource.json';
 	}
 }

@@ -7,26 +7,16 @@
  * - decide how and from where to load site configuration (LocalSettings.php),
  * - load Setup.php.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 use MediaWiki\Context\RequestContext;
+use MediaWiki\Deferred\DeferredUpdates;
+use MediaWiki\MediaWikiServices;
+use MediaWiki\Output\OutputHandler;
 use MediaWiki\Settings\SettingsBuilder;
+use Wikimedia\Http\HttpStatus;
 
 # T17461: Make IE8 turn off content sniffing. Everybody else should ignore this
 # We're adding it here so that it's *always* set, even for alternate entry
@@ -44,7 +34,7 @@ define( 'MEDIAWIKI', true );
  * @param SettingsBuilder $settings
  * @return never
  */
-function wfWebStartNoLocalSettings( SettingsBuilder $settings ) {
+function wfWebStartNoLocalSettings( SettingsBuilder $settings ): never {
 	# LocalSettings.php is the per-site customization file. If it does not exist
 	# the wiki installer needs to be launched or the generated file uploaded to
 	# the root wiki directory. Give a hint, if it is not readable by the server.
@@ -73,7 +63,7 @@ function wfWebStartSetup( SettingsBuilder $settings ) {
 		// premature sending of HTTP headers due to output from PHP warnings and notices.
 		// They also can be used to implement gzip support in PHP without the webserver knowing
 		// which requests yield HTML and which yield large files that can be streamed.
-		ob_start( [ MediaWiki\Output\OutputHandler::class, 'handle' ] );
+		ob_start( OutputHandler::handle( ... ) );
 	}
 }
 
@@ -83,6 +73,19 @@ if ( !defined( 'MW_SETUP_CALLBACK' ) ) {
 }
 
 require_once __DIR__ . '/Setup.php';
+
+// Optimization: Avoid overhead from DeferredUpdates and Pingback deps when turned off.
+//
+// NOTE: Do not refactor to inject Config or otherwise unconditionally call services.
+//
+// On a plain install of MediaWiki, Pingback is likely the *only* feature involving
+// DeferredUpdates or DB_PRIMARY on a regular page view. To allow for error recovery and fault
+// isolation, let admins turn this off completely. (T269516)
+if ( MW_ENTRY_POINT !== 'cli' && $wgPingback ) {
+	DeferredUpdates::addCallableUpdate( static function () {
+		MediaWikiServices::getInstance()->getPingback()->run();
+	} );
+}
 
 # Multiple DBs or commits might be used; keep the request as transactional as possible
 if ( isset( $_SERVER['REQUEST_METHOD'] ) && $_SERVER['REQUEST_METHOD'] === 'POST' ) {

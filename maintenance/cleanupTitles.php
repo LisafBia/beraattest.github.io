@@ -5,26 +5,13 @@
  * Copyright © 2005 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @author Brooke Vibber <bvibber@wikimedia.org>
  * @ingroup Maintenance
  */
 
+use MediaWiki\MainConfigNames;
 use MediaWiki\Title\Title;
 use Wikimedia\Rdbms\IDBAccessObject;
 
@@ -104,15 +91,30 @@ class TitleCleanup extends TableCleanup {
 	 * @return bool
 	 */
 	protected function fileExists( $name ) {
-		// XXX: Doesn't actually check for file existence, just presence of image record.
-		// This is reasonable, since cleanupImages.php only iterates over the image table.
+		// XXX: Doesn't actually check for file existence, just presence of image/file record.
+		// This is reasonable, since cleanupImages.php only iterates over the image/file table.
 		$dbr = $this->getReplicaDB();
-		$row = $dbr->newSelectQueryBuilder()
-			->select( '*' )
-			->from( 'image' )
-			->where( [ 'img_name' => $name ] )
-			->caller( __METHOD__ )
-			->fetchRow();
+		$migrationStage = $this->getServiceContainer()->getMainConfig()->get(
+			MainConfigNames::FileSchemaMigrationStage
+		);
+		if ( $migrationStage & SCHEMA_COMPAT_READ_OLD ) {
+			$row = $dbr->newSelectQueryBuilder()
+				->select( '*' )
+				->from( 'image' )
+				->where( [ 'img_name' => $name ] )
+				->caller( __METHOD__ )
+				->fetchRow();
+		} else {
+			$row = $dbr->newSelectQueryBuilder()
+				->select( '*' )
+				->from( 'file' )
+				->where( [
+					'file_name' => $name,
+					'file_deleted' => 0,
+				] )
+				->caller( __METHOD__ )
+				->fetchRow();
+		}
 
 		return $row !== false;
 	}
@@ -123,7 +125,7 @@ class TitleCleanup extends TableCleanup {
 	protected function moveIllegalPage( $row ) {
 		$legalChars = Title::legalChars();
 		$legalizedUnprefixed = preg_replace_callback( "/([^$legalChars])/",
-			[ $this, 'hexChar' ],
+			$this->hexChar( ... ),
 			$row->page_title );
 		if ( $legalizedUnprefixed == '.' ) {
 			$legalizedUnprefixed = '(dot)';
@@ -167,7 +169,7 @@ class TitleCleanup extends TableCleanup {
 			// characters, but if we don't do this the result will be
 			// falling back to the Broken/id:foo failsafe below which is worse
 			$legalizedUnprefixed = preg_replace_callback( '!([^A-Za-z0-9_:\\-])!',
-				[ $this, 'hexChar' ],
+				$this->hexChar( ... ),
 				$legalizedUnprefixed
 			);
 			$title = Title::newFromText( $this->prefix . $legalizedUnprefixed );
@@ -181,7 +183,7 @@ class TitleCleanup extends TableCleanup {
 			$title = Title::newFromText( $clean );
 		} elseif ( $title->exists( IDBAccessObject::READ_LATEST ) ) {
 			$clean = $this->prefix . 'id:' . $row->page_id;
-			$conflict = $title->getDBKey();
+			$conflict = $title->getDBkey();
 			$this->output( "Legalized for '$conflict' exists; using '$clean'\n" );
 			$title = Title::newFromText( $clean );
 		}
@@ -201,12 +203,14 @@ class TitleCleanup extends TableCleanup {
 		} else {
 			$this->output( "renaming $row->page_id ($row->page_namespace," .
 				"'$row->page_title') to ($ns,'$dest')\n" );
-			$this->getPrimaryDB()
+			$update = $this->getPrimaryDB()
 				->newUpdateQueryBuilder()
 				->update( 'page' )
 				->set( [ 'page_title' => $dest, 'page_namespace' => $ns ] )
 				->where( [ 'page_id' => $row->page_id ] )
-				->caller( __METHOD__ )->execute();
+				->caller( __METHOD__ );
+			$update->execute();
+			$this->getServiceContainer()->getLinkWriteDuplicator()->duplicate( $update );
 		}
 	}
 
@@ -242,7 +246,7 @@ class TitleCleanup extends TableCleanup {
 
 			# Namespace which no longer exists. Put the page in the main namespace
 			# since we don't have any idea of the old namespace name. See T70501.
-			# We build the new title ourself rather than relying on getDBKey() because
+			# We build the new title ourself rather than relying on getDBkey() because
 			# that will return Special:BadTitle
 			$namespaceInfo = $this->getServiceContainer()->getNamespaceInfo();
 			if ( !$namespaceInfo->exists( $ns ) ) {
@@ -284,7 +288,7 @@ class TitleCleanup extends TableCleanup {
 		} else {
 			$this->output( "renaming $row->page_id ($row->page_namespace," .
 				"'$row->page_title') to ($ns,'$dest')\n" );
-			$this->getPrimaryDB()
+			$update = $this->getPrimaryDB()
 				->newUpdateQueryBuilder()
 				->update( 'page' )
 				->set( [
@@ -292,7 +296,9 @@ class TitleCleanup extends TableCleanup {
 					'page_title' => $dest
 				] )
 				->where( [ 'page_id' => $row->page_id ] )
-				->caller( __METHOD__ )->execute();
+				->caller( __METHOD__ );
+			$update->execute();
+			$this->getServiceContainer()->getLinkWriteDuplicator()->duplicate( $update );
 			$this->getServiceContainer()->getLinkCache()->clear();
 		}
 	}

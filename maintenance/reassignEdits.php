@@ -2,21 +2,7 @@
 /**
  * Reassign edits from a user or IP address to another user
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  * @author Rob Church <robchur@gmail.com>
@@ -49,24 +35,29 @@ class ReassignEdits extends Maintenance {
 	}
 
 	public function execute() {
-		if ( $this->hasArg( 0 ) && $this->hasArg( 1 ) ) {
-			# Set up the users involved
-			$from = $this->initialiseUser( $this->getArg( 0 ) );
-			$to = $this->initialiseUser( $this->getArg( 1 ) );
+		# Set up the users involved
+		$from = $this->initialiseUser( $this->getArg( 0 ) );
+		$to = $this->initialiseUser( $this->getArg( 1 ) );
 
-			# If the target doesn't exist, and --force is not set, stop here
-			if ( $to->getId() || $this->hasOption( 'force' ) ) {
-				# Reassign the edits
-				$report = $this->hasOption( 'report' );
-				$this->doReassignEdits( $from, $to, !$this->hasOption( 'norc' ), $report );
-				# If reporting, and there were items, advise the user to run without --report
-				if ( $report ) {
-					$this->output( "Run the script again without --report to update.\n" );
-				}
-			} else {
-				$ton = $to->getName();
-				$this->error( "User '{$ton}' not found." );
+		// Reject attempts to re-assign to an IP address. This is done because the script does not
+		// populate ip_changes and it breaks if temporary accounts are enabled (T373914).
+		if ( IPUtils::isIPAddress( $to->getName() ) ) {
+			$this->fatalError( 'Script does not support re-assigning to another IP.' );
+		} elseif ( $from->equals( $to ) ) {
+			$this->fatalError( 'The from and to user cannot be the same.' );
+		}
+
+		# If the target doesn't exist, and --force is not set, stop here
+		if ( $to->getId() || $this->hasOption( 'force' ) ) {
+			# Reassign the edits
+			$report = $this->hasOption( 'report' );
+			$this->doReassignEdits( $from, $to, !$this->hasOption( 'norc' ), $report );
+			# If reporting, and there were items, advise the user to run without --report
+			if ( $report ) {
+				$this->output( "Run the script again without --report to update.\n" );
 			}
+		} else {
+			$this->fatalError( "User '{$to->getName()}' not found." );
 		}
 	}
 
@@ -81,7 +72,7 @@ class ReassignEdits extends Maintenance {
 	 */
 	private function doReassignEdits( &$from, &$to, $updateRC = false, $report = false ) {
 		$dbw = $this->getPrimaryDB();
-		$this->beginTransaction( $dbw, __METHOD__ );
+		$this->beginTransactionRound( __METHOD__ );
 		$actorNormalization = $this->getServiceContainer()->getActorNormalization();
 		$fromActorId = $actorNormalization->findActorId( $from, $dbw );
 
@@ -175,7 +166,7 @@ class ReassignEdits extends Maintenance {
 			}
 		}
 
-		$this->commitTransaction( $dbw, __METHOD__ );
+		$this->commitTransactionRound( __METHOD__ );
 
 		return $total;
 	}

@@ -3,9 +3,13 @@
 namespace MediaWiki\Tests\Maintenance;
 
 use CreateAndPromote;
+use MediaWiki\Auth\LocalPasswordPrimaryAuthenticationProvider;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Password\PasswordError;
 use MediaWiki\Password\PasswordFactory;
+use MediaWiki\Request\FauxRequest;
 use MediaWiki\SiteStats\SiteStats;
+use MediaWiki\Tests\User\TempUser\TempUserTestTrait;
 use MediaWiki\User\User;
 
 /**
@@ -14,6 +18,7 @@ use MediaWiki\User\User;
  * @author Dreamy Jazz
  */
 class CreateAndPromoteTest extends MaintenanceBaseTestCase {
+	use TempUserTestTrait;
 
 	protected function getMaintenanceClass() {
 		return CreateAndPromote::class;
@@ -126,6 +131,53 @@ class CreateAndPromoteTest extends MaintenanceBaseTestCase {
 		$this->maintenance->execute();
 	}
 
+	public function testExecuteForExistingUserPasswordErrorStatus() {
+		// Disable all auth providers that could handle passwords, so that the password change fails.
+		// A real wiki could be using a SSO auth provider and have no password authentication whatsoever.
+		$this->overrideConfigValue( MainConfigNames::AuthManagerConfig, [
+			'preauth' => [],
+			'primaryauth' => [],
+			'secondaryauth' => [],
+		] );
+
+		$testUser = $this->getMutableTestUser()->getUser();
+		$this->maintenance->setArg( 'username', $testUser );
+		$this->maintenance->setArg( 'password', PasswordFactory::generateRandomPasswordString( 128 ) );
+		$this->maintenance->setOption( 'force', true );
+
+		$this->expectCallToFatalError();
+		$this->expectOutputRegex( '/Setting the password failed[\s\S]*The authentication data change was not handled/' );
+		$this->maintenance->execute();
+	}
+
+	public function testExecuteForExistingUserPasswordErrorException() {
+		// Make AuthManager throw a PasswordError. Not sure if this exception is possible in practice...
+		$authProvider = $this->getMockBuilder( LocalPasswordPrimaryAuthenticationProvider::class )
+			->disableOriginalConstructor()
+			->onlyMethods( [ 'providerAllowsAuthenticationDataChange' ] )
+			->getMock();
+		$authProvider->method( 'providerAllowsAuthenticationDataChange' )
+			->willThrowException( new PasswordError( 'My test error' ) );
+		$this->overrideConfigValue( MainConfigNames::AuthManagerConfig, [
+			'preauth' => [],
+			'primaryauth' => [
+				__CLASS__ => [
+					'factory' => static fn () => $authProvider,
+				],
+			],
+			'secondaryauth' => [],
+		] );
+
+		$testUser = $this->getMutableTestUser()->getUser();
+		$this->maintenance->setArg( 'username', $testUser );
+		$this->maintenance->setArg( 'password', PasswordFactory::generateRandomPasswordString( 128 ) );
+		$this->maintenance->setOption( 'force', true );
+
+		$this->expectCallToFatalError();
+		$this->expectOutputRegex( '/Unexpected PasswordError: My test error/' );
+		$this->maintenance->execute();
+	}
+
 	public function testExecuteForNewAccountWhenReadOnly() {
 		$this->getServiceContainer()->getReadOnlyMode()->setReason( 'test' );
 		$this->maintenance->setArg( 'username', 'NewTestUser1234' );
@@ -158,5 +210,33 @@ class CreateAndPromoteTest extends MaintenanceBaseTestCase {
 		// Check that the number of users has increased to 2, one for the new user and the other for the maintenance
 		// script user.
 		$this->assertSame( 2, SiteStats::users() );
+	}
+
+	public function testExecuteForNewTemporaryAccount() {
+		$this->enableAutoCreateTempUser();
+		$tempUsername = $this->getServiceContainer()->getTempUserCreator()
+			->acquireAndStashName( ( new FauxRequest() )->getSession() );
+		$this->assertNotNull( $tempUsername );
+
+		$this->expectCallToFatalError();
+		$this->expectOutputRegex( '/Temporary accounts cannot have groups or a password/' );
+
+		$password = PasswordFactory::generateRandomPasswordString( 128 );
+		$this->maintenance->setArg( 'username', $tempUsername );
+		$this->maintenance->setArg( 'password', $password );
+		$this->maintenance->execute();
+	}
+
+	public function testExecuteForExistingTemporaryAccount() {
+		$this->enableAutoCreateTempUser();
+		$tempUser = $this->getServiceContainer()->getTempUserCreator()
+			->create( null, new FauxRequest() )->getUser();
+
+		$this->expectCallToFatalError();
+		$this->expectOutputRegex( '/Temporary accounts cannot have groups or a password/' );
+
+		$this->maintenance->setArg( 'username', $tempUser->getName() );
+		$this->maintenance->setOption( 'sysop', 1 );
+		$this->maintenance->execute();
 	}
 }

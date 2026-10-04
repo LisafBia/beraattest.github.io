@@ -3,25 +3,13 @@
  * Copyright © 2004 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\Feed;
+
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Generate an RSS feed.
@@ -38,16 +26,17 @@ class RSSFeed extends ChannelFeed {
 	 */
 	private function formatTime( $ts ) {
 		if ( $ts ) {
-			return gmdate( 'D, d M Y H:i:s \G\M\T', (int)wfTimestamp( TS_UNIX, $ts ) );
+			return gmdate( 'D, d M Y H:i:s \G\M\T', (int)wfTimestamp( TS::UNIX, $ts ) );
 		}
 		return null;
 	}
 
 	/**
 	 * Output an RSS 2.0 header
+	 * @inheritDoc
 	 */
-	public function outHeader() {
-		$this->outXmlHeader();
+	public function outputHeader( $output ): void {
+		$this->outputXmlHeader( $output );
 		// Manually escaping rather than letting Mustache do it because Mustache
 		// uses htmlentities, which does not work with XML
 		$templateParams = [
@@ -65,9 +54,9 @@ class RSSFeed extends ChannelFeed {
 
 	/**
 	 * Output an RSS 2.0 item
-	 * @param FeedItem $item Item to be output
+	 * @inheritDoc
 	 */
-	public function outItem( $item ) {
+	public function outputItem( FeedItem $item, $output ): void {
 		// Manually escaping rather than letting Mustache do it because Mustache
 		// uses htmlentities, which does not work with XML
 		$templateParams = [
@@ -78,7 +67,7 @@ class RSSFeed extends ChannelFeed {
 			"permalink" => $item->rssIsPermalink,
 			"uniqueID" => $item->getUniqueID(),
 			"description" => $item->getDescription(),
-			"date" => $this->xmlEncode( $this->formatTime( $item->getDate() ) ),
+			"date" => $this->xmlEncodeNullable( $this->formatTime( $item->getDate() ) ),
 			"author" => $item->getAuthor()
 		];
 		$comments = $item->getCommentsUnescaped();
@@ -93,11 +82,9 @@ class RSSFeed extends ChannelFeed {
 
 	/**
 	 * Output an RSS 2.0 footer
+	 * @inheritDoc
 	 */
-	public function outFooter() {
+	public function outputFooter( $output ): void {
 		print "</channel></rss>";
 	}
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( RSSFeed::class, 'RSSFeed' );

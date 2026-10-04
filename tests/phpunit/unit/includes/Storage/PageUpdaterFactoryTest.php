@@ -4,6 +4,7 @@ namespace MediaWiki\Tests\Unit\Storage;
 
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Page\WikiPage;
 use MediaWiki\Page\WikiPageFactory;
 use MediaWiki\Storage\DerivedPageDataUpdater;
 use MediaWiki\Storage\PageUpdater;
@@ -13,7 +14,6 @@ use MediaWiki\User\UserIdentityValue;
 use MediaWikiUnitTestCase;
 use Wikimedia\Rdbms\LBFactory;
 use Wikimedia\Rdbms\LoadBalancer;
-use WikiPage;
 
 /**
  * @covers \MediaWiki\Storage\PageUpdaterFactory
@@ -30,8 +30,8 @@ class PageUpdaterFactoryTest extends MediaWikiUnitTestCase {
 			MainConfigNames::ManualRevertSearchRadius => null,
 			MainConfigNames::UseRCPatrol => null,
 			MainConfigNames::ParsoidCacheConfig => [
-				'WarmParsoidParserCache' => false
 			],
+			MainConfigNames::NamespacesWithoutAutoSummaries => null,
 		];
 
 		$lb = $this->createNoOpMock( LoadBalancer::class );

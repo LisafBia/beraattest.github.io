@@ -4,10 +4,10 @@ namespace MediaWiki\Tests\DomainEvent;
 
 use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\DomainEvent\DomainEvent;
+use MediaWiki\DomainEvent\DomainEventIngress;
 use MediaWiki\DomainEvent\DomainEventSource;
 use MediaWiki\DomainEvent\DomainEventSubscriber;
 use MediaWiki\DomainEvent\EventDispatchEngine;
-use MediaWiki\DomainEvent\EventSubscriberBase;
 use MediaWiki\Tests\MockDatabase;
 use MediaWikiUnitTestCase;
 use Wikimedia\ObjectFactory\ObjectFactory;
@@ -21,6 +21,10 @@ class EventDispatchEngineTest extends MediaWikiUnitTestCase {
 
 	private function newEvent( string $type ): DomainEvent {
 		return new class ( $type ) extends DomainEvent {
+			public function __construct( string $type ) {
+				parent::__construct();
+				$this->declareEventType( $type );
+			}
 		};
 	}
 
@@ -53,46 +57,55 @@ class EventDispatchEngineTest extends MediaWikiUnitTestCase {
 		return $engine;
 	}
 
-	public function testSend() {
+	public function testDispatch() {
 		$engine = $this->newDispatchEngine();
 		$conProv = $this->newConnectionProvider();
 
 		$callCount = 0;
-		$engine->registerListener(
-			'Tested',
-			static function (
-				DomainEvent $event,
-				IConnectionProvider $conProv
-			) use ( &$callCount ) {
-				$callCount++;
-			},
-			[ DomainEventSource::INVOCATION_MODE => DomainEventSource::INVOKE_BEFORE_COMMIT ]
-		);
 
 		$engine->registerListener(
 			'Tested',
-			static function (
-				DomainEvent $event,
-				IConnectionProvider $conProv
-			) use ( &$callCount ) {
+			static function ( DomainEvent $event ) use ( &$callCount ) {
 				$callCount++;
-			},
-			[ DomainEventSource::INVOCATION_MODE => DomainEventSource::INVOKE_AFTER_COMMIT ]
+			}
 		);
 
 		$dbw = $conProv->getPrimaryDatabase();
 		$dbw->begin();
 		$event = $this->newEvent( 'Tested' );
 		$engine->dispatch( $event, $conProv );
-
-		$this->assertSame( 1, $callCount, 'Hook handler should have been called' );
-
 		$dbw->commit();
+
+		DeferredUpdates::doUpdates();
+
+		$this->assertSame( 1, $callCount, 'Listener should have been called' );
+	}
+
+	public function testWildcardListener() {
+		$engine = $this->newDispatchEngine();
+		$conProv = $this->newConnectionProvider();
+
+		$callCount = 0;
+		$engine->registerListener(
+			DomainEvent::ANY, // register for any event
+			static function () use ( &$callCount ) {
+				$callCount++;
+			}
+		);
+
+		$engine->dispatch( $this->newEvent( 'Tested1' ), $conProv );
+		$engine->dispatch( $this->newEvent( 'Tested2' ), $conProv );
+
 		DeferredUpdates::doUpdates();
 
 		$this->assertSame( 2, $callCount, 'Listener should have been called' );
 	}
 
+	/**
+	 * Assert that listeners registered in INVOKE_AFTER_COMMIT mode will
+	 * not be invoked if the transaction is rolled back, but listeners
+	 * registered as INVOKE_BEFORE_COMMIT are still invoked.
+	 */
 	public function testRollback() {
 		$engine = $this->newDispatchEngine();
 
@@ -106,19 +119,7 @@ class EventDispatchEngineTest extends MediaWikiUnitTestCase {
 				IConnectionProvider $conProv
 			) use ( &$callCount ) {
 				$callCount++;
-			},
-			[ DomainEventSource::INVOCATION_MODE => DomainEventSource::INVOKE_BEFORE_COMMIT ]
-		);
-
-		$engine->registerListener(
-			'Tested',
-			static function (
-				DomainEvent $event,
-				IConnectionProvider $conProv
-			) use ( &$callCount ) {
-				$callCount++;
-			},
-			[ DomainEventSource::INVOCATION_MODE => DomainEventSource::INVOKE_AFTER_COMMIT ]
+			}
 		);
 
 		$dbw = $conProv->getPrimaryDatabase();
@@ -126,12 +127,10 @@ class EventDispatchEngineTest extends MediaWikiUnitTestCase {
 		$event = $this->newEvent( 'Tested' );
 		$engine->dispatch( $event, $conProv );
 
-		$this->assertSame( 1, $callCount, 'Hook handler should have been called' );
-
 		$dbw->rollback();
 		DeferredUpdates::doUpdates();
 
-		$this->assertSame( 1, $callCount, 'Listener should not have been called' );
+		$this->assertSame( 0, $callCount, 'After-commit listener should not have been called' );
 	}
 
 	public function testRegisterSubscriber() {
@@ -275,14 +274,15 @@ class EventDispatchEngineTest extends MediaWikiUnitTestCase {
 
 		$trace = [];
 
-		$subscriber = new class ( $trace ) extends EventSubscriberBase {
+		$subscriber = new class ( $trace ) extends DomainEventIngress {
+			/** @var array */
 			private $trace;
 
 			public function __construct( &$trace ) {
 				$this->trace =& $trace;
 			}
 
-			public function handleFooCompleteEventAfterCommit() {
+			public function handleFooCompleteEvent() {
 				$this->trace[] = 'afterFooComplete';
 			}
 		};

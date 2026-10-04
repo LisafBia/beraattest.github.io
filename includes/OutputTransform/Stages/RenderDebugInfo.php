@@ -1,4 +1,5 @@
 <?php
+declare( strict_types = 1 );
 
 namespace MediaWiki\OutputTransform\Stages;
 
@@ -7,7 +8,7 @@ use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\Language\RawMessage;
 use MediaWiki\Message\Message;
-use MediaWiki\OutputTransform\ContentTextTransformStage;
+use MediaWiki\OutputTransform\OutputTransformStage;
 use MediaWiki\Parser\ParserOptions;
 use MediaWiki\Parser\ParserOutput;
 use Psr\Log\LoggerInterface;
@@ -16,24 +17,26 @@ use Psr\Log\LoggerInterface;
  * Adds debug info to the output
  * @internal
  */
-class RenderDebugInfo extends ContentTextTransformStage {
-
+class RenderDebugInfo extends OutputTransformStage {
 	private HookRunner $hookRunner;
 
 	public function __construct(
-		ServiceOptions $options, LoggerInterface $logger, HookContainer $hookContainer
+		ServiceOptions $options,
+		LoggerInterface $logger,
+		HookContainer $hookContainer
 	) {
 		parent::__construct( $options, $logger );
 		$this->hookRunner = new HookRunner( $hookContainer );
 	}
 
-	public function shouldRun( ParserOutput $po, ?ParserOptions $popts, array $options = [] ): bool {
+	public function shouldRun( ParserOutput $po, ParserOptions $popts, array $options = [] ): bool {
 		return $options['includeDebugInfo'] ?? false;
 	}
 
-	protected function transformText( string $text, ParserOutput $po, ?ParserOptions $popts, array &$options ): string {
+	public function transform( ParserOutput $po, ParserOptions $popts, array &$options ): ParserOutput {
 		$debugInfo = $this->debugInfo( $po );
-		return $text . $debugInfo;
+		$po->getContentHolder()->appendHtmlString( $debugInfo );
+		return $po;
 	}
 
 	private function debugInfo( ParserOutput $po ): string {
@@ -56,6 +59,10 @@ class RenderDebugInfo extends ContentTextTransformStage {
 				$limitReport .= "Cache expiry: {$limitReportData['cachereport-ttl']}\n";
 			}
 
+			if ( array_key_exists( 'cachereport-expiry-source', $limitReportData ) ) {
+				$limitReport .= "Cache expiry source: {$limitReportData['cachereport-expiry-source']}\n";
+			}
+
 			if ( array_key_exists( 'cachereport-transientcontent', $limitReportData ) ) {
 				$transient = $limitReportData['cachereport-transientcontent'] ? 'true' : 'false';
 				$limitReport .= "Reduced expiry: $transient\n";
@@ -69,6 +76,7 @@ class RenderDebugInfo extends ContentTextTransformStage {
 					'cachereport-origin',
 					'cachereport-timestamp',
 					'cachereport-ttl',
+					'cachereport-expiry-source',
 					'cachereport-transientcontent',
 					'limitreport-timingprofile',
 				] ) ) {
@@ -108,13 +116,20 @@ class RenderDebugInfo extends ContentTextTransformStage {
 			}
 		}
 
+		$renderId = $po->getRenderId();
+		if ( $renderId ) {
+			// Ensure render ID doesn't randomly contain `-->`
+			$renderId = htmlspecialchars( $renderId );
+			$text .= "\n<!-- Render ID " . $renderId . " -->\n";
+		}
+
 		if ( $po->getCacheMessage() ) {
 			$text .= "\n<!-- " . $po->getCacheMessage() . "\n -->\n";
 		}
 
 		$parsoidVersion = $po->getExtensionData( 'core:parsoid-version' );
 		if ( $parsoidVersion ) {
-			$text .= "\n<!--Parsoid $parsoidVersion-->\n";
+			$text .= "\n<!-- Parsoid $parsoidVersion -->\n";
 		}
 
 		return $text;

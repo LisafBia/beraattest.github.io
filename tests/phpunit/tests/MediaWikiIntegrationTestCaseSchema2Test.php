@@ -14,8 +14,6 @@ class MediaWikiIntegrationTestCaseSchema2Test extends MediaWikiIntegrationTestCa
 
 	protected function setUp(): void {
 		parent::setUp();
-		// FIXME: fails under postgres - T198222
-		$this->markTestSkippedIfDbType( 'postgres' );
 	}
 
 	public function testMediaWikiIntegrationTestCaseSchemaTestOrder() {
@@ -35,7 +33,7 @@ class MediaWikiIntegrationTestCaseSchema2Test extends MediaWikiIntegrationTestCa
 		$this->assertTrue( $this->db->tableExists( 'oldimage' ) );
 	}
 
-	public function testOverridenTableWasRestored() {
+	public function testOverriddenTableWasRestored() {
 		// Make sure imagelinks overwritten by MediaWikiIntegrationTestCaseSchema1Test
 		// was restored to the original schema before executing MediaWikiIntegrationTestCaseSchema2Test.
 		$this->assertTrue( $this->db->tableExists( 'imagelinks' ) );

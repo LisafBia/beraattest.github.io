@@ -2,28 +2,13 @@
 /**
  * Performs some operations specific to SQLite database backend.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
 use MediaWiki\Maintenance\Maintenance;
-use Wikimedia\AtEase\AtEase;
-use Wikimedia\Rdbms\DatabaseSqlite;
+use Wikimedia\Rdbms\DBConnRef;
 use Wikimedia\Rdbms\IMaintainableDatabase;
 
 // @codeCoverageIgnoreStart
@@ -62,8 +47,6 @@ class SqliteMaintenance extends Maintenance {
 
 			return;
 		}
-		/** @var DatabaseSqlite $dbw */
-		'@phan-var DatabaseSqlite $dbw';
 
 		if ( $this->hasOption( 'vacuum' ) ) {
 			$this->vacuum( $dbw );
@@ -78,8 +61,9 @@ class SqliteMaintenance extends Maintenance {
 		}
 	}
 
-	private function vacuum( DatabaseSqlite $dbw ) {
-		$prevSize = filesize( $dbw->getDbFilePath() );
+	private function vacuum( DBConnRef $dbw ) {
+		// Call non-standard DatabaseSqlite::getDbFilePath method
+		$prevSize = filesize( $dbw->__call( 'getDbFilePath', [] ) );
 		if ( $prevSize == 0 ) {
 			$this->fatalError( "Can't vacuum an empty database.\n" );
 		}
@@ -110,17 +94,16 @@ class SqliteMaintenance extends Maintenance {
 		}
 	}
 
-	private function backup( DatabaseSqlite $dbw, $fileName ) {
+	private function backup( DBConnRef $dbw, string $fileName ) {
 		$this->output( "Backing up database:\n   Locking..." );
 		$dbw->query( 'BEGIN IMMEDIATE TRANSACTION', __METHOD__ );
-		$ourFile = $dbw->getDbFilePath();
+		$ourFile = $dbw->__call( 'getDbFilePath', [] );
 		$this->output( "   Copying database file $ourFile to $fileName..." );
-		AtEase::suppressWarnings();
-		if ( !copy( $ourFile, $fileName ) ) {
+		// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+		if ( !@copy( $ourFile, $fileName ) ) {
 			$err = error_get_last();
 			$this->error( "      {$err['message']}" );
 		}
-		AtEase::restoreWarnings();
 		$this->output( "   Releasing lock...\n" );
 		$dbw->query( 'COMMIT TRANSACTION', __METHOD__ );
 	}

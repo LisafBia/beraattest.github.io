@@ -541,10 +541,10 @@ parsoid={ "modes": ["wt2html","wt2wt"] }
 !! wikitext
 {{NUMBEROFFILES}}
 !! html/php
-<p>8
+<p>10
 </p>
 !! html/parsoid+integrated
-<p><span about="#mwt1" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"NUMBEROFFILES","function":"numberoffiles"},"params":{},"i":0}}]}'>8</span></p>
+<p><span about="#mwt1" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"NUMBEROFFILES","function":"numberoffiles"},"params":{},"i":0}}]}'>10</span></p>
 !! end
 
 !! test
@@ -1144,9 +1144,9 @@ bar
 </p><p>bar
 </p>
 !! html/parsoid
-<p>foo
+<p>foo</p>
 <meta property="mw:PageProp/notoc" data-parsoid='{"src":"__notoc__","magicSrc":"__notoc__"}'/>
-bar</p>
+<p>bar</p>
 !! end
 
 # wt2wt,html2wt disabled because we always (unless selser) serialize
@@ -1164,9 +1164,9 @@ bar
 </p><p>bar
 </p>
 !! html/parsoid
-<p>foo
+<p>foo</p>
 <meta property="mw:PageProp/notoc" data-parsoid='{"src":"__NOtOC__","magicSrc":"__NOtOC__"}'/>
-bar</p>
+<p>bar</p>
 !! end
 
 !! test
@@ -1211,18 +1211,64 @@ __NOCONTENTCONVERT__
 !! end
 
 !! test
+NOGALLERY sets flag
+!! options
+showflags
+property=nogallery
+!! wikitext
+__NOGALLERY__
+!! metadata
+property[nogallery]=
+flags=mw-NoGallery
+!! html/parsoid
+<meta property="mw:PageProp/nogallery" data-parsoid='{"src":"__NOGALLERY__","magicSrc":"__NOGALLERY__"}'/>
+!! end
+
+!! test
+1. HIDDENCAT sets tracking category on category page
+!! options
+title=[[123]]
+cat
+property=hiddencat
+!! wikitext
+__HIDDENCAT__
+!! metadata
+property[hiddencat]=
+!! html/parsoid
+<meta property="mw:PageProp/hiddencat" data-parsoid='{"src":"__HIDDENCAT__","magicSrc":"__HIDDENCAT__"}'/>
+!! end
+
+!! test
+2. HIDDENCAT sets tracking category on category page
+!! options
+title=[[Category:123]]
+cat
+property=hiddencat
+!! wikitext
+__HIDDENCAT__
+!! metadata
+cat=Hidden_categories sort=
+property[hiddencat]=
+!! html/parsoid
+<meta property="mw:PageProp/hiddencat" data-parsoid='{"src":"__HIDDENCAT__","magicSrc":"__HIDDENCAT__"}'/>
+!! end
+
+!! test
 New section link / no new section link
 !! options
 showflags
+property=newsectionlink,nonewsectionlink
 parsoid={
 	"wrapSections": true
 }
 !! wikitext
 __NEWSECTIONLINK__ __NONEWSECTIONLINK__
 !! metadata
+property[newsectionlink]=
+property[nonewsectionlink]=
 flags=mw-HideNewSection, mw-NewSection
 !! html/parsoid
-<section data-mw-section-id="0"><meta property="mw:PageProp/newsectionlink" data-parsoid='{"src":"__NEWSECTIONLINK__","magicSrc":"__NEWSECTIONLINK__","dsr":[0,18,null,null]}'/> <meta property="mw:PageProp/nonewsectionlink" data-parsoid='{"src":"__NONEWSECTIONLINK__","magicSrc":"__NONEWSECTIONLINK__"}'/></section>
+<section data-mw-section-id="0"><meta property="mw:PageProp/newsectionlink" data-parsoid='{"src":"__NEWSECTIONLINK__","magicSrc":"__NEWSECTIONLINK__"}'/> <meta property="mw:PageProp/nonewsectionlink" data-parsoid='{"src":"__NONEWSECTIONLINK__","magicSrc":"__NONEWSECTIONLINK__"}'/></section>
 !! end
 
 !! article
@@ -1238,11 +1284,76 @@ showflags
 parsoid={
 	"wrapSections": true
 }
+property=newsectionlink
 !! wikitext
 {{NewSectionLink}}
 !! metadata
+property[newsectionlink]=
 flags=mw-NewSection
 !! html/parsoid
-<section data-mw-section-id="0"><meta property="mw:PageProp/newsectionlink" about="#mwt1" typeof="mw:Transclusion" data-parsoid='{"magicSrc":"__NEWSECTIONLINK__","pi":[[]]}' data-mw='{"parts":[{"template":{"target":{"wt":"NewSectionLink","href":"./Template:NewSectionLink"},"params":{},"i":0}}]}'/></section>
+<section data-mw-section-id="0"><span class="mw-empty-elt" about="#mwt1" typeof="mw:Transclusion" data-parsoid='{"pi":[[]]}' data-mw='{"parts":[{"template":{"target":{"wt":"NewSectionLink","href":"./Template:NewSectionLink"},"params":{},"i":0}}]}'><meta property="mw:PageProp/newsectionlink"/></span></section>
 !! end
 
+# html2wt disabled because it uses a different preferred localization
+!! test
+Japanese magic words with U+FF3F (T407289)
+!! options
+language=ja
+parsoid=wt2html,wt2wt,html2html
+property=notoc
+!! wikitext
+＿＿目次非表示＿＿
+!! metadata
+property[notoc]=
+!! html/parsoid
+<meta property="mw:PageProp/notoc"/>
+!! end
+
+!! test
+__NOINDEX__ sets appropriate properties
+!! options
+title=MediaWiki:NonContentPage
+property=index,noindex
+showflags
+showindexpolicy
+cat
+!! wikitext
+__INDEX__
+!! metadata/integrated
+cat=Indexed_pages sort=
+property[index]=
+flags=mw-IndexPolicy
+indexpolicy=index
+!! metadata/parsoid+standalone
+property[index]=
+flags=
+!! html/php
+!! html/parsoid+integrated
+<meta property="mw:PageProp/index"/>
+!! end
+
+!! test
+__NOINDEX__ overrides __INDEX__ (T10068, T16899)
+!! options
+title=MediaWiki:NonContentPage
+property=index,noindex
+showflags
+showindexpolicy
+cat
+!! wikitext
+__INDEX__ __NOINDEX__ __INDEX__
+!! metadata/integrated
+cat=Noindexed_pages sort=
+cat=Indexed_pages sort=
+property[index]=
+property[noindex]=
+flags=mw-IndexPolicy, mw-NoIndexPolicy
+indexpolicy=noindex
+!! metadata/parsoid+standalone
+property[index]=
+property[noindex]=
+flags=
+!! html/php
+!! html/parsoid+integrated
+<meta property="mw:PageProp/index"/> <meta property="mw:PageProp/noindex"/> <meta property="mw:PageProp/index"/>
+!! end

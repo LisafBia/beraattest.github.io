@@ -96,7 +96,7 @@ ApiSandboxLayout.prototype.makeWidgetFieldLayouts = function ( ppi, name ) {
 				).parse(),
 				mw.message( 'apisandbox-param-limit' ).parse()
 			];
-			helpLabel.addInfo( Util.parseHTML( tmp.join( mw.msg( 'word-separator' ) ) ) );
+			helpLabel.addInfo( Util.parseHTML( tmp.join( mw.message( 'word-separator' ).escaped() ) ) );
 			break;
 
 		case 'integer':
@@ -141,7 +141,7 @@ ApiSandboxLayout.prototype.makeWidgetFieldLayouts = function ( ppi, name ) {
 			);
 		}
 		if ( tmp.length ) {
-			helpLabel.addInfo( Util.parseHTML( tmp.join( mw.msg( 'word-separator' ) ) ) );
+			helpLabel.addInfo( Util.parseHTML( tmp.join( mw.message( 'word-separator' ).escaped() ) ) );
 		}
 	}
 	if ( 'maxbytes' in ppi ) {
@@ -435,7 +435,7 @@ ApiSandboxLayout.prototype.loadParamInfo = function () {
 			const items = [],
 				deprecatedItems = [],
 				buttons = [],
-				filterFmModules = ( v ) => v.slice( -2 ) !== 'fm' ||
+				filterFmModules = ( v ) => !v.endsWith( 'fm' ) ||
 					!Object.prototype.hasOwnProperty.call( ApiSandbox.availableFormats, v.slice( 0, -2 ) );
 
 			// This is something of a hack. We always want the 'format' and
@@ -478,8 +478,17 @@ ApiSandboxLayout.prototype.loadParamInfo = function () {
 
 			let $desc = Util.parseHTML( pi.description );
 			if ( pi.deprecated !== undefined ) {
-				$desc = $( '<span>' ).addClass( 'apihelp-deprecated' ).text( mw.msg( 'api-help-param-deprecated' ) )
-					.add( document.createTextNode( mw.msg( 'word-separator' ) ) ).add( $desc );
+				let $deprecationMessage =
+					$( '<div>' ).addClass( 'apihelp-deprecated' )
+						.text( mw.msg( 'api-help-param-deprecated' ) );
+				if ( pi.deprecationhelp ) {
+					$deprecationMessage = $deprecationMessage
+						.append( mw.message( 'word-separator' ).escaped() )
+						.append( Util.parseHTML( pi.deprecationhelp ) );
+				}
+				$desc = $deprecationMessage
+					.add( document.createTextNode( mw.msg( 'word-separator' ) ) )
+					.add( $desc );
 			}
 			if ( pi.internal !== undefined ) {
 				$desc = $( '<span>' ).addClass( 'apihelp-internal' ).text( mw.msg( 'api-help-param-internal' ) )
@@ -560,6 +569,17 @@ ApiSandboxLayout.prototype.loadParamInfo = function () {
 			}
 
 			this.$element.empty();
+
+			if ( this.apiModule === 'main' ) {
+				this.$element.append( new OO.ui.FieldLayout(
+					new OO.ui.Widget( {} ).toggle( false ),
+					{
+						align: 'top',
+						classes: [ 'mw-apisandbox-api-help-general' ],
+						label: new OO.ui.HtmlSnippet( require( './parsedMessages.json' )[ 'api-help-general' ] )
+					}
+				).$element );
+			}
 
 			this.itemsFieldset = new OO.ui.FieldsetLayout( {
 				label: this.displayText
@@ -661,7 +681,7 @@ ApiSandboxLayout.prototype.apiCheckValid = function () {
 		// eslint-disable-next-line no-jquery/no-map-util
 		const promises = $.map( this.widgets, ( widget ) => widget.apiCheckValid( ApiSandbox.suppressErrors ) );
 		$.when( ...promises ).then( ( ...results ) => {
-			this.apiIsValid = results.indexOf( false ) === -1;
+			this.apiIsValid = !results.includes( false );
 			if ( this.getOutlineItem() ) {
 				this.getOutlineItem().setIcon( this.apiIsValid || ApiSandbox.suppressErrors ? null : 'alert' );
 				this.getOutlineItem().setTitle(

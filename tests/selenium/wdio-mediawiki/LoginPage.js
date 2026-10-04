@@ -1,9 +1,7 @@
 // This file is used at Selenium/Explanation/Page object pattern
 // https://www.mediawiki.org/wiki/Selenium/Explanation/Page_object_pattern
 
-'use strict';
-
-const Page = require( './Page' );
+import Page from './Page.js';
 
 class LoginPage extends Page {
 	get username() {
@@ -19,7 +17,7 @@ class LoginPage extends Page {
 	}
 
 	get userPage() {
-		return $( '#pt-userpage' );
+		return $( '[id^="pt-userpage"]' );
 	}
 
 	async open() {
@@ -27,7 +25,7 @@ class LoginPage extends Page {
 	}
 
 	async getActualUsername() {
-		return browser.execute( () => mw.config.get( 'wgUserName' ) );
+		return this.userPage.getText();
 	}
 
 	async login( username, password ) {
@@ -49,8 +47,8 @@ class LoginPage extends Page {
 	}
 
 	async loginAdmin() {
-		await this.login( browser.config.mwUser, browser.config.mwPwd );
+		await this.login( browser.options.capabilities[ 'mw:user' ], browser.options.capabilities[ 'mw:pwd' ] );
 	}
 }
 
-module.exports = new LoginPage();
+export default new LoginPage();

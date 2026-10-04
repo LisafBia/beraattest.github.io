@@ -61,12 +61,18 @@ module.exports = function ( grunt ) {
 				disallowBlankTranslations: false
 			},
 			core: 'languages/i18n/',
+			botpasswords: 'languages/i18n/botpasswords/',
 			codex: 'languages/i18n/codex/',
+			datetime: 'languages/i18n/datetime/',
 			exif: 'languages/i18n/exif/',
+			nontranslatable: 'languages/i18n/nontranslatable/',
+			interwiki: 'languages/i18n/interwiki/',
 			preferences: 'languages/i18n/preferences/',
-			api: 'includes/api/i18n/',
+			userrights: 'languages/i18n/userrights/',
+			languageconverter: 'languages/i18n/languageconverter/',
+			api: 'includes/Api/i18n/',
 			rest: 'includes/Rest/i18n/',
-			installer: 'includes/installer/i18n/',
+			installer: 'includes/Installer/i18n/',
 			paramvalidator: 'includes/libs/ParamValidator/i18n/'
 		},
 		stylelint: {
@@ -97,6 +103,14 @@ module.exports = function ( grunt ) {
 						// Chrome requires --no-sandbox in Docker/CI.
 						// WMF CI images expose CHROMIUM_FLAGS which sets that.
 						flags: process.env.CHROMIUM_FLAGS ? ( process.env.CHROMIUM_FLAGS || '' ).split( ' ' ) : []
+					},
+					FirefoxCustom: {
+						base: 'FirefoxHeadless',
+						// Disable telemetry data submission. The startup phone-home is
+						// unnecessary in a test browser and shaves ~4% off QUnit runs.
+						prefs: {
+							'datareporting.policy.dataSubmissionEnabled': false
+						}
 					}
 				},
 				proxies: karmaProxy,
@@ -134,7 +148,7 @@ module.exports = function ( grunt ) {
 				browsers: [ 'FirefoxHeadless' ]
 			},
 			firefox: {
-				browsers: [ 'FirefoxHeadless' ]
+				browsers: [ 'FirefoxCustom' ]
 			},
 			chrome: {
 				browsers: [ 'ChromeCustom' ]
@@ -160,6 +174,26 @@ module.exports = function ( grunt ) {
 		return ok;
 	} );
 
+	// Runs the standalone browser coverage runner (headless Chrome + V8 coverage,
+	// remapped to source via ResourceLoader source maps). Separate from `qunit`
+	// because it requires Chrome and runs outside Karma. See
+	// tests/qunit/coverage-runner.js.
+	grunt.registerTask( 'qunit-coverage-run', function () {
+		const done = this.async();
+		const args = [ 'tests/qunit/coverage-runner.js' ];
+		if ( qunitComponent ) {
+			args.push( '--component=' + qunitComponent );
+		}
+		grunt.util.spawn( {
+			cmd: 'node',
+			args: args,
+			opts: { stdio: 'inherit' }
+		}, ( err, result, code ) => {
+			done( code === 0 );
+		} );
+	} );
+
 	grunt.registerTask( 'lint', [ 'eslint', 'banana', 'stylelint' ] );
 	grunt.registerTask( 'qunit', [ 'assert-mw-env', 'karma:firefox' ] );
+	grunt.registerTask( 'qunit-coverage', [ 'assert-mw-env', 'qunit-coverage-run' ] );
 };

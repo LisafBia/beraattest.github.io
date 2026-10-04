@@ -1,27 +1,13 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\Storage;
 
-use ExternalStoreAccess;
 use MediaWiki\Config\ServiceOptions;
+use MediaWiki\ExternalStore\ExternalStoreAccess;
 use MediaWiki\MainConfigNames;
 use Wikimedia\ObjectCache\WANObjectCache;
 use Wikimedia\Rdbms\ILBFactory;
@@ -36,26 +22,6 @@ use Wikimedia\Rdbms\ILBFactory;
 class BlobStoreFactory {
 
 	/**
-	 * @var ILBFactory
-	 */
-	private $lbFactory;
-
-	/**
-	 * @var ExternalStoreAccess
-	 */
-	private $extStoreAccess;
-
-	/**
-	 * @var WANObjectCache
-	 */
-	private $cache;
-
-	/**
-	 * @var ServiceOptions
-	 */
-	private $options;
-
-	/**
 	 * @internal For use by ServiceWiring
 	 */
 	public const CONSTRUCTOR_OPTIONS = [
@@ -66,17 +32,12 @@ class BlobStoreFactory {
 	];
 
 	public function __construct(
-		ILBFactory $lbFactory,
-		ExternalStoreAccess $extStoreAccess,
-		WANObjectCache $cache,
-		ServiceOptions $options
+		private readonly ILBFactory $lbFactory,
+		private readonly ExternalStoreAccess $extStoreAccess,
+		private readonly WANObjectCache $cache,
+		private readonly ServiceOptions $options,
 	) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
-
-		$this->lbFactory = $lbFactory;
-		$this->extStoreAccess = $extStoreAccess;
-		$this->cache = $cache;
-		$this->options = $options;
 	}
 
 	/**

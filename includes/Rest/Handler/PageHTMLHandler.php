@@ -2,7 +2,8 @@
 
 namespace MediaWiki\Rest\Handler;
 
-use LogicException;
+use MediaWiki\Parser\ParserOptions;
+use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\Handler\Helper\HtmlOutputHelper;
 use MediaWiki\Rest\Handler\Helper\HtmlOutputRendererHelper;
 use MediaWiki\Rest\Handler\Helper\PageContentHelper;
@@ -10,35 +11,37 @@ use MediaWiki\Rest\Handler\Helper\PageRedirectHelper;
 use MediaWiki\Rest\Handler\Helper\PageRestHelperFactory;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\Response;
+use MediaWiki\Rest\ResponseHeaders;
 use MediaWiki\Rest\SimpleHandler;
 use MediaWiki\Rest\StringStream;
 use Wikimedia\Assert\Assert;
+use Wikimedia\Message\MessageValue;
+use Wikimedia\ParamValidator\ParamValidator;
 
 /**
- * A handler that returns Parsoid HTML for the following routes:
- * - /page/{title}/html,
- * - /page/{title}/with_html
+ * A handler that returns Parsoid HTML for the following route:
+ * - /page/{title}/html
  *
- * @package MediaWiki\Rest\Handler
+ * (The /page/{title}/with_html route is served by PageHandler via prop=html.)
+ *
+ * @internal
  */
 class PageHTMLHandler extends SimpleHandler {
 
 	private HtmlOutputHelper $htmlHelper;
-	private PageContentHelper $contentHelper;
-	private PageRestHelperFactory $helperFactory;
+	private readonly PageContentHelper $contentHelper;
 
 	public function __construct(
-		PageRestHelperFactory $helperFactory
+		private readonly PageRestHelperFactory $helperFactory,
 	) {
 		$this->contentHelper = $helperFactory->newPageContentHelper();
-		$this->helperFactory = $helperFactory;
 	}
 
 	private function getRedirectHelper(): PageRedirectHelper {
 		return $this->helperFactory->newPageRedirectHelper(
 			$this->getResponseFactory(),
 			$this->getRouter(),
-			$this->getPath(),
+			$this->getRoutePath(),
 			$this->getRequest()
 		);
 	}
@@ -48,11 +51,14 @@ class PageHTMLHandler extends SimpleHandler {
 		$this->contentHelper->init( $authority, $this->getValidatedParams() );
 
 		$page = $this->contentHelper->getPageIdentity();
-		$isSystemMessage = $this->contentHelper->useDefaultSystemMessage();
+		$isShadowPage = $this->contentHelper->useShadowContent();
 
 		if ( $page ) {
-			if ( $isSystemMessage ) {
-				$this->htmlHelper = $this->helperFactory->newHtmlMessageOutputHelper( $page );
+			if ( $isShadowPage ) {
+				$this->htmlHelper = $this->helperFactory->newHtmlShadowOutputHelper(
+					$page,
+					ParserOptions::newFromAnon()
+				);
 			} else {
 				$revision = $this->contentHelper->getTargetRevision();
 				$this->htmlHelper = $this->helperFactory->newHtmlOutputRendererHelper(
@@ -81,7 +87,7 @@ class PageHTMLHandler extends SimpleHandler {
 		$followWikiRedirects = $this->contentHelper->getRedirectsAllowed();
 
 		// The call to $this->contentHelper->getPage() should not return null if
-		// $this->contentHelper->checkAccess() did not throw.
+		// $this->contentHelper->checkAccessPermission() did not throw.
 		Assert::invariant( $page !== null, 'Page should be known' );
 
 		$redirectHelper = $this->getRedirectHelper();
@@ -94,42 +100,26 @@ class PageHTMLHandler extends SimpleHandler {
 		);
 
 		if ( $redirectResponse !== null ) {
+			// XXX: Do we really want 60 second max-age for wiki redirects as well?
+			//      Shouldn't that use the same max-age as page content?
+			//      PageRedirectHelper already sets a longer max-age for normalization redirects.
+			$redirectResponse->setHeader( ResponseHeaders::CACHE_CONTROL, 'max-age=60' );
 			return $redirectResponse;
 		}
 
 		// We could have a missing page at this point, check and return 404 if that's the case
 		$this->contentHelper->checkHasContent();
 
-		$parserOutput = $this->htmlHelper->getHtml();
-		$parserOutputHtml = $parserOutput->getRawText();
+		$cacheExpiry = $this->htmlHelper->getHtml()->getCacheExpiry();
 
-		$outputMode = $this->getOutputMode();
-		switch ( $outputMode ) {
-			case 'html':
-				$response = $this->getResponseFactory()->create();
-				$this->contentHelper->setCacheControl( $response, $parserOutput->getCacheExpiry() );
-				$response->setBody( new StringStream( $parserOutputHtml ) );
-				break;
-			case 'with_html':
-				$body = $this->contentHelper->constructMetadata();
-				$body['html'] = $parserOutputHtml;
+		// This endpoint emits a full document from the page bundle
+		$parserOutputHtml = $this->htmlHelper->getPageBundle()->html;
 
-				$redirectTargetUrl = $redirectHelper->getWikiRedirectTargetUrl( $page );
+		$response = $this->getResponseFactory()->create();
+		$this->contentHelper->setCacheControl( $response, $cacheExpiry );
+		$response->setBody( new StringStream( $parserOutputHtml ) );
 
-				if ( $redirectTargetUrl ) {
-					$body['redirect_target'] = $redirectTargetUrl;
-				}
-
-				$response = $this->getResponseFactory()->createJson( $body );
-				$this->contentHelper->setCacheControl( $response, $parserOutput->getCacheExpiry() );
-				break;
-			default:
-				throw new LogicException( "Unknown HTML type $outputMode" );
-		}
-
-		$setContentLanguageHeader = ( $outputMode === 'html' );
-		$this->htmlHelper->putHeaders( $response, $setContentLanguageHeader );
-
+		$this->htmlHelper->putHeaders( $response );
 		return $response;
 	}
 
@@ -144,23 +134,15 @@ class PageHTMLHandler extends SimpleHandler {
 			return null;
 		}
 
-		// Vary eTag based on output mode
-		return $this->htmlHelper->getETag( $this->getOutputMode() );
+		return $this->htmlHelper->getETag();
 	}
 
-	/**
-	 * @return string|null
-	 */
 	protected function getLastModified(): ?string {
 		if ( !$this->contentHelper->isAccessible() || !$this->contentHelper->hasContent() ) {
 			return null;
 		}
 
 		return $this->htmlHelper->getLastModified();
-	}
-
-	private function getOutputMode(): string {
-		return $this->getConfig()['format'];
 	}
 
 	public function needsWriteAccess(): bool {
@@ -171,10 +153,22 @@ class PageHTMLHandler extends SimpleHandler {
 		return array_merge(
 			$this->contentHelper->getParamSettings(),
 			// Note that postValidation we might end up using
-			// a HtmlMessageOutputHelper, but the param settings
+			// a HtmlShadowOutputHelper, but the param settings
 			// for that are a subset of those for HtmlOutputRendererHelper
 			HtmlOutputRendererHelper::getParamSettings()
 		);
+	}
+
+	public function getHeaderParamSettings(): array {
+		return [
+			'Accept-Language' => [
+				self::PARAM_SOURCE => 'header',
+				ParamValidator::PARAM_TYPE => 'string',
+				ParamValidator::PARAM_REQUIRED => false,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-requestheader-desc-acceptlanguage' ),
+				Handler::PARAM_EXAMPLE => 'en',
+			],
+		];
 	}
 
 	protected function generateResponseSpec( string $method ): array {
@@ -184,15 +178,11 @@ class PageHTMLHandler extends SimpleHandler {
 		//    text/html; charset=utf-8; profile="https://www.mediawiki.org/wiki/Specs/HTML/2.8.0"
 		//  That would be more specific, but fragile when the profile version changes. It could
 		//  also be inaccurate if the page content was not in fact produced by Parsoid.
-		if ( $this->getOutputMode() == 'html' ) {
-			unset( $spec['200']['content']['application/json'] );
-			$spec['200']['content']['text/html']['schema']['type'] = 'string';
-		}
+		unset( $spec['200']['content']['application/json'] );
+		$spec['200']['content']['text/html']['schema']['type'] = 'string';
+		$spec['200']['content']['text/html']['example'] = '<h2 id="mwAA">Hello world</h2>';
 
 		return $spec;
 	}
 
-	public function getResponseBodySchemaFileName( string $method ): ?string {
-		return 'includes/Rest/Handler/Schema/ExistingPageHtml.json';
-	}
 }

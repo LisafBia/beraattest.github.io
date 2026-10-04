@@ -2,15 +2,14 @@
 
 namespace MediaWiki\Tests\Integration\HTMLForm\Field;
 
-use ChangeTags;
+use MediaWiki\ChangeTags\ChangeTags;
 use MediaWiki\HTMLForm\Field\HTMLTagFilter;
 use MediaWiki\HTMLForm\HTMLForm;
 use MediaWiki\Tests\Integration\HTMLForm\HTMLFormFieldTestCase;
 use Wikimedia\TestingAccessWrapper;
 
 /**
- * @group Database
- * @covers MediaWiki\HTMLForm\Field\HTMLTagFilter
+ * @covers \MediaWiki\HTMLForm\Field\HTMLTagFilter
  */
 class HTMLTagFilterTest extends HTMLFormFieldTestCase {
 	/** @inheritDoc */

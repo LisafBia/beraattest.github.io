@@ -137,7 +137,7 @@
 	"underline-always": "Даңгин",
 	"tog-showhiddencats": "Нуугдсн әңгллмүдиг үзүлх",
 	"tog-showrollbackconfirmation": "Буцах холвасиг дарх цагт батлх күслтиг күсх",
-	"tog-forcesafemode": "Асах [[mw:Manual:Safemode|аюл уга җурм]]",
+	"tog-forcesafemode": "Асах [[mw:Special:MyLanguage/Manual:Safemode|аюл уга җурм]]",
 	"prefs-help-forcesafemode": "Вики скрипт болн CSS күчн уга болһх.",
 	"prefs-editing": "Ясврлх",
 	"prefs-description-editing": "Та яһҗ ясвр кедгән, тедниг киндгән болн үздгән тохрултн.",
@@ -222,6 +222,7 @@
 	"search-thumbnail-extra-namespaces-label": "Өңгц зургиг Special:Desktop деер хәәх кесгт үзүлх",
 	"search-thumbnail-extra-namespaces-message": "{{#special:search}} халх деерк $1 {{PLURAL:$2|нернә орн-зә|нернә орн- зәс}} илрцүдин өңгц зургиг үзүлнә",
 	"prefs-advancedsearchoptions": "Нәрн көг",
+	"prefs-misc": "Бусд",
 	"prefs-reset-intro": "Та эн халхиг ашглн, эврә тохрлһан сайтын аңхна тохрлһур шилҗүлх болмҗта. Эн үүлдлиг буцах болмҗ уга.",
 	"prefs-reset-confirm": "Тиим, би эврә тохрлһан дәкн тохрулхар бәәнәв.",
 	"restoreprefs": "Бүк тохрлһан аңхна бәәдлднь орулх"

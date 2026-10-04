@@ -298,6 +298,98 @@ class ValidatorTest extends MediaWikiUnitTestCase {
 				'name' => 'test',
 			]
 		];
+
+		yield 'boolean parameter with default' => [
+			[
+				ParamValidator::PARAM_TYPE => 'boolean',
+				Validator::PARAM_SOURCE => 'query',
+				ParamValidator::PARAM_REQUIRED => false,
+				ParamValidator::PARAM_DEFAULT => true,
+			],
+			[
+				'schema' => [
+					'type' => 'boolean',
+					'default' => true,
+				],
+				'required' => false,
+				'description' => 'test parameter',
+				'in' => 'query',
+				'name' => 'test',
+			]
+		];
+
+		yield 'parameter with example' => [
+			[
+				ParamValidator::PARAM_TYPE => 'string',
+				Validator::PARAM_SOURCE => 'query',
+				Validator::PARAM_EXAMPLE => 'test-example',
+			],
+			[
+				'schema' => [
+					'type' => 'string',
+				],
+				'required' => false,
+				'description' => 'test parameter',
+				'in' => 'query',
+				'name' => 'test',
+				'example' => 'test-example',
+			],
+		];
+
+		yield 'tags parameter, multi-value' => [
+			[
+				ParamValidator::PARAM_TYPE => 'tags',
+				Validator::PARAM_SOURCE => 'query',
+				ParamValidator::PARAM_ISMULTI => true,
+			],
+			[
+				'schema' => [
+					'oneOf' => [
+						[ 'type' => 'string' ],
+						[ 'type' => 'array', 'items' => [ 'type' => 'string' ] ]
+					]
+				],
+				'required' => false,
+				'description' => 'test parameter',
+				'in' => 'query',
+				'name' => 'test',
+			]
+		];
+
+		yield 'tags parameter with PARAM_SCHEMA' => [
+			[
+				ParamValidator::PARAM_TYPE => 'tags',
+				Validator::PARAM_SOURCE => 'query',
+				ParamValidator::PARAM_ISMULTI => true, // should be ignored
+				ArrayDef::PARAM_SCHEMA => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ],
+			],
+			[
+				'schema' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ],
+				'required' => false,
+				'description' => 'test parameter',
+				'in' => 'query',
+				'name' => 'test',
+			]
+		];
+
+		// Should not happen, but we shouldn't let things explode either.
+		yield 'timestamp, missing source, with example' => [
+			[
+				ParamValidator::PARAM_TYPE => 'timestamp',
+				Validator::PARAM_EXAMPLE => '2023-01-01T00:00:00Z',
+			],
+			[
+				'schema' => [
+					'type' => 'string',
+					'format' => 'mw-timestamp',
+				],
+				'required' => false,
+				'description' => 'test parameter',
+				'in' => 'unspecified',
+				'name' => 'test',
+				'example' => '2023-01-01T00:00:00Z',
+			]
+		];
 	}
 
 	/**
@@ -308,6 +400,20 @@ class ValidatorTest extends MediaWikiUnitTestCase {
 	public function testParameterSpec( $paramSetting, $expectedSpec ) {
 		$spec = Validator::getParameterSpec( 'test', $paramSetting );
 		$this->assertArrayEquals( $expectedSpec, $spec, false, true );
+
+		// Ensure the example is NOT in the schema if it was lifted
+		if ( isset( $expectedSpec['example'] ) ) {
+			$this->assertArrayNotHasKey( 'example', $spec['schema'] );
+		}
+	}
+
+	public function testParameterSchema() {
+		$paramSetting = [
+			ParamValidator::PARAM_TYPE => 'string',
+			Validator::PARAM_EXAMPLE => 'test-example',
+		];
+		$schema = Validator::getParameterSchema( $paramSetting );
+		$this->assertSame( 'test-example', $schema['example'] );
 	}
 
 	/**
@@ -752,7 +858,7 @@ class ValidatorTest extends MediaWikiUnitTestCase {
 		}
 	}
 
-	public function provideGetValue() {
+	public static function provideGetValue() {
 		return [
 			// Test case 0: Parameter exists in source and no normalization required
 			[
@@ -809,6 +915,44 @@ class ValidatorTest extends MediaWikiUnitTestCase {
 				'options' => [],
 				'expected' => null,
 				'expectedException' => InvalidArgumentException::class
+			],
+
+			// Test case 7: Header params converts headerLists to string
+			[
+				'source' => 'header',
+				'requestData' => new RequestData( [ 'headers' => [ 'param1' => 'en' ] ] ),
+				'options' => [
+					'type' => 'string'
+				],
+				'expected' => 'en'
+			],
+
+			// Test case 8: Multiple header params values return comma separated string
+			[
+				'source' => 'header',
+				'requestData' => new RequestData( [ 'headers' =>
+					[ 'param1' =>
+						[ 'en, tg-latn;q=1', 'tg-latn' ]
+					]
+				] ),
+				'options' => [
+					'type' => 'string'
+				],
+				'expected' => 'en, tg-latn;q=1, tg-latn'
+			],
+
+			// Test case 9: Skip conversion to string if Handler expected type is array
+			[
+				'source' => 'header',
+				'requestData' => new RequestData( [ 'headers' =>
+					[ 'param1' =>
+						[ 'en, tg-latn;q=1', 'tg-latn' ]
+					]
+				] ),
+				'options' => [
+					'type' => 'array'
+				],
+				'expected' => [ 'en, tg-latn;q=1', 'tg-latn' ]
 			],
 		];
 	}

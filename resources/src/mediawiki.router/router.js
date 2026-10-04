@@ -71,7 +71,8 @@ class Router extends OO.Registry {
 		if ( this.enabled ) {
 			// event.originalEvent.newURL is undefined on Android 2.x
 			const routeEvent = $.Event( 'route', {
-				path: this.getPath()
+				path: this.getPath(),
+				oldPath: this.oldHash
 			} );
 			this.emit( 'route', routeEvent );
 
@@ -112,6 +113,7 @@ class Router extends OO.Registry {
 	 * ```
 	 * addRoute( 'alert', function () { alert( 'something' ); } );
 	 * addRoute( /hi-(.*)/, function ( name ) { alert( 'Hi ' + name ) } );
+	 * addRoute( /modal/, () => { showModal() }, () => { cleanupModal() } );
 	 * ```
 	 *
 	 * Note that after defining all available routes it is up to the caller
@@ -120,16 +122,27 @@ class Router extends OO.Registry {
 	 * @param {string|RegExp} path Path to match, string or regular expression
 	 * @param {Function} callback Callback to be run when hash changes to one
 	 *  that matches.
+	 * @param {Function} teardownCallback Callback to be run when hash changes
+	 *  from one that matches to one that doesn't.
 	 */
-	addRoute( path, callback ) {
+	addRoute( path, callback, teardownCallback ) {
 		const entry = {
 			path: typeof path === 'string' ?
-
 				new RegExp( '^' + path.replace( /[\\^$*+?.()|[\]{}]/g, '\\$&' ) + '$' ) :
 				path,
 			callback: callback
 		};
 		this.register( entry.path.toString(), entry );
+		if ( teardownCallback ) {
+			this.on( 'route', ( ev ) => {
+				if ( ev.oldPath.match( entry.path ) && !ev.path.match( entry.path ) ) {
+					teardownCallback( entry, ev );
+				}
+			} );
+		}
+		if ( ''.match( entry.path ) || '/'.match( entry.path ) ) {
+			mw.log.warn( 'router.addRoute called with a path that matches an empty route; provide a teardownCallback instead' );
+		}
 	}
 
 	/**
@@ -195,7 +208,7 @@ class Router extends OO.Registry {
 	 * @return {jQuery.Promise} Promise which resolves when the back navigation is complete
 	 */
 	back() {
-		// eslint-disable-next-line prefer-const
+
 		let timeoutID;
 		const deferred = $.Deferred();
 
@@ -205,17 +218,6 @@ class Router extends OO.Registry {
 		} );
 
 		window.history.back();
-
-		// If for some reason (old browser, bug in IE/windows 8.1, etc) popstate doesn't fire,
-		// resolve manually. Since we don't know for sure which browsers besides IE10/11 have
-		// this problem, it's better to fall back this way rather than singling out browsers
-		// and resolving the deferred request for them individually.
-		// See https://connect.microsoft.com/IE/feedback/details/793618/history-back-popstate-not-working-as-expected-in-webview-control
-		// Give browser a few ms to update its history.
-		timeoutID = setTimeout( () => {
-			this.off( 'popstate' );
-			deferred.resolve();
-		}, 50 );
 
 		return deferred.promise();
 	}
@@ -237,6 +239,23 @@ class Router extends OO.Registry {
 	 */
 	isSupported() {
 		return true;
+	}
+
+	/**
+	 * Allow tests to reset, so that event handlers don't leak and routes don't pile up.
+	 *
+	 * @ignore
+	 */
+	resetForTest() {
+		if ( window.QUnit ) {
+			// Reset OO.EventEmitter
+			this.bindings = {};
+			// Reset OO.Registry
+			this.registry = {};
+			// Restore the one from the constructor
+			this.enabled = true;
+			this.connect( this, { hashchange: 'onRouterHashChange' } );
+		}
 	}
 }
 

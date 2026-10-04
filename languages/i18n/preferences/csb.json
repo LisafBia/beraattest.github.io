@@ -1,6 +1,7 @@
 {
 	"@metadata": {
 		"authors": [
+			"Iketsi",
 			"Kaszeba",
 			"Kirsan",
 			"Warszk"
@@ -70,7 +71,7 @@
 	"underline-default": "Tak jak w domëslnym przezérnikù abò skórczi.",
 	"underline-never": "Nigdë",
 	"underline-always": "Wiedno",
-	"tog-showhiddencats": "Wëskrzëni zataconé kategòrëje",
+	"tog-showhiddencats": "Wëskrzëni zataconé kategòrie",
 	"prefs-editing": "Edicëjô",
 	"tog-editsectiononrightclick": "Włączë edicjã sekcji bez klëkniãcé prawą knąpą mëszë na titlu sekcje",
 	"tog-editondblclick": "Editëjë starnë przez dëbeltné klëkniãcé",
@@ -112,5 +113,6 @@
 	"tog-watchuploads": "Dodôj do ùzérównych wladowóné mòjé lopczi",
 	"tog-watchrollback": "Dodôj do ùzérównych starnë, w chtënych móm {{GENDER:|copinãtą}} edicëjã",
 	"prefs-searchoptions": "Szëkba",
+	"prefs-misc": "Jine",
 	"prefs-reset-intro": "Na ti starnie mòże doprowôdzëc nazôd domëslné nastôwë dlô ti starnë.\nNegò dzéjaniô ni mòżé pòzdze ju copnąc."
 }

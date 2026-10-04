@@ -9,7 +9,6 @@ namespace MediaWiki\Tests\HookContainer {
 	use MediaWiki\HookContainer\StaticHookRegistry;
 	use MediaWiki\Tests\Unit\DummyServicesTrait;
 	use MediaWikiUnitTestCase;
-	use stdClass;
 	use UnexpectedValueException;
 	use Wikimedia\ScopedCallback;
 	use Wikimedia\TestingAccessWrapper;
@@ -56,9 +55,7 @@ namespace MediaWiki\Tests\HookContainer {
 			// fake object factory
 			$objectFactory = $this->getDummyObjectFactory(
 				[
-					'SomeService' => static function () {
-						return new stdClass();
-					}
+					'SomeService' => static fn () => (object)[]
 				]
 			);
 
@@ -338,7 +335,6 @@ namespace MediaWiki\Tests\HookContainer {
 			$closure = static function ( &$count ) {
 				$count++;
 			};
-			$extra	= 10;
 			return [
 				// Callables
 				'Function' => [ 'fooGlobalFunction' ],
@@ -369,66 +365,6 @@ namespace MediaWiki\Tests\HookContainer {
 			$this->assertSame( $expectedCount, $count );
 		}
 
-		public static function provideRunDeprecatedStyle() {
-			$fooObj = new FooClass();
-			$closure = static function ( &$count ) {
-				$count++;
-			};
-			$extra	= 10;
-			return [
-				// Handlers with extra data attached
-				'static method with extra data' => [
-					[ 'MediaWiki\Tests\HookContainer\FooClass::fooStaticMethodWithExtra', $extra ],
-					11
-				],
-				'Object and method with extra data' => [ [ [ $fooObj, 'fooMethodWithExtra' ], $extra ], 11 ],
-				'Function extra data' => [ [ 'fooGlobalFunctionWithExtra', $extra ], 11 ],
-				'Closure with extra data' => [
-					[
-						static function ( int $inc, &$count ) {
-							$count += $inc;
-						},
-						10
-					],
-					11
-				],
-
-				// No-ops
-				'empty array' => [ [], 1 ],
-				'null' => [ null, 1 ],
-				'false' => [ false, 1 ],
-
-				// Strange edge cases
-				'Object in array without method' => [ [ $fooObj ] ],
-				'Callable in array' => [ [ [ $fooObj, 'fooMethod' ] ] ],
-				'Closure in array with no extra data' => [ [ $closure ] ],
-				'Function in array' => [ [ 'fooGlobalFunction' ] ],
-				'Function in array in array' => [ [ [ 'fooGlobalFunction' ] ] ],
-				'static method as array in array' => [
-					[ [ 'MediaWiki\Tests\HookContainer\FooClass', 'fooStaticMethod' ] ]
-				],
-				'Object and fully-qualified non-static method' => [
-					[ $fooObj, 'MediaWiki\Tests\HookContainer\FooClass::fooMethod' ]
-				]
-			];
-		}
-
-		/**
-		 * @covers \MediaWiki\HookContainer\HookContainer::run
-		 * @covers \MediaWiki\HookContainer\HookContainer::normalizeHandler
-		 * @dataProvider provideRunDeprecatedStyle
-		 */
-		public function testRunDeprecatedStyle( $handler, $expectedCount = 2 ) {
-			$hookContainer = $this->newHookContainer( [ 'Increment' => [ $handler ] ] );
-
-			$this->expectDeprecationAndContinue( '/Deprecated handler style/' );
-
-			$count = 1;
-			$hookValue = $hookContainer->run( 'Increment', [ &$count ] );
-			$this->assertTrue( $hookValue );
-			$this->assertSame( $expectedCount, $count );
-		}
-
 		/**
 		 * @covers \MediaWiki\HookContainer\HookContainer::run
 		 * @covers \MediaWiki\HookContainer\HookContainer::normalizeHandler
@@ -443,21 +379,6 @@ namespace MediaWiki\Tests\HookContainer {
 			$hookValue = $hookContainer->run( 'Increment', [ &$count ] );
 			$this->assertTrue( $hookValue );
 			$this->assertSame( $expectedCount, $count );
-		}
-
-		/**
-		 * @covers \MediaWiki\HookContainer\HookContainer::run
-		 * @covers \MediaWiki\HookContainer\HookContainer::normalizeHandler
-		 * @dataProvider provideRunDeprecatedStyle
-		 */
-		public function testRegisterDeprecatedStyle( $handler ) {
-			$hookContainer = $this->newHookContainer( [], [] );
-
-			// Force the handler list to be initialized, so register() will normalize the handler immediately.
-			$hookContainer->run( 'Increment' );
-
-			$this->expectDeprecationAndContinue( '/Deprecated handler style for hook/' );
-			$hookContainer->register( 'Increment', $handler );
 		}
 
 		/**
@@ -788,15 +709,11 @@ namespace MediaWiki\Tests\HookContainer {
 			// XXX: should also fail: non-function string, empty array
 			return [
 				'return a string' => [
-					static function () {
-						return 'string';
-					},
+					static fn () => 'string',
 					[]
 				],
 				'abort even though not abortable' => [
-					static function () {
-						return false;
-					},
+					static fn () => false,
 					[ 'abortable' => false ]
 				],
 				'callable referencing a class that extends an unknown class' => [
@@ -873,38 +790,38 @@ namespace MediaWiki\Tests\HookContainer {
 
 		public static function provideEmitDeprecationWarnings() {
 			yield 'Deprecated extension hook' => [
-				'$oldHooks' => [],
-				'$newHooks' => [ self::HANDLER_REGISTRATION ],
-				'$deprecationInfo' => [ 'deprecatedVersion' => '1.35' ],
-				'$expectWarning' => true,
+				'oldHooks' => [],
+				'newHooks' => [ self::HANDLER_REGISTRATION ],
+				'deprecationInfo' => [ 'deprecatedVersion' => '1.35' ],
+				'expectWarning' => true,
 			];
 
 			yield 'Deprecated extension hook, silent' => [
-				'$oldHooks' => [],
-				'$newHooks' => [ self::HANDLER_REGISTRATION ],
-				'$deprecationInfo' => [ 'deprecatedVersion' => '1.35', 'silent' => true ],
-				'$expectWarning' => false,
+				'oldHooks' => [],
+				'newHooks' => [ self::HANDLER_REGISTRATION ],
+				'deprecationInfo' => [ 'deprecatedVersion' => '1.35', 'silent' => true ],
+				'expectWarning' => false,
 			];
 
 			yield 'Deprecated extension hook, acknowledged' => [
-				'$oldHooks' => [],
-				'$newHooks' => [ self::HANDLER_REGISTRATION + [ 'deprecated' => true ] ],
-				'$deprecationInfo' => [ 'deprecatedVersion' => '1.35' ],
-				'$expectWarning' => false,
+				'oldHooks' => [],
+				'newHooks' => [ self::HANDLER_REGISTRATION + [ 'deprecated' => true ] ],
+				'deprecationInfo' => [ 'deprecatedVersion' => '1.35' ],
+				'expectWarning' => false,
 			];
 
 			yield 'Deprecated configured hook' => [
-				'$oldHooks' => [ self::HANDLER_FUNCTION ],
-				'$newHooks' => [],
-				'$deprecationInfo' => [ 'deprecatedVersion' => '1.35' ],
-				'$expectWarning' => false, // NOTE: Currently expected to be ignored. This may change.
+				'oldHooks' => [ self::HANDLER_FUNCTION ],
+				'newHooks' => [],
+				'deprecationInfo' => [ 'deprecatedVersion' => '1.35' ],
+				'expectWarning' => false, // NOTE: Currently expected to be ignored. This may change.
 			];
 
 			yield 'Deprecated configured hook, silent' => [
-				'$oldHooks' => [ self::HANDLER_FUNCTION ],
-				'$newHooks' => [],
-				'$deprecationInfo' => [ 'deprecatedVersion' => '1.35', 'silent' => true ],
-				'$expectWarning' => false,
+				'oldHooks' => [ self::HANDLER_FUNCTION ],
+				'newHooks' => [],
+				'deprecationInfo' => [ 'deprecatedVersion' => '1.35', 'silent' => true ],
+				'expectWarning' => false,
 			];
 		}
 
@@ -912,10 +829,10 @@ namespace MediaWiki\Tests\HookContainer {
 		 * @covers \MediaWiki\HookContainer\HookContainer::emitDeprecationWarnings
 		 * @dataProvider provideEmitDeprecationWarnings
 		 */
-		public function testEmitDeprecationWarnings( $oldHandlers, $newHandlers, $deprecationInfo, $expectWarning ) {
+		public function testEmitDeprecationWarnings( $oldHooks, $newHooks, $deprecationInfo, $expectWarning ) {
 			$hookContainer = $this->newHookContainer(
-				[ 'FooActionComplete' => $oldHandlers ],
-				[ 'FooActionComplete' => $newHandlers ],
+				[ 'FooActionComplete' => $oldHooks ],
+				[ 'FooActionComplete' => $newHooks ],
 				[ 'FooActionComplete' => $deprecationInfo ]
 			);
 
@@ -1080,7 +997,9 @@ namespace MediaWiki\Tests\HookContainer {
 		}
 	}
 
-	// Mock class for different types of handler functions
+	/**
+	 * Mock class for different types of handler functions
+	 */
 	class FooClass {
 
 		public function fooMethod( &$count ) {

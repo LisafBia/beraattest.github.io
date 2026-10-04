@@ -5,16 +5,18 @@ namespace MediaWiki\Tests\Rest\Handler;
 use GuzzleHttp\Psr7\Uri;
 use MediaWiki\ParamValidator\TypeDef\ArrayDef;
 use MediaWiki\Rest\ConditionalHeaderUtil;
+use MediaWiki\Rest\ErrorFormatterV1;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\HttpException;
+use MediaWiki\Rest\JsonLocalizer;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\Module\Module;
 use MediaWiki\Rest\RequestData;
 use MediaWiki\Rest\RequestInterface;
 use MediaWiki\Rest\Response;
 use MediaWiki\Rest\ResponseFactory;
+use MediaWiki\Rest\ResponseHeaders;
 use MediaWiki\Rest\ResponseInterface;
-use MediaWiki\Rest\Router;
 use MediaWiki\Rest\Validator\BodyValidator;
 use MediaWiki\Session\Session;
 use MediaWikiUnitTestCase;
@@ -24,6 +26,7 @@ use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\TestingAccessWrapper;
 use Wikimedia\Timestamp\ConvertibleTimestamp;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * @covers \MediaWiki\Rest\Handler
@@ -31,6 +34,13 @@ use Wikimedia\Timestamp\ConvertibleTimestamp;
 class HandlerTest extends MediaWikiUnitTestCase {
 
 	use HandlerTestTrait;
+
+	private JsonLocalizer $jsonLocalizer;
+
+	protected function setUp(): void {
+		parent::setUp();
+		$this->jsonLocalizer = new JsonLocalizer( $this->getDummyTextFormatter( true ) );
+	}
 
 	/**
 	 * @param string[] $methods
@@ -49,9 +59,6 @@ class HandlerTest extends MediaWikiUnitTestCase {
 	}
 
 	private function initHandlerPartially( Handler $handler ) {
-		$formatter = $this->getDummyTextFormatter( true );
-		$responseFactory = new ResponseFactory( [ 'qqx' => $formatter ] );
-
 		$router = $this->newRouter();
 		$module = $this->newModule( [ 'router' => $router ] );
 
@@ -60,59 +67,95 @@ class HandlerTest extends MediaWikiUnitTestCase {
 
 		$session = $this->getSession( true );
 		$handler->initContext( $module, 'test', [] );
-		$handler->initServices( $authority, $responseFactory, $hookContainer );
+		$handler->initServices( $authority, $hookContainer );
 		$handler->initSession( $session );
 
 		return $handler;
 	}
 
+	/**
+	 * Wire mock services into a handler for the OpenAPI-spec tests.
+	 *
+	 * Uses a dummy text formatter that dumps MessageValue objects, so translated
+	 * message keys in the resulting spec will contain HTML — a testing artifact,
+	 * not what users see at runtime.
+	 */
+	private function initHandlerServices( Handler $handler ): void {
+		$handler->initServices(
+			$this->mockAnonUltimateAuthority(),
+			$this->createHookContainer()
+		);
+	}
+
 	public function testGetRouter() {
 		$handler = $this->newHandler();
-		$this->initHandler( $handler, new RequestData() );
+		$router = $this->newRouter();
+		$this->initHandler( $handler, new RequestData(), [], [], null, null, $router );
 
 		$handler = TestingAccessWrapper::newFromObject( $handler );
-		$this->assertInstanceOf( Router::class, $handler->getRouter() );
+		$this->assertSame( $router, $handler->getRouter() );
 	}
 
 	public static function provideGetRouteUrl() {
 		yield 'empty' => [
 			'/test',
+			'',
 			[],
 			[],
 			'/test'
 		];
+		yield 'empty with module' => [
+			'/test',
+			'cattio/v1',
+			[],
+			[],
+			'/cattio/v1/test'
+		];
 		yield 'path params' => [
 			'/test/{foo}/{bar}',
+			'',
 			[ 'foo' => 'Kittens', 'bar' => 'mew' ],
 			[],
 			'/test/Kittens/mew'
 		];
+		yield 'path params with module' => [
+			'/test/{foo}/{bar}',
+			'cattio/v1',
+			[ 'foo' => 'Kittens', 'bar' => 'mew' ],
+			[],
+			'/cattio/v1/test/Kittens/mew'
+		];
 		yield 'missing path params' => [
 			'/test/{foo}/{bar}',
+			'',
 			[ 'bar' => 'mew' ],
 			[],
 			'/test/{foo}/mew'
 		];
 		yield 'path param encoding' => [
 			'/test/{foo}',
+			'',
 			[ 'foo' => 'ä/+/&/?/{}/#/%' ],
 			[],
 			'/test/%C3%A4%2F%2B%2F%26%2F%3F%2F%7B%7D%2F%23%2F%25'
 		];
 		yield 'recursive path params' => [
 			'/test/{foo}/{bar}',
+			'',
 			[ 'foo' => '{bar}', 'bar' => 'mew' ],
 			[],
 			'/test/%7Bbar%7D/mew'
 		];
 		yield 'query params' => [
 			'/test',
+			'',
 			[],
 			[ 'foo' => 'Kittens', 'bar' => 'mew' ],
 			'/test?foo=Kittens&bar=mew'
 		];
 		yield 'query param encoding' => [
 			'/test',
+			'',
 			[],
 			[ 'foo' => 'ä/+/&/?/{}/#/%' ],
 			'/test?foo=%C3%A4%2F%2B%2F%26%2F%3F%2F%7B%7D%2F%23%2F%25'
@@ -123,24 +166,88 @@ class HandlerTest extends MediaWikiUnitTestCase {
 	 * @dataProvider provideGetRouteUrl
 	 *
 	 * @param string $path
+	 * @param string $pathPrefix
 	 * @param string[] $pathParams
 	 * @param string[] $queryParams
 	 * @param string $expected
 	 */
-	public function testGetRouteUrl( $path, $pathParams, $queryParams, $expected ) {
-		$handler = $this->newHandler();
+	public function testGetRouteUrl( $path, $pathPrefix, $pathParams, $queryParams, $expected ) {
 		$request = new RequestData();
-		$this->initHandler( $handler, $request, [ 'path' => $path ] );
+		$router = $this->newRouter();
+		$module = $this->newModule( [ 'router' => $router, 'pathPrefix' => $pathPrefix ] );
+		$handler = $this->newHandler();
+		$this->initHandler( $handler, $request, [ 'path' => $path ], [], null, null, $module );
 		$handler = TestingAccessWrapper::newFromObject( $handler );
 		$url = $handler->getRouteUrl( $pathParams, $queryParams );
 		$this->assertStringEndsWith( $expected, $url );
 	}
 
 	public function testGetPath() {
+		$router = $this->newRouter();
+
 		$handler = $this->newHandler();
 		$request = new RequestData();
 		$this->initHandler( $handler, $request, [ 'path' => 'just/some/path' ] );
 		$this->assertSame( 'just/some/path', $handler->getPath() );
+
+		$request = new RequestData();
+		$handler = $this->newHandler();
+		$module = $this->newModule( [ 'router' => $router, 'pathPrefix' => '' ] );
+		$this->initHandler(
+			$handler,
+			$request,
+			[ 'path' => '/meow/v5/just/some/path' ],
+			[],
+			null,
+			null,
+			$module
+		);
+		$this->assertSame( '/meow/v5/just/some/path', $handler->getRoutePath() );
+
+		$handler = $this->newHandler();
+		$module = $this->newModule( [ 'router' => $router, 'pathPrefix' => 'meow/v6' ] );
+		$this->initHandler(
+			$handler,
+			 $request,
+			 [ 'path' => 'just/some/path' ],
+			 [],
+			 null,
+			 null,
+			 $module
+		);
+		$this->assertSame( 'just/some/path', $handler->getPath() );
+	}
+
+	public function testGetRoutePath() {
+		$router = $this->newRouter();
+
+		$request = new RequestData();
+		$handler = $this->newHandler();
+		$module = $this->newModule( [ 'router' => $router, 'pathPrefix' => '' ] );
+		$this->initHandler(
+			$handler,
+			$request,
+			[ 'path' => '/meow/v5/just/some/path' ],
+			[],
+			null,
+			null,
+			$module
+		);
+		$this->assertSame( '/meow/v5/just/some/path', $handler->getRoutePath() );
+
+		$request = new RequestData();
+		$handler = $this->newHandler();
+		$module = $this->newModule( [ 'router' => $router, 'pathPrefix' => 'meow/v6' ] );
+		$this->initHandler(
+			$handler,
+			$request,
+			[ 'path' => '/just/some/path' ],
+			[],
+			null,
+			null,
+			$module
+		);
+		$this->assertSame( '/meow/v6/just/some/path', $handler->getRoutePath() );
 	}
 
 	public function testSupportedPathparams() {
@@ -176,8 +283,16 @@ class HandlerTest extends MediaWikiUnitTestCase {
 	public function testCheckPreconditions( $status ) {
 		$request = new RequestData();
 
-		$util = $this->createNoOpMock( ConditionalHeaderUtil::class, [ 'checkPreconditions' ] );
+		$util = $this->createNoOpMock(
+			ConditionalHeaderUtil::class,
+			[ 'checkPreconditions', 'applyResponseHeaders', ]
+		);
 		$util->method( 'checkPreconditions' )->with( $request )->willReturn( $status );
+		$util->method( 'applyResponseHeaders' )->willReturnCallback(
+			static function ( ResponseInterface $response ) {
+				$response->setHeader( 'etag', '"the-etag"' );
+			}
+		);
 
 		$handler = $this->newHandler( [ 'getConditionalHeaderUtil' ] );
 		$handler->method( 'getConditionalHeaderUtil' )->willReturn( $util );
@@ -185,8 +300,28 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		$this->initHandler( $handler, $request );
 		$resp = $handler->checkPreconditions();
 
-		$responseStatus = $resp ? $resp->getStatusCode() : null;
-		$this->assertSame( $status, $responseStatus );
+		if ( $status ) {
+			$this->assertNotNull( $resp );
+			$responseStatus = $resp->getStatusCode();
+			$this->assertSame( $status, $responseStatus );
+
+			// T357603: Response must include the Etag as specified in
+			// https://datatracker.ietf.org/doc/html/rfc9110#name-304-not-modified
+			$this->assertSame( '"the-etag"', $resp->getHeaderLine( 'etag' ) );
+		} else {
+			$this->assertNull( $resp );
+		}
+	}
+
+	public function testApplyDeprecationHeader() {
+		$handler = $this->newHandler( [ 'getDeprecatedDate' ] );
+		$handler->method( 'getDeprecatedDate' )->willReturn( 1735689600 );
+
+		$this->initHandler( $handler, new RequestData() );
+		$response = $handler->getResponseFactory()->create();
+		$handler->applyDeprecationHeader( $response );
+
+		$this->assertSame( '@1735689600', $response->getHeaderLine( 'Deprecation' ) );
 	}
 
 	public function testApplyConditionalResponseHeaders() {
@@ -208,7 +343,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 	}
 
 	public static function provideValidate() {
-		yield 'empty' => [ [], [], new RequestData(), [], [] ];
+		yield 'empty' => [ [], [], [], new RequestData(), [], [] ];
 
 		yield 'query parameter' => [
 			[
@@ -218,6 +353,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 					Handler::PARAM_SOURCE => 'query',
 				]
 			],
+			[],
 			[],
 			new RequestData( [ 'queryParams' => [ 'foo' => 'kittens' ] ] ),
 			[ 'foo' => 'kittens' ],
@@ -233,23 +369,42 @@ class HandlerTest extends MediaWikiUnitTestCase {
 					Handler::PARAM_SOURCE => 'body',
 				]
 			],
+			[],
 			new RequestData( [ 'parsedBody' => [ 'foo' => 'kittens' ] ] ),
 			[],
 			[ 'foo' => 'kittens' ]
+		];
+
+		yield 'header parameter required' => [
+			[],
+			[],
+			[
+				'foo' => [
+					ParamValidator::PARAM_TYPE => 'string',
+					ParamValidator::PARAM_REQUIRED => true,
+					Handler::PARAM_SOURCE => 'header',
+				]
+			],
+			new RequestData( [ 'headers' => [ 'foo' => 'kittens' ] ] ),
+			[ 'foo' => 'kittens' ],
+			[]
 		];
 	}
 
 	/**
 	 * @dataProvider provideValidate
 	 */
-	public function testValidate( $paramSettings, $bodyParamSettings, $request, $expectedParams, $expectedBody ) {
-		$handler = $this->newHandler( [ 'getParamSettings', 'getBodyParamSettings' ] );
+	public function testValidate(
+		$paramSettings, $bodyParamSettings, $headerParamSettings, $request, $expectedParams, $expectedBody ) {
+		$handler = $this->newHandler( [ 'getParamSettings', 'getBodyParamSettings', 'getHeaderParamSettings' ] );
 		$handler->method( 'getParamSettings' )->willReturn( $paramSettings );
 		$handler->method( 'getBodyParamSettings' )->willReturn( $bodyParamSettings );
+		$handler->method( 'getHeaderParamSettings' )->willReturn( $headerParamSettings );
 
 		$this->initHandler( $handler, $request );
 		$this->validateHandler( $handler );
 
+		// Header params settings also go into $handler->getValidatedParams()
 		$this->assertSame( $expectedParams, $handler->getValidatedParams() );
 		$this->assertSame( $expectedBody, $handler->getValidatedBody() );
 	}
@@ -278,7 +433,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 	}
 
 	public static function provideValidate_invalid() {
-		yield 'missing required' => [
+		yield 'missing required query param' => [
 			[
 				'foo' => [
 					ParamValidator::PARAM_TYPE => 'string',
@@ -286,7 +441,24 @@ class HandlerTest extends MediaWikiUnitTestCase {
 					Handler::PARAM_SOURCE => 'query',
 				]
 			],
+			[],
 			[ 'queryParams' => [ 'bar' => 'kittens' ] ],
+			[
+				'error' => 'parameter-validation-failed',
+				'failureCode' => 'missingparam'
+			]
+		];
+
+		yield 'missing required header param' => [
+			[],
+			[
+				'foo' => [
+					ParamValidator::PARAM_TYPE => 'string',
+					ParamValidator::PARAM_REQUIRED => true,
+					Handler::PARAM_SOURCE => 'header',
+				]
+			],
+			[ 'headers' => [ 'bar' => 'kittens' ] ],
 			[
 				'error' => 'parameter-validation-failed',
 				'failureCode' => 'missingparam'
@@ -297,11 +469,12 @@ class HandlerTest extends MediaWikiUnitTestCase {
 	/**
 	 * @dataProvider provideValidate_invalid
 	 */
-	public function testValidate_invalid( $paramSettings, $requestData, $expectedError ) {
+	public function testValidate_invalid( $paramSettings, $headerParamSettings, $requestData, $expectedError ) {
 		$request = new RequestData( $requestData );
 
-		$handler = $this->newHandler( [ 'getParamSettings' ] );
+		$handler = $this->newHandler( [ 'getParamSettings', 'getHeaderParamSettings' ] );
 		$handler->method( 'getParamSettings' )->willReturn( $paramSettings );
+		$handler->method( 'getHeaderParamSettings' )->willReturn( $headerParamSettings );
 
 		try {
 			$this->initHandler( $handler, $request );
@@ -410,28 +583,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		$this->assertSame( $expected, $params );
 	}
 
-	public function testGetBodyParamSettings() {
-		$bodyParamSettings = [
-			'bodyfoo' => [
-				ParamValidator::PARAM_TYPE => 'string',
-				Handler::PARAM_SOURCE => 'body',
-			]
-		];
-		$handler = $this->newHandler( [ 'getBodyParamSettings' ] );
-		$handler->method( 'getBodyParamSettings' )->willReturn( $bodyParamSettings );
-
-		$bodyParams = $handler->getBodyParamSettings();
-
-		$expected = [
-			'bodyfoo' => $bodyParamSettings['bodyfoo']
-		];
-
-		$this->assertSame( $expected, $bodyParamSettings );
-	}
-
 	public function testOverrideGetBodyParamSettings() {
-		$paramSettings =
-
 		$handler = new class() extends Handler {
 
 			public function execute() {
@@ -499,8 +651,8 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		$this->assertSame( $expectedParams, $params );
 	}
 
-	public function provideValidateBodyParams_invalid() {
-		$paramDefintions = [
+	public static function provideValidateBodyParams_invalid() {
+		$paramDefinitions = [
 			'foo' => [
 				ParamValidator::PARAM_TYPE => 'timestamp',
 				ParamValidator::PARAM_REQUIRED => true,
@@ -509,13 +661,13 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		];
 
 		yield 'missing param' => [
-			$paramDefintions,
+			$paramDefinitions,
 			new RequestData( [ 'parsedBody' => [], ] ),
 			'missingparam'
 		];
 
 		yield 'extra param' => [
-			$paramDefintions,
+			$paramDefinitions,
 			new RequestData(
 				[
 					'parsedBody' => [
@@ -528,7 +680,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		];
 
 		yield 'bad param' => [
-			$paramDefintions,
+			$paramDefinitions,
 			new RequestData(
 				[
 					'parsedBody' => [
@@ -645,9 +797,19 @@ class HandlerTest extends MediaWikiUnitTestCase {
 	public function testGetConfig() {
 		$handler = $this->newHandler();
 		$config = [ 'foo' => 'bar' ];
-		$this->initHandler( $handler, new RequestData(), $config );
+		$this->initHandler( $handler, null, $config );
 
 		$this->assertSame( $config, $handler->getConfig() );
+	}
+
+	public function testGetHttpMethod() {
+		$handler = $this->newHandler();
+		$config = [ 'method' => 'POST' ];
+		$this->initHandler( $handler, null, $config );
+
+		// NOTE: We use lower case to be consistent with the OpenApi spec
+		// and module definion files.
+		$this->assertSame( 'post', $handler->getHttpMethod() );
 	}
 
 	public function testGetBodyValidator() {
@@ -765,7 +927,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 	public function testCsrfUnsafeSessionProviderRejection() {
 		$handler = $this->newHandler( [ 'requireSafeAgainstCsrf' ] );
 		$handler->method( 'requireSafeAgainstCsrf' )->willReturn( true );
-		$this->initHandler( $handler, new RequestData(), [], [], null, $this->getSession( false ) );
+		$this->initHandler( $handler, null, [], [], null, $this->getSession( false ) );
 
 		try {
 			$handler->checkSession();
@@ -795,7 +957,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		$handler->applyConditionalResponseHeaders( $response );
 		$this->assertSame( '"TEST"', $response->getHeaderLine( 'ETag' ) );
 
-		$lastModified = ConvertibleTimestamp::convert( TS_MW, $response->getHeaderLine( 'Last-Modified' ) );
+		$lastModified = ConvertibleTimestamp::convert( TS::MW, $response->getHeaderLine( 'Last-Modified' ) );
 		$this->assertSame( '20220101223344', $lastModified );
 	}
 
@@ -989,7 +1151,14 @@ class HandlerTest extends MediaWikiUnitTestCase {
 					'headers' => [ 'Content-Type' => 'multipart/form-data' ]
 				] ),
 				[ 'param' => "L\u{00E4}rm" ]
-			]
+			],
+			'form data with array' => [
+				new RequestData( [
+					'postParams' => [ 'foo' => [ 'a' => "L\u{0061}\u{0308}rm", 'b' => 'X' ] ],
+					'headers' => [ 'Content-Type' => 'application/x-www-form-urlencoded' ]
+				] ),
+				[ 'foo' => [ 'a' => "L\u{00E4}rm", 'b' => 'X' ] ]
+			],
 		];
 	}
 
@@ -1041,10 +1210,9 @@ class HandlerTest extends MediaWikiUnitTestCase {
 			'headers' => [ "content-type" => 'application/json' ]
 		] );
 		$handler = new EchoHandler();
-		$this->initHandlerPartially( $handler );
 
 		$this->expectExceptionCode( 400 );
-		$handler->initForExecute( $request );
+		$this->initHandler( $handler, $request );
 	}
 
 	public function testGetRequestIgnoresEmptyBody() {
@@ -1058,8 +1226,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 			]
 		] );
 		$handler = new EchoHandler();
-		$this->initHandlerPartially( $handler );
-		$handler->initForExecute( $request );
+		$this->initHandler( $handler, $request );
 		$this->addToAssertionCount( 1 );
 	}
 
@@ -1071,8 +1238,15 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		$handler = new EchoHandler();
 		$this->initHandlerPartially( $handler );
 
-		$this->expectExceptionCode( 411 );
-		$handler->initForExecute( $request );
+		$this->expectExceptionCode( 400 );
+
+		$textFormatters = [ 'qqx' => $this->getDummyTextFormatter() ];
+		$responseFactory = new ResponseFactory(
+			$textFormatters,
+			new ErrorFormatterV1( $textFormatters, false )
+		);
+
+		$handler->initForExecute( $request, $responseFactory );
 	}
 
 	public function testEmptyBodyWithoutContentTypePasses() {
@@ -1085,8 +1259,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		] );
 
 		$handler = new EchoHandler();
-		$this->initHandlerPartially( $handler );
-		$handler->initForExecute( $request );
+		$this->initHandler( $handler, $request );
 		$this->addToAssertionCount( 1 );
 	}
 
@@ -1097,10 +1270,9 @@ class HandlerTest extends MediaWikiUnitTestCase {
 			'bodyContents' => '{"foo":"bar"}', // Request body without content-type
 		] );
 		$handler = new EchoHandler();
-		$this->initHandlerPartially( $handler );
 
 		$this->expectExceptionCode( 415 );
-		$handler->initForExecute( $request );
+		$this->initHandler( $handler, $request );
 	}
 
 	public function testDeleteRequestWithoutBody() {
@@ -1110,8 +1282,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 			'method' => 'DELETE',
 		] );
 		$handler = new EchoHandler();
-		$this->initHandlerPartially( $handler );
-		$handler->initForExecute( $request );
+		$this->initHandler( $handler, $request );
 		$this->addToAssertionCount( 1 );
 	}
 
@@ -1124,8 +1295,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 			'headers' => [ "content-type" => 'application/json' ]
 		] );
 		$handler = new EchoHandler();
-		$this->initHandlerPartially( $handler );
-		$handler->initForExecute( $request );
+		$this->initHandler( $handler, $request );
 		$this->addToAssertionCount( 1 );
 	}
 
@@ -1137,10 +1307,9 @@ class HandlerTest extends MediaWikiUnitTestCase {
 			'headers' => [ "content-type" => 'text/plain' ] // Unsupported content type
 		] );
 		$handler = new EchoHandler();
-		$this->initHandlerPartially( $handler );
 
 		$this->expectExceptionCode( 415 );
-		$handler->initForExecute( $request );
+		$this->initHandler( $handler, $request );
 	}
 
 	public function testHandlerCanAccessParsedBodyForJsonRequest() {
@@ -1242,7 +1411,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		$this->validateHandler( $handler );
 
 		$this->assertArrayHasKey( 'test', $handler->getValidatedParams() );
-		$this->assertArrayNotHasKey( 'test', $handler->getValidatedBody() );
+		$this->assertArrayNotHasKey( 'test', $handler->getValidatedBodyArray() );
 	}
 
 	/**
@@ -1275,7 +1444,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		$this->initHandler( $handler, $request );
 		$this->validateHandler( $handler );
 
-		$this->assertArrayHasKey( 'test', $handler->getValidatedBody() );
+		$this->assertArrayHasKey( 'test', $handler->getValidatedBodyArray() );
 		$this->assertArrayNotHasKey( 'test', $handler->getValidatedParams() );
 	}
 
@@ -1296,25 +1465,27 @@ class HandlerTest extends MediaWikiUnitTestCase {
 
 	public static function provideGetOpenApiSpec() {
 		yield 'defaults' => [
-			'$paramSettings' => [],
-			'$bodySettings' => [],
-			'$requestTypes' => [ 'application/json' ],
-			'$responseBodySchema' => null,
-			'$routeConfig' => [ 'path' => '/test' ],
-			'$method' => 'GET',
-			'$assertions' =>
+			'paramSettings' => [],
+			'headerParamSettings' => [],
+			'bodySettings' => [],
+			'requestTypes' => [ 'application/json' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [],
+			'routeConfig' => [ 'path' => '/test' ],
+			'openApiSpec' => [],
+			'method' => 'GET',
+			'assertions' =>
 				static function ( array $spec ) {
 					self::assertWellFormedOAS( $spec, [ 'responses' ] );
 					$resp = $spec['responses'];
 
 					Assert::assertArrayHasKey( 200, $resp );
-					Assert::assertArrayHasKey( 400, $resp );
-					Assert::assertArrayHasKey( 500, $resp );
+					Assert::assertArrayHasKey( 'default', $resp );
 				},
 		];
 
 		yield 'path parameters' => [
-			'$paramSettings' => [
+			'paramSettings' => [
 				'a' => [
 					Handler::PARAM_SOURCE => 'path',
 					ParamValidator::PARAM_TYPE => 'integer',
@@ -1338,12 +1509,15 @@ class HandlerTest extends MediaWikiUnitTestCase {
 					Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-mock-desc' )
 				],
 			],
-			'$bodySettings' => [],
-			'$requestTypes' => [ 'application/json' ],
-			'$responseBodySchema' => null,
-			'$routeConfig' => [ 'path' => '/test/{a}/{b}/{d}' ],
-			'$method' => 'GET',
-			'$assertions' =>
+			'headerParamSettings' => [],
+			'bodySettings' => [],
+			'requestTypes' => [ 'application/json' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [],
+			'routeConfig' => [ 'path' => '/test/{a}/{b}/{d}' ],
+			'openApiSpec' => [],
+			'method' => 'GET',
+			'assertions' =>
 				static function ( array $spec ) {
 					self::assertWellFormedOAS( $spec, [ 'parameters' ] );
 					$params = self::makeMap( $spec['parameters'], 'name' );
@@ -1374,7 +1548,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		];
 
 		yield 'query parameters' => [
-			'$paramSettings' => [
+			'paramSettings' => [
 				'a' => [
 					Handler::PARAM_SOURCE => 'query',
 					ParamValidator::PARAM_TYPE => 'integer',
@@ -1393,12 +1567,15 @@ class HandlerTest extends MediaWikiUnitTestCase {
 					Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-mock-desc' )
 				],
 			],
-			'$bodySettings' => [],
-			'$requestTypes' => [ 'application/json' ],
-			'$responseBodySchema' => null,
-			'$routeConfig' => [ 'path' => '/test' ],
-			'$method' => 'GET',
-			'$assertions' =>
+			'headerParamSettings' => [],
+			'bodySettings' => [],
+			'requestTypes' => [ 'application/json' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [],
+			'routeConfig' => [ 'path' => '/test' ],
+			'openApiSpec' => [],
+			'method' => 'GET',
+			'assertions' =>
 				static function ( array $spec ) {
 					self::assertWellFormedOAS( $spec, [ 'parameters' ] );
 					$params = self::makeMap( $spec['parameters'], 'name' );
@@ -1424,9 +1601,64 @@ class HandlerTest extends MediaWikiUnitTestCase {
 				},
 		];
 
+		yield 'header parameters' => [
+			'paramSettings' => [],
+			'headerParamSettings' => [
+				'Accept-Language' => [
+					Handler::PARAM_SOURCE => 'header',
+					ParamValidator::PARAM_TYPE => 'string',
+					ParamValidator::PARAM_REQUIRED => true,
+				],
+				'Treat-as-Untrusted' => [
+					Handler::PARAM_SOURCE => 'header',
+					ParamValidator::PARAM_TYPE => 'boolean',
+					ParamValidator::PARAM_REQUIRED => false,
+					Handler::PARAM_DESCRIPTION => "param Treat-as-Untrusted"
+				],
+				'Accept' => [
+					Handler::PARAM_SOURCE => 'header',
+					ParamValidator::PARAM_TYPE => 'string',
+					ParamValidator::PARAM_REQUIRED => false,
+					Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-mock-desc' )
+				],
+			],
+			'bodySettings' => [],
+			'requestTypes' => [ 'application/json' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [],
+			'routeConfig' => [ 'path' => '/test/{a}/{b}/{d}' ],
+			'openApiSpec' => [],
+			'method' => 'GET',
+			'assertions' =>
+				static function ( array $spec ) {
+					self::assertWellFormedOAS( $spec, [ 'parameters' ] );
+					$params = self::makeMap( $spec['parameters'], 'name' );
+
+					Assert::assertArrayHasKey( 'Accept-Language', $params, 'required header param' );
+					Assert::assertArrayHasKey( 'Treat-as-Untrusted', $params, 'used optional header param' );
+
+					Assert::assertSame( 'header', $params['Accept-Language']['in'] );
+					Assert::assertSame( 'header', $params['Treat-as-Untrusted']['in'] );
+
+					Assert::assertTrue( $params['Accept-Language']['required'] );
+					Assert::assertFalse( $params['Treat-as-Untrusted']['required'] );
+
+					Assert::assertSame( 'Accept-Language parameter', $params['Accept-Language']['description'] );
+					Assert::assertSame( 'param Treat-as-Untrusted', $params['Treat-as-Untrusted']['description'] );
+					Assert::assertSame( '<message key="rest-param-desc-mock-desc"></message>',
+						$params['Accept']['description']
+					);
+
+					Assert::assertSame( 'string', $params['Accept-Language']['schema']['type'] );
+					Assert::assertSame( 'boolean', $params['Treat-as-Untrusted']['schema']['type'] );
+					Assert::assertSame( 'string', $params['Accept']['schema']['type'] );
+				},
+			];
+
 		yield 'request body' => [
-			'$paramSettings' => [],
-			'$bodySettings' => [
+			'paramSettings' => [],
+			'headerParamSettings' => [],
+			'bodySettings' => [
 				'a' => [
 					Handler::PARAM_SOURCE => 'body',
 					ParamValidator::PARAM_TYPE => 'array',
@@ -1450,11 +1682,13 @@ class HandlerTest extends MediaWikiUnitTestCase {
 					Handler::PARAM_SOURCE => 'post',
 				],
 			],
-			'$requestTypes' => [ 'application/foo+json', 'application/bar+json' ],
-			'$responseBodySchema' => null,
-			'$routeConfig' => [ 'path' => '/test' ],
-			'$method' => 'PUT',
-			'$assertions' =>
+			'requestTypes' => [ 'application/foo+json', 'application/bar+json' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [],
+			'routeConfig' => [ 'path' => '/test' ],
+			'openApiSpec' => [],
+			'method' => 'PUT',
+			'assertions' =>
 				static function ( array $spec ) {
 					self::assertWellFormedOAS( $spec, [ 'requestBody' ] );
 					Assert::assertTrue( $spec['requestBody']['required'] );
@@ -1497,8 +1731,9 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		];
 
 		yield 'form data' => [
-			'$paramSettings' => [],
-			'$bodySettings' => [
+			'paramSettings' => [],
+			'headerParamSettings' => [],
+			'bodySettings' => [
 				'a' => [
 					Handler::PARAM_SOURCE => 'body',
 				],
@@ -1506,11 +1741,13 @@ class HandlerTest extends MediaWikiUnitTestCase {
 					Handler::PARAM_SOURCE => 'post',
 				],
 			],
-			'$requestTypes' => [ 'application/x-www-form-urlencoded' ],
-			'$responseBodySchema' => null,
-			'$routeConfig' => [ 'path' => '/test' ],
-			'$method' => 'POST',
-			'$assertions' =>
+			'requestTypes' => [ 'application/x-www-form-urlencoded' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [],
+			'routeConfig' => [ 'path' => '/test' ],
+			'openApiSpec' => [],
+			'method' => 'POST',
+			'assertions' =>
 				static function ( array $spec ) {
 					self::assertWellFormedOAS( $spec, [ 'requestBody' ] );
 					Assert::assertTrue( $spec['requestBody']['required'] );
@@ -1532,19 +1769,22 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		];
 
 		yield 'no request body for GET' => [
-			'$paramSettings' => [],
-			'$bodySettings' => [
+			'paramSettings' => [],
+			'headerParamSettings' => [],
+			'bodySettings' => [
 				'a' => [
 					Handler::PARAM_SOURCE => 'body',
 					ParamValidator::PARAM_TYPE => 'integer',
 					ParamValidator::PARAM_REQUIRED => true,
 				],
 			],
-			'$requestTypes' => [ 'application/json' ],
-			'$responseBodySchema' => null,
-			'$routeConfig' => [ 'path' => '/test' ],
-			'$method' => 'GET',
-			'$assertions' =>
+			'requestTypes' => [ 'application/json' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [],
+			'routeConfig' => [ 'path' => '/test' ],
+			'openApiSpec' => [],
+			'method' => 'GET',
+			'assertions' =>
 				static function ( array $spec ) {
 					self::assertWellFormedOAS( $spec, [] );
 
@@ -1554,19 +1794,22 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		];
 
 		yield 'optional body for DELETE' => [
-			'$paramSettings' => [],
-			'$bodySettings' => [
+			'paramSettings' => [],
+			'headerParamSettings' => [],
+			'bodySettings' => [
 				'a' => [
 					Handler::PARAM_SOURCE => 'body',
 					ParamValidator::PARAM_TYPE => 'integer',
 					ParamValidator::PARAM_REQUIRED => false,
 				],
 			],
-			'$requestTypes' => [ 'application/json' ],
-			'$responseBodySchema' => null,
-			'$routeConfig' => [ 'path' => '/test' ],
-			'$method' => 'DELETE',
-			'$assertions' =>
+			'requestTypes' => [ 'application/json' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [],
+			'routeConfig' => [ 'path' => '/test' ],
+			'openApiSpec' => [],
+			'method' => 'DELETE',
+			'assertions' =>
 				static function ( array $spec ) {
 					self::assertWellFormedOAS( $spec, [ 'requestBody' ] );
 
@@ -1577,7 +1820,7 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		];
 
 		yield 'optional path params' => [
-			'$paramSettings' => [
+			'paramSettings' => [
 				'p' => [
 					Handler::PARAM_SOURCE => 'path',
 					ParamValidator::PARAM_REQUIRED => false,
@@ -1587,12 +1830,15 @@ class HandlerTest extends MediaWikiUnitTestCase {
 					ParamValidator::PARAM_REQUIRED => false,
 				],
 			],
-			'$bodySettings' => [],
-			'$requestTypes' => [ 'application/json' ],
-			'$responseBodySchema' => null,
-			'$routeConfig' => [ 'path' => '/test/{p}' ],
-			'$method' => 'GET',
-			'$assertions' =>
+			'headerParamSettings' => [],
+			'bodySettings' => [],
+			'requestTypes' => [ 'application/json' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [],
+			'routeConfig' => [ 'path' => '/test/{p}' ],
+			'openApiSpec' => [],
+			'method' => 'GET',
+			'assertions' =>
 				static function ( array $spec ) {
 					self::assertWellFormedOAS( $spec, [ 'parameters' ] );
 					$params = self::makeMap( $spec['parameters'], 'name' );
@@ -1617,72 +1863,243 @@ class HandlerTest extends MediaWikiUnitTestCase {
 		];
 
 		yield 'response body schema' => [
-			'$paramSettings' => [],
-			'$bodySettings' => [],
-			'$requestTypes' => [ 'application/json' ],
-			'$responseBodySchema' => [
+			'paramSettings' => [],
+			'headerParamSettings' => [],
+			'bodySettings' => [],
+			'requestTypes' => [ 'application/json' ],
+			'responseBodySchema' => [
 				'x-i18n-description' => 'rest-schema-desc-mock-desc',
 				'properties' => [
-					'foo' => [
+					'a' => [
 						'type' => 'string'
 					],
-					'bar' => [
+					'b' => [
 						'type' => 'string',
-						'description' => 'baz'
+						'description' => 'plaintext description'
 					],
-					'qux' => [
+					'c' => [
 						'type' => 'string',
 						'x-i18n-description' => 'rest-property-desc-mock-desc',
-					]
+					],
+					'd' => [
+						'type' => 'object',
+						'description' => "mock description",
+						'properties' => [
+							'example' => [
+								'type' => 'string',
+								'x-i18n-description' => 'rest-property-desc-mock-desc',
+							]
+						]
+					],
 				]
 			],
-			'$routeConfig' => [ 'path' => 'test' ],
-			'$method' => 'GET',
-			'$assertions' =>
+			'responseHeaderSettings' => [],
+			'routeConfig' => [ 'path' => 'test' ],
+			'openApiSpec' => [],
+			'method' => 'GET',
+			'assertions' =>
 				static function ( array $spec ) {
 					self::assertWellFormedOAS( $spec, [ 'responses' ] );
 
 					$schema = $spec['responses'][200]['content']['application/json']['schema'];
+					// Body
 					Assert::assertArrayHasKey( 'description', $schema );
 					Assert::assertSame(
 						'<message key="rest-schema-desc-mock-desc"></message>',
 						$schema['description']
 					);
-
+					// First level properties
 					$props = $schema['properties'];
-					Assert::assertArrayNotHasKey( 'description', $props['foo'] );
-					Assert::assertArrayHasKey( 'description', $props['bar'] );
-					Assert::assertSame( 'baz', $props['bar']['description'] );
-					Assert::assertArrayHasKey( 'description', $props['qux'] );
+					Assert::assertArrayNotHasKey( 'description', $props['a'] );
+					Assert::assertArrayHasKey( 'description', $props['b'] );
+					Assert::assertSame( 'plaintext description', $props['b']['description'] );
+					Assert::assertArrayHasKey( 'description', $props['c'] );
 					Assert::assertSame(
 						'<message key="rest-property-desc-mock-desc"></message>',
-						$schema['properties']['qux']['description']
+						$schema['properties']['c']['description']
 					);
+					// Nested properties
+					Assert::assertArrayHasKey( 'description', $props['d']['properties']['example'] );
+					Assert::assertSame(
+						'<message key="rest-property-desc-mock-desc"></message>',
+						$props['d']['properties']['example']['description'] );
+				},
+		];
+
+		yield 'response headers' => [
+			'paramSettings' => [],
+			'headerParamSettings' => [],
+			'bodySettings' => [],
+			'requestTypes' => [ 'application/json' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [
+				ResponseHeaders::CACHE_CONTROL => [
+					'schema' => [
+						ParamValidator::PARAM_TYPE => 'string'
+					],
+					'messageKey' => 'rest-responseheader-desc-contenttype'
+				]
+			],
+			'routeConfig' => [ 'path' => 'test' ],
+			'openApiSpec' => [],
+			'method' => 'GET',
+			'assertions' =>
+				static function ( array $spec ) {
+					self::assertWellFormedOAS( $spec, [ 'responses' ] );
+
+					$headers = $spec['responses'][200]['headers'];
+					// First level properties
+					Assert::assertArrayHasKey( ResponseHeaders::CACHE_CONTROL, $headers );
+				},
+		];
+
+		yield 'OAS PARAM_EXAMPLE' => [
+			'paramSettings' => [
+				// Test standard string example
+				'p' => [
+					Handler::PARAM_SOURCE => 'path',
+					Handler::PARAM_EXAMPLE => 'Earth',
+				],
+				// Ensure PHP integer serializes to JSON integer (not string)
+				'q' => [
+					Handler::PARAM_SOURCE => 'query',
+					Handler::PARAM_EXAMPLE => 12345,
+				],
+				// Ensure the 'example' field is omitted when no example is provided
+				'r' => [
+					Handler::PARAM_SOURCE => 'query',
+				],
+				// Ensure PHP boolean serializes to JSON boolean (not string, not dropped)
+				's' => [
+					Handler::PARAM_SOURCE => 'query',
+					Handler::PARAM_EXAMPLE => false,
+				],
+				// Ensure PHP null serializes to JSON null (not dropped)
+				't' => [
+					Handler::PARAM_SOURCE => 'query',
+					Handler::PARAM_EXAMPLE => null,
+				],
+				// Ensure defensive fallback that converts MessageValue objects to strings
+				'u' => [
+					Handler::PARAM_SOURCE => 'query',
+					Handler::PARAM_EXAMPLE => new MessageValue( 'rest-param-desc-mock-desc' ),
+				],
+			],
+			'headerParamSettings' => [
+				// Test header parameter example
+				'h1' => [
+					Handler::PARAM_SOURCE => 'header',
+					Handler::PARAM_EXAMPLE => 'es, en-US',
+				],
+				// Ensure defensive fallback that converts MessageValue objects to strings
+				'h2' => [
+					Handler::PARAM_SOURCE => 'header',
+					Handler::PARAM_EXAMPLE => new MessageValue( 'rest-param-desc-mock-desc' ),
+				],
+			],
+			'bodySettings' => [
+				// Ensure that when request body property has a PHP array, PHP array serializes to JSON array
+				'b1' => [
+					Handler::PARAM_SOURCE => 'body',
+					Handler::PARAM_EXAMPLE => [ 'History' ],
+				],
+				// Ensure example merges cleanly into ArrayDef overrides
+				'b2' => [
+					Handler::PARAM_SOURCE => 'body',
+					ArrayDef::PARAM_SCHEMA => [
+						'type' => 'object',
+						'required' => [ 'x' ]
+					],
+					Handler::PARAM_EXAMPLE => [ 'x' => 'test' ],
+				],
+				// Ensure defensive fallback that converts MessageValue objects to strings
+				'b3' => [
+					Handler::PARAM_SOURCE => 'body',
+					Handler::PARAM_EXAMPLE => new MessageValue( 'rest-param-desc-mock-desc' ),
+				],
+			],
+			'requestTypes' => [ 'application/json' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [],
+			'routeConfig' => [
+				'path' => 'test/{p}',
+			],
+			'openApiSpec' => [],
+			'method' => 'POST',
+			'assertions' =>
+				static function ( array $spec ) {
+					self::assertWellFormedOAS( $spec, [ 'parameters', 'requestBody' ] );
+
+					$params = self::makeMap( $spec['parameters'], 'name' );
+
+					// Path / Query / Header parameters should have the example lifted out of the schema
+					Assert::assertArrayHasKey( 'p', $params );
+					Assert::assertSame( 'Earth', $params['p']['example'] );
+					Assert::assertArrayNotHasKey( 'example', $params['p']['schema'] );
+
+					Assert::assertArrayHasKey( 'q', $params );
+					Assert::assertSame( 12345, $params['q']['example'] );
+
+					// Negative emission check: r has no example
+					Assert::assertArrayHasKey( 'r', $params );
+					Assert::assertArrayNotHasKey( 'example', $params['r'] );
+					Assert::assertArrayNotHasKey( 'example', $params['r']['schema'] );
+
+					// Boolean
+					Assert::assertArrayHasKey( 's', $params );
+					Assert::assertFalse( $params['s']['example'] );
+
+					// Null
+					Assert::assertArrayHasKey( 't', $params );
+					Assert::assertNull( $params['t']['example'] );
+
+					// MessageValue fallback to string
+					Assert::assertArrayHasKey( 'u', $params );
+					Assert::assertSame( '<message key="rest-param-desc-mock-desc"></message>', $params['u']['example'] );
+
+					Assert::assertArrayHasKey( 'h1', $params );
+					Assert::assertSame( 'es, en-US', $params['h1']['example'] );
+					Assert::assertArrayNotHasKey( 'example', $params['h1']['schema'] );
+
+					Assert::assertArrayHasKey( 'h2', $params );
+					Assert::assertSame( '<message key="rest-param-desc-mock-desc"></message>', $params['h2']['example'] );
+					Assert::assertArrayNotHasKey( 'example', $params['h2']['schema'] );
+
+					// Body parameters should have the example inside the schema properties
+					$bodySchema = $spec['requestBody']['content']['application/json']['schema'];
+					Assert::assertSame( [ 'History' ], $bodySchema['properties']['b1']['example'] );
+
+					// ArrayDef::PARAM_SCHEMA merging
+					Assert::assertSame( [ 'x' => 'test' ], $bodySchema['properties']['b2']['example'] );
+
+					Assert::assertSame( '<message key="rest-param-desc-mock-desc"></message>', $bodySchema['properties']['b3']['example'] );
 				},
 		];
 
 		yield 'OAS info' => [
-			'$paramSettings' => [
+			'paramSettings' => [
 				'p' => [
 					Handler::PARAM_SOURCE => 'path',
 				],
 			],
-			'$bodySettings' => [],
-			'$requestTypes' => [ 'application/json' ],
-			'$responseBodySchema' => null,
-			'$routeConfig' => [
+			'headerParamSettings' => [],
+			'bodySettings' => [],
+			'requestTypes' => [ 'application/json' ],
+			'responseBodySchema' => null,
+			'responseHeaderSettings' => [],
+			'routeConfig' => [
 				'path' => 'test/{p}',
-				'OAS' => [
-					'title' => 'just a test',
-					'parameters' => 'will be ignored',
-				]
 			],
-			'$method' => 'GET',
-			'$assertions' =>
+			'openApiSpec' => [
+				'summary' => 'just a test',
+				'parameters' => 'will be ignored',
+			],
+			'method' => 'GET',
+			'assertions' =>
 				static function ( array $spec ) {
-					self::assertWellFormedOAS( $spec, [ 'title', 'parameters' ] );
-					Assert::assertArrayHasKey( 'title', $spec );
-					Assert::assertSame( 'just a test', $spec['title'] );
+					self::assertWellFormedOAS( $spec, [ 'summary', 'parameters' ] );
+					Assert::assertArrayHasKey( 'summary', $spec );
+					Assert::assertSame( 'just a test', $spec['summary'] );
 
 					$params = self::makeMap( $spec['parameters'], 'name' );
 					Assert::assertArrayHasKey( 'p', $params );
@@ -1695,45 +2112,388 @@ class HandlerTest extends MediaWikiUnitTestCase {
 	 */
 	public function testGetOpenApiSpec(
 		$paramSettings,
+		$headerParamSettings,
 		$bodySettings,
 		$requestTypes,
 		$responseBodySchema,
+		$responseHeaderSettings,
 		$routeConfig,
+		$openApiSpec,
 		$method,
 		$assertions
 	) {
 		$handler = $this->newHandler( [
 				'getParamSettings',
+				'getHeaderParamSettings',
 				'getBodyParamSettings',
 				'getSupportedRequestTypes',
-				'getResponseBodySchema'
+				'getResponseBodySchema',
+				'getResponseHeaderSettings'
 		] );
 		$handler->method( 'getParamSettings' )->willReturn( $paramSettings );
+		$handler->method( 'getHeaderParamSettings' )->willReturn( $headerParamSettings );
 		$handler->method( 'getBodyParamSettings' )->willReturn( $bodySettings );
 		$handler->method( 'getSupportedRequestTypes' )->willReturn( $requestTypes );
 		$handler->method( 'getResponseBodySchema' )->willReturn( $responseBodySchema );
+		$handler->method( 'getResponseHeaderSettings' )->willReturn( $responseHeaderSettings );
 
 		// The "body" parameter should be processed as "body", not as "parameter".
-		$module = $this->createNoOpMock( Module::class );
+		$module = $this->newModuleForSpec();
 		$handler->initContext(
 			$module,
 			$routeConfig['path'],
-			$routeConfig
+			$routeConfig,
+			$openApiSpec
 		);
 
-		// Because the dummy text formatter uses MessageValue::dump(), translated message keys
-		// will contain html. This html is a testing artifact and not representative of the spec
-		// presented to users at runtime.
-		$formatter = $this->getDummyTextFormatter( true );
-
-		$responseFactory = new ResponseFactory( [ 'qqx' => $formatter ] );
-		$authority = $this->mockAnonUltimateAuthority();
-		$hookContainer = $this->createHookContainer();
-		$handler->initServices( $authority, $responseFactory, $hookContainer );
+		$this->initHandlerServices( $handler );
 
 		$spec = $handler->getOpenApiSpec( $method );
 
 		$assertions( $spec );
+	}
+
+	public function testGetOpenApiSpecIncludesBodyExample() {
+		$expectedExample = [ 'title' => 'Example Page', 'id' => 1 ];
+
+		$handler = $this->newHandler( [
+			'getParamSettings',
+			'getHeaderParamSettings',
+			'getBodyParamSettings',
+			'getSupportedRequestTypes',
+			'getResponseBodySchema',
+			'getResponseBodyExample',
+			'getResponseHeaderSettings'
+		] );
+		$handler->method( 'getParamSettings' )->willReturn( [] );
+		$handler->method( 'getHeaderParamSettings' )->willReturn( [] );
+		$handler->method( 'getBodyParamSettings' )->willReturn( [] );
+		$handler->method( 'getSupportedRequestTypes' )->willReturn( [ 'application/json' ] );
+		$handler->method( 'getResponseBodySchema' )->willReturn( null );
+		$handler->method( 'getResponseBodyExample' )->willReturn( $expectedExample );
+		$handler->method( 'getResponseHeaderSettings' )->willReturn( [] );
+
+		$module = $this->newModuleForSpec();
+		$handler->initContext( $module, '/test', [ 'path' => '/test' ], [] );
+
+		$this->initHandlerServices( $handler );
+
+		$spec = $handler->getOpenApiSpec( 'GET' );
+
+		$this->assertSame(
+			$expectedExample,
+			$spec['responses'][200]['content']['application/json']['example']
+		);
+	}
+
+	public function testGetOpenApiSpecRequestBodyDescriptionPresent(): void {
+		$handler = $this->newHandler( [
+			'getParamSettings',
+			'getHeaderParamSettings',
+			'getBodyParamSettings',
+			'getSupportedRequestTypes',
+			'getResponseBodySchema',
+			'getResponseHeaderSettings',
+			'getRequestBodyDescription',
+		] );
+		$handler->method( 'getParamSettings' )->willReturn( [] );
+		$handler->method( 'getHeaderParamSettings' )->willReturn( [] );
+		$handler->method( 'getBodyParamSettings' )->willReturn( [
+			'content' => [
+				Handler::PARAM_SOURCE => 'body',
+			],
+		] );
+		$handler->method( 'getSupportedRequestTypes' )->willReturn( [ 'application/json' ] );
+		$handler->method( 'getResponseBodySchema' )->willReturn( null );
+		$handler->method( 'getResponseHeaderSettings' )->willReturn( [] );
+		$handler->method( 'getRequestBodyDescription' )->willReturn( 'The page content to create or update.' );
+
+		$module = $this->newModuleForSpec();
+		$handler->initContext( $module, '/test', [ 'path' => '/test' ], [] );
+
+		$this->initHandlerServices( $handler );
+
+		$spec = $handler->getOpenApiSpec( 'PUT' );
+
+		$this->assertArrayHasKey( 'requestBody', $spec );
+		$this->assertSame(
+			'The page content to create or update.',
+			$spec['requestBody']['description']
+		);
+	}
+
+	public function testGetOpenApiSpecRequestBodyDescriptionAbsentByDefault(): void {
+		$handler = $this->newHandler( [
+			'getParamSettings',
+			'getHeaderParamSettings',
+			'getBodyParamSettings',
+			'getSupportedRequestTypes',
+			'getResponseBodySchema',
+			'getResponseHeaderSettings',
+		] );
+		$handler->method( 'getParamSettings' )->willReturn( [] );
+		$handler->method( 'getHeaderParamSettings' )->willReturn( [] );
+		$handler->method( 'getBodyParamSettings' )->willReturn( [
+			'content' => [
+				Handler::PARAM_SOURCE => 'body',
+			],
+		] );
+		$handler->method( 'getSupportedRequestTypes' )->willReturn( [ 'application/json' ] );
+		$handler->method( 'getResponseBodySchema' )->willReturn( null );
+		$handler->method( 'getResponseHeaderSettings' )->willReturn( [] );
+
+		$module = $this->newModuleForSpec();
+		$handler->initContext( $module, '/test', [ 'path' => '/test' ], [] );
+
+		$this->initHandlerServices( $handler );
+
+		$spec = $handler->getOpenApiSpec( 'PUT' );
+
+		$this->assertArrayHasKey( 'requestBody', $spec );
+		$this->assertArrayNotHasKey( 'description', $spec['requestBody'] );
+	}
+
+	public function testGetOpenApiSpecRequestBodySchemaLocalized(): void {
+		$handler = $this->newHandler( [
+			'getParamSettings',
+			'getHeaderParamSettings',
+			'getBodyParamSettings',
+			'getSupportedRequestTypes',
+			'getRequestBodySchema',
+			'getResponseBodySchema',
+			'getResponseHeaderSettings',
+		] );
+		$handler->method( 'getParamSettings' )->willReturn( [] );
+		$handler->method( 'getHeaderParamSettings' )->willReturn( [] );
+		$handler->method( 'getBodyParamSettings' )->willReturn( [] );
+		$handler->method( 'getSupportedRequestTypes' )->willReturn( [ 'application/json' ] );
+		$handler->method( 'getRequestBodySchema' )->willReturn( [
+			'type' => 'object',
+			'properties' => [
+				'plain' => [
+					'type' => 'string',
+				],
+				'localized' => [
+					'type' => 'string',
+					'x-i18n-description' => 'rest-property-desc-mock-desc',
+				],
+				'nested' => [
+					'type' => 'object',
+					'properties' => [
+						'inner' => [
+							'type' => 'string',
+							'x-i18n-description' => 'rest-property-desc-mock-desc',
+						],
+					],
+				],
+			],
+		] );
+		$handler->method( 'getResponseBodySchema' )->willReturn( null );
+		$handler->method( 'getResponseHeaderSettings' )->willReturn( [] );
+
+		$module = $this->newModuleForSpec();
+		$handler->initContext( $module, '/test', [ 'path' => '/test' ], [] );
+
+		$this->initHandlerServices( $handler );
+
+		$spec = $handler->getOpenApiSpec( 'POST' );
+
+		$schema = $spec['requestBody']['content']['application/json']['schema'];
+		// Properties without an x-i18n-description are left untouched.
+		$this->assertArrayNotHasKey( 'description', $schema['properties']['plain'] );
+		// x-i18n-description is replaced with a localized description.
+		$this->assertArrayNotHasKey( 'x-i18n-description', $schema['properties']['localized'] );
+		$this->assertSame(
+			'<message key="rest-property-desc-mock-desc"></message>',
+			$schema['properties']['localized']['description']
+		);
+		// Nested schema properties are localized too.
+		$this->assertSame(
+			'<message key="rest-property-desc-mock-desc"></message>',
+			$schema['properties']['nested']['properties']['inner']['description']
+		);
+	}
+
+	public function testGetOpenApiSpecRequestBodyExamplePresent(): void {
+		$expectedExample = [ 'title' => 'Earth', 'source' => 'text/plain' ];
+
+		$handler = $this->newHandler( [
+			'getParamSettings',
+			'getHeaderParamSettings',
+			'getBodyParamSettings',
+			'getSupportedRequestTypes',
+			'getResponseBodySchema',
+			'getResponseHeaderSettings',
+			'getRequestBodyExample',
+		] );
+		$handler->method( 'getParamSettings' )->willReturn( [] );
+		$handler->method( 'getHeaderParamSettings' )->willReturn( [] );
+		$handler->method( 'getBodyParamSettings' )->willReturn( [
+			'content' => [
+				Handler::PARAM_SOURCE => 'body',
+			],
+		] );
+		$handler->method( 'getSupportedRequestTypes' )->willReturn( [
+			'application/json',
+			RequestInterface::FORM_URLENCODED_CONTENT_TYPE,
+		] );
+		$handler->method( 'getResponseBodySchema' )->willReturn( null );
+		$handler->method( 'getResponseHeaderSettings' )->willReturn( [] );
+		$handler->method( 'getRequestBodyExample' )->willReturn( $expectedExample );
+
+		$module = $this->newModuleForSpec();
+		$handler->initContext( $module, '/test', [ 'path' => '/test' ], [] );
+
+		$this->initHandlerServices( $handler );
+
+		$spec = $handler->getOpenApiSpec( 'POST' );
+
+		$this->assertArrayHasKey( 'requestBody', $spec );
+		$this->assertSame(
+			$expectedExample,
+			$spec['requestBody']['content']['application/json']['example']
+		);
+		$this->assertSame(
+			$expectedExample,
+			$spec['requestBody']['content'][RequestInterface::FORM_URLENCODED_CONTENT_TYPE]['example']
+		);
+	}
+
+	public function testGetOpenApiSpecRequestBodyExampleBuiltByDefault(): void {
+		$handler = $this->newHandler( [
+			'getParamSettings',
+			'getHeaderParamSettings',
+			'getBodyParamSettings',
+			'getSupportedRequestTypes',
+			'getResponseBodySchema',
+			'getResponseHeaderSettings',
+		] );
+		$handler->method( 'getParamSettings' )->willReturn( [] );
+		$handler->method( 'getHeaderParamSettings' )->willReturn( [] );
+		$handler->method( 'getBodyParamSettings' )->willReturn( [
+			// String example used as-is
+			'title' => [
+				Handler::PARAM_SOURCE => 'body',
+				Handler::PARAM_EXAMPLE => 'Earth',
+			],
+			// PHP integer stays an integer
+			'count' => [
+				Handler::PARAM_SOURCE => 'body',
+				Handler::PARAM_EXAMPLE => 12345,
+			],
+			// PHP boolean false stays false (not dropped, not stringified)
+			'flag' => [
+				Handler::PARAM_SOURCE => 'body',
+				Handler::PARAM_EXAMPLE => false,
+			],
+			// Explicit null is a provided example, not a missing one
+			'nullable' => [
+				Handler::PARAM_SOURCE => 'body',
+				Handler::PARAM_EXAMPLE => null,
+			],
+			// MessageValue example is localized
+			'msg' => [
+				Handler::PARAM_SOURCE => 'body',
+				Handler::PARAM_EXAMPLE => new MessageValue( 'rest-param-desc-mock-desc' ),
+			],
+			// Post-source params appear only in form-style examples, not in JSON
+			'token' => [
+				Handler::PARAM_SOURCE => 'post',
+				Handler::PARAM_EXAMPLE => 'csrf',
+			],
+			// No example declared: the sentinel forces the issue
+			'missing' => [
+				Handler::PARAM_SOURCE => 'body',
+			],
+		] );
+		$handler->method( 'getSupportedRequestTypes' )->willReturn( [
+			'application/json',
+			RequestInterface::FORM_URLENCODED_CONTENT_TYPE,
+		] );
+		$handler->method( 'getResponseBodySchema' )->willReturn( null );
+		$handler->method( 'getResponseHeaderSettings' )->willReturn( [] );
+
+		$module = $this->newModuleForSpec();
+		$handler->initContext( $module, '/test', [ 'path' => '/test' ], [] );
+
+		$this->initHandlerServices( $handler );
+
+		$spec = $handler->getOpenApiSpec( 'POST' );
+
+		$this->assertArrayHasKey( 'requestBody', $spec );
+		// A composite example is produced only for application/json, and it omits
+		// the 'post'-source 'token' param to match the JSON schema (body only).
+		$this->assertSame(
+			[
+				'title' => 'Earth',
+				'count' => 12345,
+				'flag' => false,
+				'nullable' => null,
+				'msg' => '<message key="rest-param-desc-mock-desc"></message>',
+				// Sentinel value emitted for a body param with no PARAM_EXAMPLE
+				// (Handler::MISSING_BODY_EXAMPLE is private, so assert the literal).
+				'missing' => 'missing_example',
+			],
+			$spec['requestBody']['content']['application/json']['example']
+		);
+		// Non-JSON media types get no media-type-level example: Swagger UI builds
+		// the form body from the schema properties instead.
+		$this->assertArrayHasKey(
+			'schema',
+			$spec['requestBody']['content'][RequestInterface::FORM_URLENCODED_CONTENT_TYPE]
+		);
+		$this->assertArrayNotHasKey(
+			'example',
+			$spec['requestBody']['content'][RequestInterface::FORM_URLENCODED_CONTENT_TYPE]
+		);
+	}
+
+	public function testGetOpenApiSpecRequestBodyExampleSuppressedByOverride(): void {
+		$handler = $this->newHandler( [
+			'getParamSettings',
+			'getHeaderParamSettings',
+			'getBodyParamSettings',
+			'getSupportedRequestTypes',
+			'getResponseBodySchema',
+			'getResponseHeaderSettings',
+			'getRequestBodyExample',
+		] );
+		$handler->method( 'getParamSettings' )->willReturn( [] );
+		$handler->method( 'getHeaderParamSettings' )->willReturn( [] );
+		$handler->method( 'getBodyParamSettings' )->willReturn( [
+			'content' => [
+				Handler::PARAM_SOURCE => 'body',
+			],
+		] );
+		$handler->method( 'getSupportedRequestTypes' )->willReturn( [ 'application/json' ] );
+		$handler->method( 'getResponseBodySchema' )->willReturn( null );
+		$handler->method( 'getResponseHeaderSettings' )->willReturn( [] );
+		// A subclass may opt out of an example entirely by returning null.
+		$handler->method( 'getRequestBodyExample' )->willReturn( null );
+
+		$module = $this->newModuleForSpec();
+		$handler->initContext( $module, '/test', [ 'path' => '/test' ], [] );
+
+		$this->initHandlerServices( $handler );
+
+		$spec = $handler->getOpenApiSpec( 'PUT' );
+
+		$this->assertArrayHasKey( 'requestBody', $spec );
+		$this->assertArrayNotHasKey( 'example', $spec['requestBody']['content']['application/json'] );
+	}
+
+	/**
+	 * @return (object&MockObject)|(object&MockObject&Module)|(object&MockObject&Module&object&MockObject)
+	 */
+	private function newModuleForSpec(): MockObject&Module {
+		$module = $this->createNoOpMock(
+			Module::class,
+			[ 'getModuleDescription', 'getJsonLocalizer' ]
+		);
+		$module->method( 'getModuleDescription' )->willReturn( [] );
+		$module->method( 'getJsonLocalizer' )->willReturn( $this->jsonLocalizer );
+
+		return $module;
 	}
 
 }

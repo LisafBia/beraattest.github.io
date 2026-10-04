@@ -1,21 +1,22 @@
 <?xml version="1.0"?>
 <ruleset name="MediaWiki">
 	<rule ref="./vendor/mediawiki/mediawiki-codesniffer/MediaWiki">
-		<exclude name="MediaWiki.Commenting.FunctionComment.MissingDocumentationPrivate" />
-		<exclude name="MediaWiki.Commenting.FunctionComment.MissingDocumentationProtected" />
-		<exclude name="MediaWiki.Commenting.FunctionComment.MissingDocumentationPublic" />
-		<exclude name="MediaWiki.Commenting.FunctionComment.WrongStyle" />
 		<exclude name="MediaWiki.NamingConventions.LowerCamelFunctionsName.FunctionName" />
 		<exclude name="MediaWiki.WhiteSpace.SpaceBeforeSingleLineComment.NewLineComment" />
 	</rule>
 	<rule ref="MediaWiki.NamingConventions.ValidGlobalName">
 		<properties>
-			<property name="ignoreList" type="array" value="$IP" />
+			<property name="ignoreList[]" value="$IP" />
 		</properties>
 	</rule>
 	<rule ref="MediaWiki.NamingConventions.ValidGlobalName.allowedPrefix">
 		<exclude-pattern>*/maintenance/doMaintenance\.php</exclude-pattern>
 		<exclude-pattern>*/maintenance/CommandLineInc\.php</exclude-pattern>
+	</rule>
+	<rule ref="Generic.PHP.RequireStrictTypes">
+		<include-pattern>*/OutputTransform/*</include-pattern>
+		<include-pattern>*/Password/*</include-pattern>
+		<include-pattern>*/Parsoid/*</include-pattern>
 	</rule>
 	<rule ref="Generic.Files.LineLength">
 		<exclude-pattern>*/languages/messages/*</exclude-pattern>
@@ -102,7 +103,7 @@
 			Continue to allow existing violations, but enable the sniff to prevent
 			any new occurrences.
 		-->
-		<exclude-pattern>*/includes/export/DumpPipeOutput\.php</exclude-pattern>
+		<exclude-pattern>*/includes/Export/DumpPipeOutput\.php</exclude-pattern>
 		<exclude-pattern>*/includes/ResourceLoader/Image\.php</exclude-pattern>
 		<exclude-pattern>*/includes/shell/Command\.php</exclude-pattern>
 		<exclude-pattern>*/maintenance/includes/TextPassDumper\.php</exclude-pattern>
@@ -125,19 +126,11 @@
 		-->
 		<exclude-pattern>*/maintenance/mwdocgen\.php</exclude-pattern>
 	</rule>
-	<rule ref="Generic.Arrays.DisallowShortArraySyntax">
-		<!--
-			T273340: Rule not to be enabled on any other file.
-			PHPVersionCheck.php requires syntax to be old PHP compatible.
-			The rest should therefore use [] rather than array() as per the
-			MediaWiki style guide.
-		-->
-		<include-pattern>includes/PHPVersionCheck\.php</include-pattern>
-	</rule>
 	<file>.</file>
 	<arg name="encoding" value="UTF-8"/>
 	<arg name="extensions" value="php"/>
 	<exclude-pattern type="relative">^(extensions|skins|cache)/*</exclude-pattern>
 	<exclude-pattern type="relative">^docs/(coverage|html|js|latex)/*</exclude-pattern>
 	<exclude-pattern>LocalSettings(-installer)?\.php</exclude-pattern>
+	<exclude-pattern>*/tests/phpunit/gen/ParserTest_*</exclude-pattern>
 </ruleset>

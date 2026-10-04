@@ -2,13 +2,13 @@
 
 namespace MediaWiki\Tests\Unit\Revision;
 
-use DummyContentForTesting;
 use MediaWiki\CommentStore\CommentStoreComment;
 use MediaWiki\Page\PageIdentityValue;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\RevisionSlots;
 use MediaWiki\Revision\RevisionStoreRecord;
 use MediaWiki\Revision\SlotRecord;
+use MediaWiki\Tests\Mocks\Content\DummyContentForTesting;
 use MediaWiki\User\UserIdentityValue;
 use MediaWikiUnitTestCase;
 
@@ -19,7 +19,7 @@ use MediaWikiUnitTestCase;
 class RevisionStoreRecordTest extends MediaWikiUnitTestCase {
 	use RevisionRecordTests;
 
-	protected function expectedDefaultFieldVisibility( $field ): bool {
+	protected static function expectedDefaultFieldVisibility( int $field ): bool {
 		return true;
 	}
 
@@ -48,7 +48,6 @@ class RevisionStoreRecordTest extends MediaWikiUnitTestCase {
 			'rev_minor_edit' => 0,
 			'rev_parent_id' => '5',
 			'rev_len' => $slots->computeSize(),
-			'rev_sha1' => $slots->computeSha1(),
 			'page_latest' => '18',
 		];
 
@@ -83,8 +82,8 @@ class RevisionStoreRecordTest extends MediaWikiUnitTestCase {
 		$this->assertSame( $current, $rev->isCurrent(), 'isCurrent()' );
 	}
 
-	public function provideGetSlot_audience_latest() {
-		return $this->provideAudienceCheckData( RevisionRecord::DELETED_TEXT );
+	public static function provideGetSlot_audience_latest() {
+		return self::provideAudienceCheckData( RevisionRecord::DELETED_TEXT );
 	}
 
 	/**

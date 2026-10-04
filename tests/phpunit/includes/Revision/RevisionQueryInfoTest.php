@@ -9,11 +9,10 @@ use MediaWikiIntegrationTestCase;
  *
  * @group RevisionStore
  * @group Storage
- * @group Database
  */
 class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 
-	protected function getRevisionQueryFields( $returnTextIdField = true ) {
+	protected static function getRevisionQueryFields( $returnTextIdField = true ) {
 		$fields = [
 			'rev_id',
 			'rev_page',
@@ -22,7 +21,6 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 			'rev_deleted',
 			'rev_len',
 			'rev_parent_id',
-			'rev_sha1',
 		];
 		if ( $returnTextIdField ) {
 			$fields[] = 'rev_text_id';
@@ -30,7 +28,7 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 		return $fields;
 	}
 
-	protected function getArchiveQueryFields( $returnTextFields = true ) {
+	protected static function getArchiveQueryFields( $returnTextFields = true ) {
 		$fields = [
 			'ar_id',
 			'ar_page_id',
@@ -42,7 +40,6 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 			'ar_deleted',
 			'ar_len',
 			'ar_parent_id',
-			'ar_sha1',
 		];
 		if ( $returnTextFields ) {
 			$fields[] = 'ar_text_id';
@@ -50,7 +47,7 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 		return $fields;
 	}
 
-	protected function getCommentQueryFields( $prefix ) {
+	protected static function getCommentQueryFields( $prefix ) {
 		return [
 			"{$prefix}_comment_text" => "comment_{$prefix}_comment.comment_text",
 			"{$prefix}_comment_data" => "comment_{$prefix}_comment.comment_data",
@@ -58,7 +55,7 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 		];
 	}
 
-	protected function getActorQueryFields( $prefix, $tmp = false ) {
+	protected static function getActorQueryFields( $prefix, $tmp = false ) {
 		if ( $tmp ) {
 			return [
 				"{$prefix}_user" => "actor_{$prefix}_user.actor_user",
@@ -87,7 +84,7 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 		];
 	}
 
-	protected function getPageQueryFields() {
+	protected static function getPageQueryFields() {
 		return [
 			'page_namespace',
 			'page_title',
@@ -98,7 +95,7 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 		];
 	}
 
-	protected function getUserQueryFields() {
+	protected static function getUserQueryFields() {
 		return [
 			'user_name',
 		];
@@ -111,7 +108,7 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 		];
 	}
 
-	public function provideArchiveQueryInfo() {
+	public static function provideArchiveQueryInfo() {
 		yield 'no options' => [
 			[],
 			[
@@ -121,9 +118,9 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 					'comment_ar_comment' => 'comment',
 				],
 				'fields' => array_merge(
-					$this->getArchiveQueryFields( false ),
-					$this->getActorQueryFields( 'ar' ),
-					$this->getCommentQueryFields( 'ar' )
+					self::getArchiveQueryFields( false ),
+					self::getActorQueryFields( 'ar' ),
+					self::getCommentQueryFields( 'ar' )
 				),
 				'joins' => [
 					'comment_ar_comment'
@@ -134,7 +131,7 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 		];
 	}
 
-	public function provideQueryInfo() {
+	public static function provideQueryInfo() {
 		// TODO: more option variations
 		yield 'page and user option, actor-new' => [
 			[],
@@ -148,11 +145,11 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 					'comment_rev_comment' => 'comment',
 				],
 				'fields' => array_merge(
-					$this->getRevisionQueryFields( false ),
-					$this->getPageQueryFields(),
-					$this->getUserQueryFields(),
-					$this->getActorQueryFields( 'rev' ),
-					$this->getCommentQueryFields( 'rev' )
+					self::getRevisionQueryFields( false ),
+					self::getPageQueryFields(),
+					self::getUserQueryFields(),
+					self::getActorQueryFields( 'rev' ),
+					self::getCommentQueryFields( 'rev' )
 				),
 				'joins' => [
 					'page' => [ 'JOIN', [ 'page_id = rev_page' ] ],
@@ -175,9 +172,9 @@ class RevisionQueryInfoTest extends MediaWikiIntegrationTestCase {
 					'comment_rev_comment' => 'comment',
 				],
 				'fields' => array_merge(
-					$this->getRevisionQueryFields( false ),
-					$this->getActorQueryFields( 'rev' ),
-					$this->getCommentQueryFields( 'rev' )
+					self::getRevisionQueryFields( false ),
+					self::getActorQueryFields( 'rev' ),
+					self::getCommentQueryFields( 'rev' )
 				),
 				'joins' => [
 					'comment_rev_comment' => [ 'JOIN', 'comment_rev_comment.comment_id = rev_comment_id' ],

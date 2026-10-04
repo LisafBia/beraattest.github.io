@@ -519,9 +519,9 @@
 			model = new rcfilters.dm.FiltersViewModel(),
 			extractNames = function ( matches ) {
 				const result = {};
-				Object.keys( matches ).forEach( ( groupName ) => {
+				for ( const groupName in matches ) {
 					result[ groupName ] = matches[ groupName ].map( ( item ) => item.getName() );
-				} );
+				}
 				return result;
 			};
 
@@ -847,7 +847,7 @@
 				group1__filter2: false, // The text is "show filter 2"
 				group1__filter3: false // The text is "show filter 3"
 			} ),
-			'All paremeters in the same \'send_unselected_if_any\' group false is equivalent to none are truthy (checked) in the interface'
+			'All parameters in the same \'send_unselected_if_any\' group false is equivalent to none are truthy (checked) in the interface'
 		);
 
 		// The ones above don't update the model, so we have a clean state.
@@ -1420,16 +1420,14 @@
 
 		model.initializeFilters( definition );
 
-		assert.strictEqual(
+		assert.false(
 			model.isHighlightEnabled(),
-			false,
 			'Initially, highlight is disabled.'
 		);
 
 		model.toggleHighlight( true );
-		assert.strictEqual(
+		assert.true(
 			model.isHighlightEnabled(),
-			true,
 			'Highlight is enabled on toggle.'
 		);
 
@@ -1535,16 +1533,16 @@
 		model.initializeFilters( shortFilterDefinition, null );
 
 		model.emptyAllFilters();
-		assert.strictEqual( model.areVisibleFiltersEmpty(), true );
+		assert.true( model.areVisibleFiltersEmpty() );
 
 		model.toggleFiltersSelected( {
 			group3__filter5: true // sticky
 		} );
-		assert.strictEqual( model.areVisibleFiltersEmpty(), true );
+		assert.true( model.areVisibleFiltersEmpty() );
 
 		model.toggleFiltersSelected( {
 			group1__filter1: true
 		} );
-		assert.strictEqual( model.areVisibleFiltersEmpty(), false );
+		assert.false( model.areVisibleFiltersEmpty() );
 	} );
 }() );

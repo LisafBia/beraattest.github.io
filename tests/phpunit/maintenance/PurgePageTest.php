@@ -2,37 +2,9 @@
 
 namespace MediaWiki\Tests\Maintenance;
 
+use MediaWiki\Page\WikiPage;
 use PHPUnit\Framework\ExpectationFailedException;
 use PurgePage;
-use WikiPage;
-
-/**
- * The PurgePage maintenance script with the input mocked to allow easier testing.
- */
-class SemiMockedPurgePage extends PurgePage {
-
-	/**
-	 * @var string|null The filename to a file which contains the mock input to the script.
-	 */
-	private ?string $mockStdinFile = null;
-
-	/**
-	 * Data for the fake stdin
-	 *
-	 * @param string $filepath The string to be used instead of stdin
-	 */
-	public function mockStdin( string $filepath ) {
-		$this->mockStdinFile = $filepath;
-	}
-
-	public function getStdin( $len = null ) {
-		if ( $len !== null ) {
-			throw new ExpectationFailedException( "::getStdin call was expected to not pass any arguments" );
-		}
-
-		return fopen( $this->mockStdinFile, 'rt' );
-	}
-}
 
 /**
  * @covers \PurgePage
@@ -111,5 +83,33 @@ class PurgePageTest extends MaintenanceBaseTestCase {
 		$this->maintenance->execute();
 		$this->expectOutputRegex( '/Purged ' . preg_quote( $title, '/' ) . '/' );
 		$this->assertTrue( $hookCalled );
+	}
+}
+
+/**
+ * The PurgePage maintenance script with the input mocked to allow easier testing.
+ */
+class SemiMockedPurgePage extends PurgePage {
+
+	/**
+	 * @var string|null The filename to a file which contains the mock input to the script.
+	 */
+	private ?string $mockStdinFile = null;
+
+	/**
+	 * Data for the fake stdin
+	 *
+	 * @param string $filepath The string to be used instead of stdin
+	 */
+	public function mockStdin( string $filepath ) {
+		$this->mockStdinFile = $filepath;
+	}
+
+	public function getStdin( $len = null ) {
+		if ( $len !== null ) {
+			throw new ExpectationFailedException( "::getStdin call was expected to not pass any arguments" );
+		}
+
+		return fopen( $this->mockStdinFile, 'rt' );
 	}
 }

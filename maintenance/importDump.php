@@ -5,29 +5,18 @@
  * Copyright © 2005 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
+use MediaWiki\Import\ImportStreamSource;
+use MediaWiki\Import\WikiRevision;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Permissions\UltimateAuthority;
 use MediaWiki\User\User;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -156,10 +145,10 @@ TEXT
 
 			return;
 		}
-		$this->nsFilter = array_unique( array_map( [ $this, 'getNsIndex' ], $namespaces ) );
+		$this->nsFilter = array_unique( array_map( $this->getNsIndex( ... ), $namespaces ) );
 	}
 
-	private function getNsIndex( $namespace ) {
+	private function getNsIndex( string $namespace ): int {
 		$contLang = $this->getServiceContainer()->getContentLanguage();
 		$result = $contLang->getNsIndex( $namespace );
 		if ( $result !== false ) {
@@ -187,13 +176,11 @@ TEXT
 		return is_array( $this->nsFilter ) && !in_array( $ns, $this->nsFilter );
 	}
 
-	public function reportPage( $page ) {
+	public function reportPage( array $page ) {
 		$this->pageCount++;
+		$this->report();
 	}
 
-	/**
-	 * @param WikiRevision $rev
-	 */
 	public function handleRevision( WikiRevision $rev ) {
 		$title = $rev->getTitle();
 		if ( !$title ) {
@@ -207,10 +194,9 @@ TEXT
 		}
 
 		$this->revCount++;
-		$this->report();
 
 		if ( !$this->dryRun ) {
-			call_user_func( $this->importCallback, $rev );
+			( $this->importCallback )( $rev );
 		}
 	}
 
@@ -229,7 +215,7 @@ TEXT
 
 			if ( !$this->dryRun ) {
 				// bluuuh hack
-				// call_user_func( $this->uploadCallback, $revision );
+				// ( $this->uploadCallback )( $revision );
 				$importer = $this->getServiceContainer()->getWikiRevisionUploadImporter();
 				$statusValue = $importer->import( $revision );
 
@@ -240,9 +226,6 @@ TEXT
 		return false;
 	}
 
-	/**
-	 * @param WikiRevision $rev
-	 */
 	public function handleLogItem( WikiRevision $rev ) {
 		if ( $this->skippedNamespace( $rev->getTitle() ) ) {
 			return;
@@ -251,11 +234,11 @@ TEXT
 		$this->report();
 
 		if ( !$this->dryRun ) {
-			call_user_func( $this->logItemCallback, $rev );
+			( $this->logItemCallback )( $rev );
 		}
 	}
 
-	private function report( $final = false ) {
+	private function report( bool $final = false ) {
 		if ( $final xor ( $this->pageCount % $this->reportingInterval == 0 ) ) {
 			$this->showReport();
 		}
@@ -263,7 +246,7 @@ TEXT
 
 	private function showReport() {
 		if ( !$this->mQuiet ) {
-			$delta = microtime( true ) - $this->startTime;
+			$delta = ( ConvertibleTimestamp::hrtime() - $this->startTime ) / 1e9;
 			if ( $delta ) {
 				$rate = sprintf( "%.2f", $this->pageCount / $delta );
 				$revrate = sprintf( "%.2f", $this->revCount / $delta );
@@ -281,11 +264,11 @@ TEXT
 		$this->waitForReplication();
 	}
 
-	private function progress( $string ) {
+	private function progress( string $string ) {
 		fwrite( $this->stderr, $string . "\n" );
 	}
 
-	private function importFromFile( $filename ) {
+	private function importFromFile( string $filename ): bool {
 		if ( preg_match( '/\.gz$/', $filename ) ) {
 			$filename = 'compress.zlib://' . $filename;
 		} elseif ( preg_match( '/\.bz2$/', $filename ) ) {
@@ -302,7 +285,7 @@ TEXT
 		return $this->importFromHandle( $file );
 	}
 
-	private function importFromStdin() {
+	private function importFromStdin(): bool {
 		$file = fopen( 'php://stdin', 'rt' );
 		if ( self::posix_isatty( $file ) ) {
 			$this->maybeHelp( true );
@@ -311,8 +294,11 @@ TEXT
 		return $this->importFromHandle( $file );
 	}
 
-	private function importFromHandle( $handle ) {
-		$this->startTime = microtime( true );
+	/**
+	 * @param resource $handle
+	 */
+	private function importFromHandle( $handle ): bool {
+		$this->startTime = ConvertibleTimestamp::hrtime();
 
 		$user = User::newSystemUser( User::MAINTENANCE_SCRIPT_USER, [ 'steal' => true ] );
 
@@ -346,16 +332,16 @@ TEXT
 			$importer->setPageOffset( $nthPage );
 			$this->pageCount = $nthPage - 1;
 		}
-		$importer->setPageCallback( [ $this, 'reportPage' ] );
+		$importer->setPageCallback( $this->reportPage( ... ) );
 		$importer->setNoticeCallback( static function ( $msg, $params ) {
 			echo wfMessage( $msg, $params )->text() . "\n";
 		} );
 		$this->importCallback = $importer->setRevisionCallback(
-			[ $this, 'handleRevision' ] );
+			$this->handleRevision( ... ) );
 		$this->uploadCallback = $importer->setUploadCallback(
-			[ $this, 'handleUpload' ] );
+			$this->handleUpload( ... ) );
 		$this->logItemCallback = $importer->setLogItemCallback(
-			[ $this, 'handleLogItem' ] );
+			$this->handleLogItem( ... ) );
 		if ( $this->uploads ) {
 			$importer->setImportUploads( true );
 		}

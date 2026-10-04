@@ -6,21 +6,7 @@
  * file must still exist in order to determine what extensions should be loaded and to add any custom
  * tests that they might add.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Testing
  */
@@ -28,6 +14,7 @@
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\MainConfigSchema;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Profiler\Profiler;
 use MediaWiki\Registration\ExtensionProcessor;
 use MediaWiki\Registration\ExtensionRegistry;
 use PHPUnit\TextUI\CliArguments\Builder;
@@ -64,7 +51,7 @@ if ( $envVar !== false ) {
 	// PHPUnit has been invoked with arguments. This can be very complex to handle, so the heuristic below is meant
 	// to cover just the most common use cases.
 	// Make PHPUnit not complain about unrecognized options when paratest options are passed in
-	$paratestArgs = [ 'runner', 'processes', 'passthru-php', 'write-to' ];
+	$paratestArgs = [ 'runner', 'processes', 'passthru-php', 'write-to', 'passthru', 'phpunit', 'tmp-dir', 'parallel-suite' ];
 	$phpunitArgs = ( new Builder )->fromParameters( $GLOBALS['argv'], $paratestArgs );
 	if ( $phpunitArgs->hasArgument() ) {
 		// A test or test directory was specified explicitly. Normalize line endings and case, and see if we likely
@@ -76,7 +63,7 @@ if ( $envVar !== false ) {
 		// there *might* be integration tests.
 		// See TestSuiteMapper for handling of the 'testsuites' argument.
 		$suites = explode( ',', $phpunitArgs->testSuite() );
-		$unitSuites = [ 'core:unit', 'extensions:unit', 'skins:unit' ];
+		$unitSuites = [ 'core:unit', 'extensions:unit' ];
 		$hasIntegrationTests = array_diff( $suites, $unitSuites ) !== [];
 	} else {
 		// Something more complex, just assume there might be integration tests
@@ -90,7 +77,7 @@ if ( !$hasIntegrationTests ) {
 	$GLOBALS['wgAutoloadClasses'] = [];
 
 	TestSetup::requireOnceInGlobalScope( MW_INSTALL_PATH . "/includes/AutoLoader.php" );
-	TestSetup::requireOnceInGlobalScope( MW_INSTALL_PATH . "/tests/common/TestsAutoLoader.php" );
+	TestSetup::requireOnceInGlobalScope( MW_INSTALL_PATH . "/tests/Common/TestsAutoLoader.php" );
 	TestSetup::requireOnceInGlobalScope( MW_INSTALL_PATH . "/includes/Defines.php" );
 	TestSetup::requireOnceInGlobalScope( MW_INSTALL_PATH . "/includes/GlobalFunctions.php" );
 
@@ -128,7 +115,7 @@ if ( !$hasIntegrationTests ) {
 		$env
 	);
 
-	$extensionData = stream_get_contents( $pipes[1] );
+	$pathsToJsonFilesStr = stream_get_contents( $pipes[1] );
 	fclose( $pipes[1] );
 	$cmdErr = stream_get_contents( $pipes[2] );
 	fclose( $pipes[2] );
@@ -139,11 +126,7 @@ if ( !$hasIntegrationTests ) {
 		exit( 1 );
 	}
 
-	// For simplicity, getPHPUnitExtensionsAndSkins uses `\n\nTESTPATHS\n\n` to separate the lists of JSON files and
-	// additional test paths, so split the output into the individual lists.
-	[ $pathsToJsonFilesStr, $testPathsStr ] = explode( "\n\nTESTPATHS\n\n", $extensionData );
-	$pathsToJsonFiles = explode( "\n", $pathsToJsonFilesStr );
-	$testPaths = explode( "\n", $testPathsStr );
+	$pathsToJsonFiles = $pathsToJsonFilesStr ? explode( "\n", $pathsToJsonFilesStr ) : [];
 
 	$extensionProcessor = new ExtensionProcessor();
 	foreach ( $pathsToJsonFiles as $filePath ) {
@@ -162,9 +145,6 @@ if ( !$hasIntegrationTests ) {
 	TestSetup::loadSettingsFiles();
 
 	$extensionRegistry = ExtensionRegistry::getInstance();
-	$extensionsAndSkins = $extensionRegistry->getQueue();
-
-	$pathsToJsonFiles = array_keys( $extensionsAndSkins );
 
 	$testPaths = [];
 	foreach ( $extensionRegistry->getAllThings() as $info ) {
@@ -174,9 +154,23 @@ if ( !$hasIntegrationTests ) {
 	( new HookRunner( MediaWikiServices::getInstance()->getHookContainer() ) )->onUnitTestsList( $testPaths );
 }
 
-/** @internal For use in ExtensionsUnitTestSuite and SkinsUnitTestSuite only */
-define( 'MW_PHPUNIT_EXTENSIONS_PATHS', array_map( 'dirname', $pathsToJsonFiles ) );
-/** @internal For use in ExtensionsTestSuite only */
-define( 'MW_PHPUNIT_EXTENSIONS_TEST_PATHS', $testPaths );
-
 TestSetup::maybeCheckComposerLockUpToDate();
+
+// Quick check for phpunit.xml. A more thorough test is in PHPUnitConfigTest
+$localConfigPath = __DIR__ . '/../../phpunit.xml';
+if ( !file_exists( $localConfigPath ) ) {
+	throw new RuntimeException(
+		'No PHPUnit config override found. Generate it manually by running `composer phpunit:config`, or ' .
+			'automatically by running tests via `composer phpunit`.'
+	);
+}
+$localConfigContent = file_get_contents( $localConfigPath );
+if ( !str_contains( $localConfigContent, 'generatePHPUnitConfig' ) ) {
+	$msg = 'The PHPUnit config override does not appear to be auto-generated. Generate it manually by ' .
+		'running `composer phpunit:config`, or automatically by running tests via `composer phpunit`.';
+	if ( getenv( 'QUIBBLE_PHPUNIT_PARALLEL' ) ) {
+		// Include the full content to ease debugging of (issues like) T419107.
+		$msg .= "\nFull content:\n$localConfigContent";
+	}
+	throw new RuntimeException( $msg );
+}

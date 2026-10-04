@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -27,6 +13,8 @@ use Wikimedia\Rdbms\DatabaseDomain;
 
 /**
  * Tools for dealing with other locally-hosted wikis.
+ *
+ * @ingroup Site
  */
 class WikiMap {
 
@@ -75,7 +63,7 @@ class WikiMap {
 		// If we don't have a canonical server or a path containing $1, the
 		// WikiReference isn't going to function properly. Just return null in
 		// that case.
-		if ( !is_string( $canonicalServer ) || !is_string( $path ) || strpos( $path, '$1' ) === false ) {
+		if ( !is_string( $canonicalServer ) || !is_string( $path ) || !str_contains( $path, '$1' ) ) {
 			return null;
 		}
 
@@ -88,6 +76,7 @@ class WikiMap {
 	 */
 	private static function getWikiWikiReferenceFromSites( $wikiID ) {
 		$siteLookup = MediaWikiServices::getInstance()->getSiteLookup();
+		$urlUtils = MediaWikiServices::getInstance()->getUrlUtils();
 		$site = $siteLookup->getSite( $wikiID );
 
 		if ( !$site instanceof MediaWikiSite ) {
@@ -95,7 +84,7 @@ class WikiMap {
 			return null;
 		}
 
-		$urlParts = wfGetUrlUtils()->parse( $site->getPageUrl() );
+		$urlParts = $urlUtils->parse( $site->getPageUrl() );
 		if ( $urlParts === null || !isset( $urlParts['path'] ) || !isset( $urlParts['host'] ) ) {
 			// We can't create a meaningful WikiReference without URLs
 			return null;
@@ -203,20 +192,22 @@ class WikiMap {
 			static function () {
 				global $wgLocalDatabases, $wgCanonicalServer;
 
+				$urlUtils = MediaWikiServices::getInstance()->getUrlUtils();
+
 				$infoMap = [];
 				// Make sure at least the current wiki is set, for simple configurations.
 				// This also makes it the first in the map, which is useful for common cases.
 				$wikiId = self::getCurrentWikiId();
 				$infoMap[$wikiId] = [
 					'url' => $wgCanonicalServer,
-					'parts' => wfGetUrlUtils()->parse( $wgCanonicalServer )
+					'parts' => $urlUtils->parse( $wgCanonicalServer )
 				];
 
 				foreach ( $wgLocalDatabases as $wikiId ) {
 					$wikiReference = self::getWiki( $wikiId );
 					if ( $wikiReference ) {
 						$url = $wikiReference->getCanonicalServer();
-						$infoMap[$wikiId] = [ 'url' => $url, 'parts' => wfGetUrlUtils()->parse( $url ) ];
+						$infoMap[$wikiId] = [ 'url' => $url, 'parts' => $urlUtils->parse( $url ) ];
 					}
 				}
 
@@ -233,14 +224,17 @@ class WikiMap {
 	public static function getWikiFromUrl( $url ) {
 		global $wgCanonicalServer;
 
-		if ( strpos( $url, "$wgCanonicalServer/" ) === 0 ) {
+		if ( str_starts_with( $url, "$wgCanonicalServer/" ) ) {
 			// Optimisation: Handle the common case.
 			// (Duplicates self::getCanonicalServerInfoForAllWikis)
 			return self::getCurrentWikiId();
 		}
 
-		$urlPartsCheck = wfGetUrlUtils()->parse( $url );
-		if ( $urlPartsCheck === null ) {
+		$urlUtils = MediaWikiServices::getInstance()->getUrlUtils();
+		$urlPartsCheck = $urlUtils->parse( $url );
+		if ( $urlPartsCheck === null
+			|| !in_array( $urlPartsCheck['scheme'], [ '', 'http', 'https' ], true )
+		) {
 			return false;
 		}
 
@@ -331,6 +325,3 @@ class WikiMap {
 		return ( self::getCurrentWikiId() === $wikiId );
 	}
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( WikiMap::class, 'WikiMap' );

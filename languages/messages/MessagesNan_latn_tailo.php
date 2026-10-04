@@ -1,5 +1,5 @@
 <?php
-/** Minnan (Tâi-lô) (Bân-lâm-gú (Tâi-lô))
+/** Minnan (Tâi-lô) (Bân-lâm-gí (Tâi-lô))
  *
  * @file
  * @ingroup Languages
@@ -40,8 +40,8 @@ $defaultDateFormat = 'nan-latn-tailo';
 
 $dateFormats = [
 	'nan-latn-tailo time' => 'H:i',
-	'nan-latn-tailo date' => 'Y-"nî" n-"gue̍h" j-"ji̍t" (l)',
-	'nan-latn-tailo monthonly' => 'Y-"nî" n-"gue̍h"',
-	'nan-latn-tailo both' => 'Y-"nî" n-"gue̍h" j-"ji̍t" (l) H:i',
-	'nan-latn-tailo pretty' => 'n-"gue̍h" j-"ji̍t"',
+	'nan-latn-tailo date' => 'Y "nî" n "gue̍h" j "ji̍t" (l)',
+	'nan-latn-tailo monthonly' => 'Y "nî" n "gue̍h"',
+	'nan-latn-tailo both' => 'Y "nî" n "gue̍h" j "ji̍t" (l) H:i',
+	'nan-latn-tailo pretty' => 'n "gue̍h" j "ji̍t"',
 ];

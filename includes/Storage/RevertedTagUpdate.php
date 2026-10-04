@@ -1,26 +1,12 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\Storage;
 
-use ChangeTags;
+use MediaWiki\ChangeTags\ChangeTags;
 use MediaWiki\ChangeTags\ChangeTagsStore;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Deferred\DeferrableUpdate;
@@ -46,24 +32,6 @@ class RevertedTagUpdate implements DeferrableUpdate {
 	 */
 	public const CONSTRUCTOR_OPTIONS = [ MainConfigNames::RevertedTagMaxDepth ];
 
-	/** @var RevisionStore */
-	private $revisionStore;
-
-	/** @var LoggerInterface */
-	private $logger;
-
-	/** @var IConnectionProvider */
-	private $dbProvider;
-
-	/** @var ServiceOptions */
-	private $options;
-
-	/** @var int */
-	private $revertId;
-
-	/** @var EditResult */
-	private $editResult;
-
 	/** @var RevisionRecord|null */
 	private $revertRevision;
 
@@ -72,35 +40,26 @@ class RevertedTagUpdate implements DeferrableUpdate {
 
 	/** @var RevisionRecord|null */
 	private $oldestRevertedRevision;
-	private ChangeTagsStore $changeTagsStore;
 
 	/**
 	 * @param RevisionStore $revisionStore
 	 * @param LoggerInterface $logger
 	 * @param ChangeTagsStore $changeTagsStore
 	 * @param IConnectionProvider $dbProvider
-	 * @param ServiceOptions $serviceOptions
+	 * @param ServiceOptions $options
 	 * @param int $revertId ID of the revert
 	 * @param EditResult $editResult EditResult object of this revert
 	 */
 	public function __construct(
-		RevisionStore $revisionStore,
-		LoggerInterface $logger,
-		ChangeTagsStore $changeTagsStore,
-		IConnectionProvider $dbProvider,
-		ServiceOptions $serviceOptions,
-		int $revertId,
-		EditResult $editResult
+		private readonly RevisionStore $revisionStore,
+		private readonly LoggerInterface $logger,
+		private readonly ChangeTagsStore $changeTagsStore,
+		private readonly IConnectionProvider $dbProvider,
+		private readonly ServiceOptions $options,
+		private readonly int $revertId,
+		private readonly EditResult $editResult,
 	) {
-		$serviceOptions->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
-
-		$this->revisionStore = $revisionStore;
-		$this->logger = $logger;
-		$this->dbProvider = $dbProvider;
-		$this->options = $serviceOptions;
-		$this->revertId = $revertId;
-		$this->editResult = $editResult;
-		$this->changeTagsStore = $changeTagsStore;
+		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
 	}
 
 	/**
@@ -150,7 +109,7 @@ class RevertedTagUpdate implements DeferrableUpdate {
 			if ( $previousRevision !== null &&
 				$revertedRevision->hasSameContent( $previousRevision )
 			) {
-				// This is a null revision (e.g. a page move or protection record)
+				// This is a dummy revision (e.g. a page move or protection record)
 				// See: T265312
 				continue;
 			}
@@ -166,8 +125,6 @@ class RevertedTagUpdate implements DeferrableUpdate {
 
 	/**
 	 * Performs checks to determine whether the update should execute.
-	 *
-	 * @return bool
 	 */
 	private function shouldExecute(): bool {
 		$maxDepth = $this->options->get( MainConfigNames::RevertedTagMaxDepth );
@@ -251,8 +208,6 @@ class RevertedTagUpdate implements DeferrableUpdate {
 	 *
 	 * This is a much simpler case requiring less DB queries than when dealing with multiple
 	 * reverted edits.
-	 *
-	 * @return bool
 	 */
 	private function handleSingleRevertedEdit(): bool {
 		if ( $this->editResult->getOldestRevertedRevisionId() !==
@@ -293,8 +248,6 @@ class RevertedTagUpdate implements DeferrableUpdate {
 	 * Returns additional data to be saved in ct_params field of table 'change_tag'.
 	 *
 	 * Effectively a superset of what EditResult::jsonSerialize() returns.
-	 *
-	 * @return array
 	 */
 	private function getTagExtraParams(): array {
 		return array_merge(

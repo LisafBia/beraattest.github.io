@@ -34,23 +34,19 @@ trait JsonSchemaTrait {
 
 		$nullable = false;
 		if ( is_array( $jsonSchemaType ) ) {
-			$nullIndex = array_search( 'null', $jsonSchemaType );
-			if ( $nullIndex !== false ) {
-				$nullable = true;
-				unset( $jsonSchemaType[$nullIndex] );
+			// Don't turn "null" into "?", nor should "null|int|string" become "?int|string"
+			$nullable = count( $jsonSchemaType ) === 2 ? array_search( 'null', $jsonSchemaType ) : false;
+			if ( $nullable !== false ) {
+				unset( $jsonSchemaType[$nullable] );
 			}
 
-			$jsonSchemaType = array_map( [ self::class, 'jsonToPhpDoc' ], $jsonSchemaType );
+			$jsonSchemaType = array_map( self::jsonToPhpDoc( ... ), $jsonSchemaType );
 			$type = implode( '|', $jsonSchemaType );
 		} else {
 			$type = $phpTypes[ strtolower( $jsonSchemaType ) ] ?? $jsonSchemaType;
 		}
 
-		if ( $nullable ) {
-			$type = "?$type";
-		}
-
-		return $type;
+		return $nullable === false ? $type : "?$type";
 	}
 
 	/**
@@ -74,33 +70,31 @@ trait JsonSchemaTrait {
 			throw new InvalidArgumentException( 'The type name cannot be null! Use "null" instead.' );
 		}
 
-		if ( is_array( $phpDocType ) ) {
-			$types = $phpDocType;
-		} else {
-			$types = explode( '|', trim( $phpDocType ) );
+		if ( is_string( $phpDocType ) ) {
+			$phpDocType = explode( '|', trim( $phpDocType ) );
 		}
 
+		/** @var array<string,null> $types */
+		$types = [];
 		$nullable = false;
-		foreach ( $types as $i => $t ) {
+		foreach ( $phpDocType as $t ) {
 			if ( str_starts_with( $t, '?' ) ) {
 				$nullable = true;
 				$t = substr( $t, 1 );
 			}
 
-			$types[$i] = $jsonTypes[ strtolower( $t ) ] ?? $t;
+			$types[$jsonTypes[ strtolower( $t ) ] ?? $t] = null;
 		}
 
 		if ( $nullable ) {
-			$types[] = 'null';
+			$types['null'] = null;
 		}
-
-		$types = array_unique( $types );
 
 		if ( count( $types ) === 1 ) {
-			return reset( $types );
+			return array_key_first( $types );
 		}
 
-		return $types;
+		return array_keys( $types );
 	}
 
 	/**
@@ -108,7 +102,7 @@ trait JsonSchemaTrait {
 	 *
 	 * @param array $schema JSON Schema structure with PHPDoc types
 	 * @param array &$defs List of definitions (JSON schemas) referenced in the schema
-	 * @param string $source An identifier for the source schema being reflected, used
+	 * @param class-string $source An identifier for the source schema being reflected, used
 	 * for error descriptions.
 	 * @param string $propertyName The name of the property the schema belongs to, used for error descriptions.
 	 * @return array JSON Schema structure using only proper JSON types
@@ -131,7 +125,7 @@ trait JsonSchemaTrait {
 	 *
 	 * @param array $schema JSON Schema structure with PHPDoc types
 	 * @param array &$defs List of definitions (JSON schemas) referenced in the schema
-	 * @param string $source An identifier for the source schema being reflected, used
+	 * @param class-string $source An identifier for the source schema being reflected, used
 	 * for error descriptions.
 	 * @param string $propertyName The name of the property the schema belongs to, used for error descriptions.
 	 * @param bool $inlineReferences Whether references in the schema should be inlined or not.

@@ -2,14 +2,14 @@
 
 namespace MediaWiki\Tests\Maintenance;
 
-use CloneDatabase;
 use DumpBackup;
+use MediaWiki\DB\CloneDatabase;
+use MediaWiki\Export\WikiExporter;
+use MediaWiki\Export\XmlDumpWriter;
 use MediaWiki\MainConfigNames;
 use MediaWikiIntegrationTestCase;
-use WikiExporter;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\IMaintainableDatabase;
-use XmlDumpWriter;
 
 /**
  * Tests for page dumps of BackupDumper
@@ -17,7 +17,6 @@ use XmlDumpWriter;
  * @group Database
  * @group Dump
  * @covers \MediaWiki\Maintenance\BackupDumper
- *
  */
 class BackupDumperPageTest extends DumpTestCase {
 
@@ -95,7 +94,7 @@ class BackupDumperPageTest extends DumpTestCase {
 		return $dumper;
 	}
 
-	public function schemaVersionProvider() {
+	public static function schemaVersionProvider() {
 		foreach ( XmlDumpWriter::$supportedSchemas as $schemaVersion ) {
 			yield [ $schemaVersion ];
 		}
@@ -303,9 +302,7 @@ class BackupDumperPageTest extends DumpTestCase {
 		// and that something is reported
 		$fnameReport = $this->getNewTempFile();
 		$dumper->stderr = fopen( $fnameReport, 'a' );
-		if ( $dumper->stderr === false ) {
-			$this->fail( "Could not open stream for stderr" );
-		}
+		$this->assertNotFalse( $dumper->stderr, "Could not open stream for stderr" );
 
 		// Performing the dump. Suppress warnings, since we want to test
 		// accessing broken revision data (page 5).

@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
@@ -27,6 +13,7 @@ use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Title\Title;
 use Wikimedia\Diff\Diff;
 use Wikimedia\Diff\UnifiedDiffFormatter;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 /**
  * @ingroup Maintenance
@@ -49,7 +36,7 @@ class CompareParserCache extends Maintenance {
 		$withcache = 0;
 		$withdiff = 0;
 		$services = $this->getServiceContainer();
-		$parserCache = $services->getParserCache();
+		$parserOutputAccess = $services->getParserOutputAccess();
 		$renderer = $services->getRevisionRenderer();
 		$wikiPageFactory = $services->getWikiPageFactory();
 		while ( $pages-- > 0 ) {
@@ -81,14 +68,14 @@ class CompareParserCache extends Maintenance {
 			$page = $wikiPageFactory->newFromTitle( $title );
 			$revision = $page->getRevisionRecord();
 			$parserOptions = $page->makeParserOptions( 'canonical' );
-			$parserOutputOld = $parserCache->get( $page, $parserOptions );
+			$parserOutputOld = $parserOutputAccess->getCachedParserOutput( $page, $parserOptions );
 
 			if ( $parserOutputOld ) {
-				$t1 = microtime( true );
+				$t1 = ConvertibleTimestamp::hrtime();
 				$parserOutputNew = $renderer->getRenderedRevision( $revision, $parserOptions )
 					->getRevisionParserOutput();
 
-				$sec = microtime( true ) - $t1;
+				$sec = ( ConvertibleTimestamp::hrtime() - $t1 ) / 1e9;
 				$totalsec += $sec;
 
 				$this->output( "Parsed '{$title->getPrefixedText()}' in $sec seconds.\n" );
@@ -96,14 +83,14 @@ class CompareParserCache extends Maintenance {
 				$this->output( "Found cache entry found for '{$title->getPrefixedText()}'..." );
 
 				$oldHtml = trim( preg_replace( '#<!-- .+-->#Us', '',
-					$parserOutputOld->getRawText() ) );
+					$parserOutputOld->getContentHolderText() ) );
 				$newHtml = trim( preg_replace( '#<!-- .+-->#Us', '',
-					$parserOutputNew->getRawText() ) );
+					$parserOutputNew->getContentHolderText() ) );
 				$diffs = new Diff( explode( "\n", $oldHtml ), explode( "\n", $newHtml ) );
 				$formatter = new UnifiedDiffFormatter();
 				$unifiedDiff = $formatter->format( $diffs );
 
-				if ( strlen( $unifiedDiff ) ) {
+				if ( $unifiedDiff !== '' ) {
 					$this->output( "differences found:\n\n$unifiedDiff\n\n" );
 					++$withdiff;
 				} else {

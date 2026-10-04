@@ -1,6 +1,10 @@
 const checkboxShift = require( './checkboxShift.js' );
 const config = require( './config.json' );
 const teleportTarget = require( './teleportTarget.js' );
+const enableSearchDialog = require( './enableSearchDialog.js' );
+const clearAddressBar = require( './clearAddressBar.js' );
+const share = require( './share.js' );
+const { updateThumbnailsToPreferredSize } = require( './updateThumbnailsToPreferredSize.js' );
 
 // Break out of framesets
 if ( mw.config.get( 'wgBreakFrames' ) ) {
@@ -53,37 +57,14 @@ mw.hook( 'wikipage.content' ).add( ( $content ) => {
 	checkboxShift( $content.find( 'input[type="checkbox"]:not(.noshiftselect)' ) );
 } );
 
+// strip wprov from the URL
+const wprov = require( './wprovStrip.js' ).stripWprov();
+
 // Add toolbox portlet to toggle all collapsibles if there are any
 require( './toggleAllCollapsibles.js' );
 
 // Handle elements outside the wikipage content
 $( () => {
-	/**
-	 * There is a bug on iPad and maybe other browsers where if initial-scale is not set
-	 * the page cannot be zoomed. If the initial-scale is set on the server side, this will result
-	 * in an unwanted zoom on mobile devices. To avoid this we check innerWidth and set the
-	 * initial-scale on the client where needed. The width must be synced with the value in
-	 * Skin::initPage.
-	 * More information on this bug in [[phab:T311795]].
-	 *
-	 * @ignore
-	 */
-	function fixViewportForTabletDevices() {
-		const $viewport = $( 'meta[name=viewport]' );
-		const content = $viewport.attr( 'content' );
-		const scale = window.outerWidth / window.innerWidth;
-		// This adjustment is limited to tablet devices. It must be a non-zero value to work.
-		// (these values correspond to @min-width-breakpoint-tablet and @min-width-breakpoint-desktop
-		// See https://doc.wikimedia.org/codex/main/design-tokens/breakpoint.html
-		if ( window.innerWidth >= 640 && window.innerWidth < 1120 &&
-			content && content.indexOf( 'initial-scale' ) === -1
-		) {
-			// Note:
-			// - The `width` value must be equal to @min-width-breakpoint-desktop above
-			// - If `initial-scale` value is 1 the font-size adjust feature will not work on iPad
-			$viewport.attr( 'content', 'width=1120,initial-scale=' + scale );
-		}
-	}
 
 	// Add accesskey hints to the tooltips
 	$( '[accesskey]' ).updateTooltipAccessKeys();
@@ -122,7 +103,7 @@ $( () => {
 		mw.hook( 'wikipage.content' ).fire( $content );
 	}
 
-	let $nodes = $( '.catlinks[data-mw="interface"]' );
+	let $nodes = $( '.catlinks[data-mw-interface]' );
 	if ( $nodes.length ) {
 		/**
 		 * Fired when categories are being added to the DOM.
@@ -142,7 +123,7 @@ $( () => {
 		mw.hook( 'wikipage.categories' ).fire( $nodes );
 	}
 
-	$nodes = $( 'table.diff[data-mw="interface"]' );
+	$nodes = $( 'table.diff[data-mw-interface]' );
 	if ( $nodes.length ) {
 		/**
 		 * Fired when the diff is added to a page containing a diff.
@@ -187,33 +168,82 @@ $( () => {
 	 */
 	const LOGOUT_EVENT = 'skin.logout';
 	function logoutViaPost( href ) {
-		mw.notify(
-			mw.message( 'logging-out-notify' ),
-			{ tag: 'logout', autoHide: false }
-		);
-		const api = new mw.Api();
+		let confirmedPromise;
+
 		if ( mw.user.isTemp() ) {
-			// Indicate to the success page that the user was previously a temporary account, so that the success
-			// message can be customised appropriately.
-			const url = new URL( href );
-			url.searchParams.append( 'wasTempUser', 1 );
-			href = url;
-		}
-		// Allow hooks to extend data that is sent along with the logout request.
-		api.prepareExtensibleApiRequest( 'extendLogout' ).then( ( params ) => {
-			// Include any additional params set by implementations of the extendLogout hook
-			const logoutParams = Object.assign( {}, params, { action: 'logout' } );
-			api.postWithToken( 'csrf', logoutParams ).then(
-				() => {
-					location.href = href;
-				},
-				( err, data ) => {
-					mw.notify(
-						api.getErrorMessage( data ),
-						{ type: 'error', tag: 'logout', autoHide: false }
-					);
+			// Since temporary accounts cannot be logged into again, show a confirmation dialog.
+			confirmedPromise = mw.loader.using( [ 'oojs-ui-windows', 'mediawiki.jqueryMsg' ] ).then( () => {
+				// Keep in sync with SpecialUserLogout
+				const $confirmDialogContent = $( '<div>' ).append(
+					$( '<p>' ).append( mw.message( 'userlogout-temp' ).parseDom() )
+				);
+				const $moreInfoContent = mw.message( 'userlogout-temp-moreinfo' ).parseDom();
+				if ( $moreInfoContent.text().trim().length ) {
+					$confirmDialogContent.append( $( '<p>' ).append( $moreInfoContent ) );
 				}
+				$confirmDialogContent.append(
+					new OO.ui.MessageWidget( {
+						type: 'notice',
+						label: $( '<div>' ).append(
+							$( '<strong>' ).text( mw.msg( 'userlogout-temp-messagebox-title' ) ),
+							$( '<br>' ),
+							mw.message( 'userlogout-temp-messagebox-body' ).parseDom()
+						)
+					} ).$element
+				);
+				return OO.ui.confirm( $confirmDialogContent, {
+					size: 'medium',
+					title: mw.msg( 'temp-user-logout-confirm-title' ),
+					actions: [
+						{
+							action: 'accept',
+							label: mw.msg( 'userlogout-submit' ),
+							flags: [ 'primary', 'progressive' ]
+						},
+						{
+							action: 'reject',
+							label: mw.msg( 'ooui-dialog-message-reject' ),
+							flags: 'safe'
+						}
+					]
+				} );
+			} );
+		} else {
+			confirmedPromise = $.Deferred().resolve( true ).promise();
+		}
+
+		confirmedPromise.then( ( confirmed ) => {
+			if ( !confirmed ) {
+				return;
+			}
+			mw.notify(
+				mw.message( 'logging-out-notify' ),
+				{ tag: 'logout', autoHide: false }
 			);
+			const api = new mw.Api();
+			if ( mw.user.isTemp() ) {
+				// Indicate to the success page that the user was previously a temporary account, so that the success
+				// message can be customised appropriately.
+				const url = new URL( href );
+				url.searchParams.append( 'wasTempUser', 1 );
+				href = url;
+			}
+			// Allow hooks to extend data that is sent along with the logout request.
+			api.prepareExtensibleApiRequest( 'extendLogout' ).then( ( params ) => {
+				// Include any additional params set by implementations of the extendLogout hook
+				const logoutParams = Object.assign( {}, params, { action: 'logout' } );
+				api.postWithToken( 'csrf', logoutParams ).then(
+					() => {
+						location.href = href;
+					},
+					( err, data ) => {
+						mw.notify(
+							api.getErrorMessage( data ),
+							{ type: 'error', tag: 'logout', autoHide: false }
+						);
+					}
+				);
+			} );
 		} );
 	}
 
@@ -223,7 +253,6 @@ $( () => {
 		mw.hook( LOGOUT_EVENT ).fire( this.href );
 		e.preventDefault();
 	} );
-	fixViewportForTabletDevices();
 
 	teleportTarget.attach();
 } );
@@ -245,38 +274,20 @@ function isSearchInput( element ) {
  * @param {string} moduleName Name of a module
  */
 function loadSearchModule( moduleName ) {
-	// T251544: Collect search performance metrics to compare Vue search with
-	// mediawiki.searchSuggest performance. Marks and Measures will only be
-	// recorded on the Vector skin.
-	//
-	// Vue search isn't loaded through this function so we are only collecting
-	// legacy search performance metrics here.
-
-	const shouldTestSearch = !!( moduleName === 'mediawiki.searchSuggest' &&
-		mw.config.get( 'skin' ) === 'vector' &&
-		window.performance &&
-		performance.mark &&
-		performance.measure &&
-
-		performance.getEntriesByName ),
-		loadStartMark = 'mwVectorLegacySearchLoadStart',
-		loadEndMark = 'mwVectorLegacySearchLoadEnd';
-
 	function requestSearchModule() {
-		if ( shouldTestSearch ) {
-			performance.mark( loadStartMark );
-		}
-		mw.loader.using( moduleName, () => {
-			if ( shouldTestSearch && performance.getEntriesByName( loadStartMark ).length ) {
-				performance.mark( loadEndMark );
-				performance.measure( 'mwVectorLegacySearchLoadStartToLoadEnd', loadStartMark, loadEndMark );
+		mw.loader.using( moduleName ).then( () => {
+			// eslint-disable-next-line security/detect-non-literal-require
+			const { init } = require( moduleName );
+			// If it exports an init function execute that immediately.
+			if ( init ) {
+				init();
 			}
 		} );
 	}
 
 	// Load the module once a search input is focussed.
 	function eventListener( e ) {
-		if ( isSearchInput( e.target ) ) {
+		if ( e.target && e.target.nodeType === 1 && isSearchInput( e.target ) ) {
 			requestSearchModule();
 
 			document.removeEventListener( 'focusin', eventListener );
@@ -295,7 +306,7 @@ function loadSearchModule( moduleName ) {
 
 // Skins may decide to disable this behaviour or use an alternative module.
 if ( config.search ) {
-	loadSearchModule( 'mediawiki.searchSuggest' );
+	loadSearchModule( config.searchModule );
 }
 
 try {
@@ -306,10 +317,69 @@ try {
 	}
 } catch ( err ) {}
 
+updateThumbnailsToPreferredSize( $( '#mw-content-text .mw-parser-output' ) );
+mw.hook( 'wikipage.content' ).add( updateThumbnailsToPreferredSize );
+
+/**
+ * @param {string} href
+ * @ignore
+ */
+function shareHref( href ) {
+	const url = new URL( href, location );
+	let link = url.toString();
+	try {
+		// decodeURI() may throw
+		const decodedLink = decodeURI( link );
+		// Check that the decoded URL is parsed to the same canonical URL
+		// new URL() may throw
+		if ( new URL( decodedLink ).toString() === link ) {
+			link = decodedLink;
+		}
+	} catch ( err ) {}
+	share( { url: link } );
+}
+
+// Handles share link clicks. By default, the share() method from share.js is
+// used. But extensions can also override this behavior in favor of their own
+// custom functionality.
+document.body.addEventListener( 'click', ( event ) => {
+	if ( event.defaultPrevented ) {
+		return;
+	}
+
+	// Skins put the class on either the link or its list item.
+	const shareSelector = '.mw-heading a.mw-section-share, ' +
+		'a.mw-page-share[data-mw-interface], .mw-page-share a[data-mw-interface]';
+
+	const link = event.target.closest( shareSelector );
+
+	if ( link ) {
+		event.preventDefault();
+		shareHref( link.getAttribute( 'href' ) );
+	}
+} );
+
+// Load lazy loaded images in print mode (T148047). This code supports the mobile site
+// and $wgNativeImageLazyLoading
+window.addEventListener( 'beforeprint', () => {
+	// Printing documents with images that are lazy loaded is broken in Safari
+	// https://bugs.webkit.org/show_bug.cgi?id=224547
+	Array.prototype.forEach.call(
+		document.querySelectorAll( 'img[loading]' ),
+		( img ) => {
+			img.loading = 'eager';
+		}
+	);
+} );
+
 /**
  * @exports mediawiki.page.ready
  */
 module.exports = {
+	config,
+	share,
+	clearAddressBar,
+	enableSearchDialog,
 	loadSearchModule,
 	/** @type {module:mediawiki.page.ready.CheckboxHack} */
 	checkboxHack: require( './checkboxHack.js' ),
@@ -318,5 +388,13 @@ module.exports = {
 	 *
 	 * @type {HTMLElement}
 	 */
-	teleportTarget: teleportTarget.target
+	teleportTarget: teleportTarget.target,
+	/**
+	 * Value of the wprov query parameter, captured before it was stripped
+	 * from the URL, so dependent modules can still read it.
+	 * See https://wikitech.wikimedia.org/wiki/Provenance
+	 *
+	 * @type {string|null}
+	 */
+	wprov
 };

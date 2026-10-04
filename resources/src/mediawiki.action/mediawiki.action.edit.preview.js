@@ -12,9 +12,9 @@
 	 */
 	function doLivePreview( e ) {
 		const promise = require( 'mediawiki.page.preview' ).doPreview( {
-			showDiff: e.target.name === 'wpDiff',
+			showDiff: !!$( e.target ).closest( '#wpDiff' ).length,
 			isLivePreview: true,
-			previewHeader: mw.msg( 'preview' ),
+			previewHeader: mw.message( 'preview' ).escaped(),
 			previewNote: parsedMessages.previewnote,
 			createSpinner: true
 		} );

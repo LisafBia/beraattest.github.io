@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 namespace MediaWiki\ResourceLoader;
@@ -23,6 +9,8 @@ use InvalidArgumentException;
 use MediaWiki\Config\Config;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Output\OutputPage;
+use MediaWiki\Preferences\DefaultPreferencesFactory;
+use MediaWiki\Request\WebRequest;
 use Wikimedia\Minify\CSSMin;
 
 /**
@@ -31,7 +19,7 @@ use Wikimedia\Minify\CSSMin;
  * @ingroup ResourceLoader
  * @internal
  */
-class SkinModule extends LessVarFileModule {
+class SkinModule extends FileModule {
 
 	/**
 	 * Every skin should define which features it would like to reuse for core inside a
@@ -61,11 +49,10 @@ class SkinModule extends LessVarFileModule {
 	 *
 	 * "content-media":
 	 *     Styles for thumbnails and floated elements.
-	 *     Will add styles for the new media structure on wikis where $wgParserEnableLegacyMediaDOM is disabled,
-	 *     or $wgUseContentMediaStyles is enabled.
-	 *     See https://www.mediawiki.org/wiki/Parsing/Media_structure
-	 *
 	 *     Compatibility aliases: "content", "content-thumbnails".
+	 *
+	 * "content-media-dark":
+	 *     Styles for thumbnails and floated elements in dark mode.
 	 *
 	 * "content-links":
 	 *     The skin will apply optional styling rules for links that should be styled differently
@@ -127,6 +114,7 @@ class SkinModule extends LessVarFileModule {
 	 *     Styling rules for the table of contents.
 	 *
 	 * NOTE: The order of the keys defines the order in which the styles are output.
+	 * NOTE: content-media-legacy should not be used by skins.
 	 */
 	private const FEATURE_FILES = [
 		'accessibility' => [
@@ -141,8 +129,31 @@ class SkinModule extends LessVarFileModule {
 			// Reserves whitespace for the logo in a pseudo element.
 			'print' => [ 'resources/src/mediawiki.skinning/logo-print.less' ],
 		],
-		// Placeholder for dynamic definition in getFeatureFilePaths()
-		'content-media' => [],
+		'content-media' => [
+			'all' => [
+				'resources/src/mediawiki.skinning/content.media-common.less',
+			],
+			'screen' => [
+				'resources/src/mediawiki.skinning/content.media-screen.less',
+			],
+			'print' => [
+				'resources/src/mediawiki.skinning/content.media-print.less',
+			],
+		],
+		'content-media-legacy' => [
+			'all' => [
+				'resources/src/mediawiki.skinning/content.thumbnails-common.less',
+			],
+			'screen' => [
+				'resources/src/mediawiki.skinning/content.thumbnails-screen.less',
+			],
+			'print' => [
+				'resources/src/mediawiki.skinning/content.thumbnails-print.less',
+			],
+		],
+		'content-media-dark' => [
+			'screen' => [ 'resources/src/mediawiki.skinning/content.media-dark.less' ],
+		],
 		'content-links' => [
 			'screen' => [ 'resources/src/mediawiki.skinning/content.links.less' ]
 		],
@@ -241,10 +252,15 @@ class SkinModule extends LessVarFileModule {
 		'logo',
 	];
 
-	private const LESS_MESSAGES = [
+	private const TOC_LESS_MESSAGES = [
 		// `toc` feature, used in screen.less
 		'hidetoc',
 		'showtoc',
+	];
+
+	private const SECTION_LESS_MESSAGES = [
+		// `interface-edit-section-links` feature
+		'pipe-separator',
 	];
 
 	/**
@@ -265,7 +281,7 @@ class SkinModule extends LessVarFileModule {
 	 *
 	 * @param string|null $localBasePath
 	 * @param string|null $remoteBasePath
-	 * @see Additonal options at $wgResourceModules
+	 * @see Additional options at $wgResourceModules
 	 */
 	public function __construct(
 		array $options = [],
@@ -273,7 +289,7 @@ class SkinModule extends LessVarFileModule {
 		$remoteBasePath = null
 	) {
 		$features = $options['features'] ?? self::DEFAULT_FEATURES_ABSENT;
-		$listMode = array_keys( $features ) === range( 0, count( $features ) - 1 );
+		$listMode = $features && array_is_list( $features );
 
 		$messages = '';
 		// NOTE: Compatibility is only applied when features are provided
@@ -302,7 +318,13 @@ class SkinModule extends LessVarFileModule {
 		if ( in_array( 'toc', $this->features ) ) {
 			$options['lessMessages'] = array_merge(
 				$options['lessMessages'] ?? [],
-				self::LESS_MESSAGES
+				self::TOC_LESS_MESSAGES
+			);
+		}
+		if ( in_array( 'interface-edit-section-links', $this->features ) ) {
+			$options['lessMessages'] = array_merge(
+				$options['lessMessages'] ?? [],
+				self::SECTION_LESS_MESSAGES
 			);
 		}
 
@@ -408,46 +430,6 @@ class SkinModule extends LessVarFileModule {
 						);
 					}
 				}
-
-				if ( $feature === 'content-media' ) {
-					if ( $this->getConfig()->get( MainConfigNames::UseLegacyMediaStyles ) ) {
-						$featureFilePaths['all'][] = new FilePath(
-							'resources/src/mediawiki.skinning/content.thumbnails-common.less',
-							$defaultLocalBasePath,
-							$defaultRemoteBasePath
-						);
-						$featureFilePaths['screen'][] = new FilePath(
-							'resources/src/mediawiki.skinning/content.thumbnails-screen.less',
-							$defaultLocalBasePath,
-							$defaultRemoteBasePath
-						);
-						$featureFilePaths['print'][] = new FilePath(
-							'resources/src/mediawiki.skinning/content.thumbnails-print.less',
-							$defaultLocalBasePath,
-							$defaultRemoteBasePath
-						);
-					}
-					if (
-						!$this->getConfig()->get( MainConfigNames::ParserEnableLegacyMediaDOM ) ||
-						$this->getConfig()->get( MainConfigNames::UseContentMediaStyles )
-					) {
-						$featureFilePaths['all'][] = new FilePath(
-							'resources/src/mediawiki.skinning/content.media-common.less',
-							$defaultLocalBasePath,
-							$defaultRemoteBasePath
-						);
-						$featureFilePaths['screen'][] = new FilePath(
-							'resources/src/mediawiki.skinning/content.media-screen.less',
-							$defaultLocalBasePath,
-							$defaultRemoteBasePath
-						);
-						$featureFilePaths['print'][] = new FilePath(
-							'resources/src/mediawiki.skinning/content.media-print.less',
-							$defaultLocalBasePath,
-							$defaultRemoteBasePath
-						);
-					}
-				}
 			}
 		}
 		return $featureFilePaths;
@@ -459,12 +441,13 @@ class SkinModule extends LessVarFileModule {
 	 *
 	 * @param array $featureStyles
 	 * @param array $parentStyles
+	 * @param WebRequest $request
 	 *
 	 * @return array
 	 */
-	private function combineFeatureAndParentStyles( $featureStyles, $parentStyles ) {
-		$combinedFeatureStyles = ResourceLoader::makeCombinedStyles( $featureStyles );
-		$combinedParentStyles = ResourceLoader::makeCombinedStyles( $parentStyles );
+	private function combineFeatureAndParentStyles( $featureStyles, $parentStyles, $request ) {
+		$combinedFeatureStyles = ResourceLoader::makeCombinedStyles( $featureStyles, $request );
+		$combinedParentStyles = ResourceLoader::makeCombinedStyles( $parentStyles, $request );
 		$combinedStyles = array_merge( $combinedFeatureStyles, $combinedParentStyles );
 		return [ '' => $combinedStyles ];
 	}
@@ -494,15 +477,6 @@ class SkinModule extends LessVarFileModule {
 				$featureStyles['all'][] = '.mw-wiki-logo { ' .
 					'background-size: 135px auto; }';
 			} else {
-				if ( isset( $logo['1.5x'] ) ) {
-					$featureStyles[
-						'(-webkit-min-device-pixel-ratio: 1.5), ' .
-						'(min-resolution: 1.5dppx), ' .
-						'(min-resolution: 144dpi)'
-					][] = '.mw-wiki-logo { background-image: ' .
-						CSSMin::buildUrlValue( $logo['1.5x'] ) . ';' .
-						'background-size: 135px auto; }';
-				}
 				if ( isset( $logo['2x'] ) ) {
 					$featureStyles[
 						'(-webkit-min-device-pixel-ratio: 2), ' .
@@ -533,14 +507,38 @@ class SkinModule extends LessVarFileModule {
 		if ( $isLogoFeatureEnabled ) {
 			$featureStyles = $this->generateAndAppendLogoStyles( $featureStyles, $context );
 		}
+		$isAccessibilityEnabled = in_array( 'accessibility', $this->features );
 
-		return $this->combineFeatureAndParentStyles( $featureStyles, $parentStyles );
+		$config = $this->getConfig();
+		$limits = $config->get( MainConfigNames::ThumbLimits );
+
+		// @todo: these may be converted to em units at later point in project (pending feedback)
+		// @todo: This may be moved to a dedicated module later on to group user customizations
+		// (for example the underline user preference currently residing in `content-links` feature.
+		if ( $isAccessibilityEnabled ) {
+			[ $smallSize, $defaultSize, $largeSize ] = DefaultPreferencesFactory::getNormalizedThumbSizes(
+				$config->get( MainConfigNames::ThumbLimits ),
+				$config->get( MainConfigNames::DefaultUserOptions )
+			);
+			$featureStyles['all'][] = <<<CSS
+:root {
+	--image-size-small: {$smallSize}px;
+	--image-size-standard: {$defaultSize}px;
+	--image-size-large: {$largeSize}px;
+	--image-size-user: var( --image-size-standard );
+}
+html.skin-thumbsize-clientpref-small {
+	--image-size-user: var( --image-size-small );
+}
+html.skin-thumbsize-clientpref-large {
+	--image-size-user: var( --image-size-large );
+}
+CSS;
+		}
+
+		return $this->combineFeatureAndParentStyles( $featureStyles, $parentStyles, $context->getRequest() );
 	}
 
-	/**
-	 * @param Context $context
-	 * @return array
-	 */
 	public function getPreloadLinks( Context $context ): array {
 		if ( !in_array( 'logo', $this->features ) ) {
 			return [];
@@ -559,34 +557,18 @@ class SkinModule extends LessVarFileModule {
 			return [ $logo['svg'] => [ 'as' => 'image' ] ];
 		}
 
-		$logosPerDppx = [];
-		foreach ( $logo as $dppx => $src ) {
-			// Keys are in this format: "1.5x"
-			$dppx = substr( $dppx, 0, -1 );
-			$logosPerDppx[$dppx] = $src;
-		}
-
-		// Because PHP can't have floats as array keys
-		uksort( $logosPerDppx, static function ( $a, $b ) {
-			$a = floatval( $a );
-			$b = floatval( $b );
-			// Sort from smallest to largest (e.g. 1x, 1.5x, 2x)
-			return $a <=> $b;
-		} );
-
 		$logos = [];
-		foreach ( $logosPerDppx as $dppx => $src ) {
-			$logos[] = [
-				'dppx' => $dppx,
-				'src' => $src
-			];
+		foreach ( $logo as $dppx => $src ) {
+			// Keys are in this format: "2x"
+			$logos[] = [ 'dppx' => (float)$dppx, 'src' => $src ];
 		}
+		// Sort from smallest to largest (e.g. 1x, 2x)
+		usort( $logos, static fn ( $a, $b ) => $a['dppx'] <=> $b['dppx'] );
 
 		$logosCount = count( $logos );
 		$preloadLinks = [];
 		// Logic must match SkinModule:
-		// - 1x applies to resolution < 1.5dppx
-		// - 1.5x applies to resolution >= 1.5dppx && < 2dppx
+		// - 1x applies to resolution < 2dppx
 		// - 2x applies to resolution >= 2dppx
 		// Note that min-resolution and max-resolution are both inclusive.
 		for ( $i = 0; $i < $logosCount; $i++ ) {
@@ -721,20 +703,11 @@ class SkinModule extends LessVarFileModule {
 				$conf,
 				$logoHD['svg']
 			);
-		} elseif ( isset( $logoHD['1.5x'] ) || isset( $logoHD['2x'] ) ) {
-			// Only 1.5x and 2x are supported
-			if ( isset( $logoHD['1.5x'] ) ) {
-				$logoUrls['1.5x'] = OutputPage::transformResourcePath(
-					$conf,
-					$logoHD['1.5x']
-				);
-			}
-			if ( isset( $logoHD['2x'] ) ) {
-				$logoUrls['2x'] = OutputPage::transformResourcePath(
-					$conf,
-					$logoHD['2x']
-				);
-			}
+		} elseif ( isset( $logoHD['2x'] ) ) {
+			$logoUrls['2x'] = OutputPage::transformResourcePath(
+				$conf,
+				$logoHD['2x']
+			);
 		} else {
 			// Return a string rather than a one-element array, getLogoPreloadlinks depends on this
 			return $logo1Url;
@@ -761,8 +734,14 @@ class SkinModule extends LessVarFileModule {
 	 */
 	protected function getLessVars( Context $context ) {
 		$lessVars = parent::getLessVars( $context );
-		$logos = self::getAvailableLogos( $this->getConfig(), $context->getLanguage() );
+		$config = $this->getConfig();
+		$logos = self::getAvailableLogos( $config, $context->getLanguage() );
+		[ $smallSize, $defaultSize, $largeSize ] = DefaultPreferencesFactory::getNormalizedThumbSizes(
+			$config->get( MainConfigNames::ThumbLimits ),
+			$config->get( MainConfigNames::DefaultUserOptions )
+		);
 
+		$lessVars[ 'image-size-standard' ] = $defaultSize;
 		if ( isset( $logos['wordmark'] ) ) {
 			$logo = $logos['wordmark'];
 			$lessVars[ 'logo-enabled' ] = true;
@@ -775,10 +754,14 @@ class SkinModule extends LessVarFileModule {
 		return $lessVars;
 	}
 
+	/** @inheritDoc */
 	public function getDefinitionSummary( Context $context ) {
 		$summary = parent::getDefinitionSummary( $context );
+		$config = $this->getConfig();
 		$summary[] = [
-			'logos' => self::getAvailableLogos( $this->getConfig(), $context->getLanguage() ),
+			'csslastmodified' => '2026-06-22',
+			'thumblimits' => $config->get( MainConfigNames::ThumbLimits ),
+			'logos' => self::getAvailableLogos( $config, $context->getLanguage() ),
 		];
 		return $summary;
 	}

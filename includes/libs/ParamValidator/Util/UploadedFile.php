@@ -2,9 +2,9 @@
 
 namespace Wikimedia\ParamValidator\Util;
 
+use Psr\Http\Message\StreamInterface;
 use Psr\Http\Message\UploadedFileInterface;
 use RuntimeException;
-use Wikimedia\AtEase\AtEase;
 
 /**
  * A simple implementation of UploadedFileInterface
@@ -83,7 +83,8 @@ class UploadedFile implements UploadedFileInterface {
 		}
 	}
 
-	public function getStream() {
+	/** @inheritDoc */
+	public function getStream(): StreamInterface {
 		if ( $this->stream ) {
 			return $this->stream;
 		}
@@ -93,7 +94,8 @@ class UploadedFile implements UploadedFileInterface {
 		return $this->stream;
 	}
 
-	public function moveTo( $targetPath ) {
+	/** @inheritDoc */
+	public function moveTo( string $targetPath ): void {
 		$this->checkError();
 
 		if ( $this->fromUpload && !is_uploaded_file( $this->data['tmp_name'] ) ) {
@@ -101,12 +103,10 @@ class UploadedFile implements UploadedFileInterface {
 		}
 
 		error_clear_last();
-		$ret = AtEase::quietCall(
-			$this->fromUpload ? 'move_uploaded_file' : 'rename',
-			$this->data['tmp_name'],
-			$targetPath
-		);
-		if ( $ret === false ) {
+		$func = $this->fromUpload ? 'move_uploaded_file' : 'rename';
+		// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+		$ret = @$func( $this->data['tmp_name'], $targetPath );
+		if ( !$ret ) {
 			$err = error_get_last();
 			throw new RuntimeException( "Move failed: " . ( $err['message'] ?? 'Unknown error' ) );
 		}
@@ -118,20 +118,24 @@ class UploadedFile implements UploadedFileInterface {
 		}
 	}
 
-	public function getSize() {
+	/** @inheritDoc */
+	public function getSize(): ?int {
 		return $this->data['size'] ?? null;
 	}
 
-	public function getError() {
+	/** @inheritDoc */
+	public function getError(): int {
 		return $this->data['error'] ?? UPLOAD_ERR_NO_FILE;
 	}
 
-	public function getClientFilename() {
+	/** @inheritDoc */
+	public function getClientFilename(): ?string {
 		$ret = $this->data['name'] ?? null;
 		return $ret === '' ? null : $ret;
 	}
 
-	public function getClientMediaType() {
+	/** @inheritDoc */
+	public function getClientMediaType(): ?string {
 		$ret = $this->data['type'] ?? null;
 		return $ret === '' ? null : $ret;
 	}

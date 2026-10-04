@@ -1,22 +1,35 @@
 <?php
+declare( strict_types = 1 );
 
 namespace MediaWiki\OutputTransform\Stages;
 
-use MediaWiki\OutputTransform\ContentTextTransformStage;
+use MediaWiki\Config\ServiceOptions;
+use MediaWiki\OutputTransform\OutputTransformStage;
 use MediaWiki\Parser\ParserOptions;
 use MediaWiki\Parser\ParserOutput;
+use Psr\Log\LoggerInterface;
 
 /**
  * Adds RedirectHeader if it exists
  * @internal
  */
-class AddRedirectHeader extends ContentTextTransformStage {
+class AddRedirectHeader extends OutputTransformStage {
 
-	public function shouldRun( ParserOutput $po, ?ParserOptions $popts, array $options = [] ): bool {
+	public function __construct(
+		ServiceOptions $options,
+		LoggerInterface $logger,
+	) {
+		parent::__construct( $options, $logger );
+	}
+
+	public function shouldRun( ParserOutput $po, ParserOptions $popts, array $options = [] ): bool {
 		return $po->getRedirectHeader() !== null;
 	}
 
-	protected function transformText( string $text, ParserOutput $po, ?ParserOptions $popts, array &$options ): string {
-		return $po->getRedirectHeader() . $text;
+	public function transform( ParserOutput $po, ParserOptions $popts, array &$options ): ParserOutput {
+		$redirectHeader = $po->getRedirectHeader();
+		'@phan-var string $redirectHeader';
+		$po->getContentHolder()->prependHtmlString( $redirectHeader );
+		return $po;
 	}
 }

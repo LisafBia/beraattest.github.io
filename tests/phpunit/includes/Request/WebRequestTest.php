@@ -1,13 +1,17 @@
 <?php
 
+use MediaWiki\Exception\MWException;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Request\ProxyLookup;
 use MediaWiki\Request\WebRequest;
+use MediaWiki\User\UserIdentity;
+use MediaWiki\User\UserIdentityValue;
 
 /**
  * @covers \MediaWiki\Request\WebRequest
  *
  * @group WebRequest
+ * @group Database
  */
 class WebRequestTest extends MediaWikiIntegrationTestCase {
 	private const INTERNAL_SERVER = 'http://wiki.site';
@@ -207,12 +211,10 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 		$req = $reflection->newInstanceWithoutConstructor();
 
 		$prop = $reflection->getProperty( 'data' );
-		$prop->setAccessible( true );
 		$prop->setValue( $req, $data );
 
 		if ( isset( $config['requestTime'] ) ) {
 			$prop = $reflection->getProperty( 'requestTime' );
-			$prop->setAccessible( true );
 			$prop->setValue( $req, $config['requestTime'] );
 		}
 
@@ -265,7 +267,10 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 	}
 
 	public function testGetIntArray() {
-		$req = $this->mockWebRequest( [ 'x' => [ 'Value' ], 'y' => [ '0', '4.2', '-2' ] ] );
+		$req = $this->mockWebRequest( [
+			'x' => [ 'string', [], [ 'non-empty array' ] ],
+			'y' => [ '0', '4.2', '-2' ],
+		] );
 		$this->assertSame( [ 0 ], $req->getIntArray( 'x' ), 'Text becomes 0' );
 		$this->assertNull( $req->getIntArray( 'z' ), 'Not found' );
 		$this->assertSame( [ 0, 4, -2 ], $req->getIntArray( 'y' ) );
@@ -421,7 +426,12 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 				return true;
 			}
 		] );
-		$this->setService( 'ProxyLookup', new ProxyLookup( [], $cdn, $hookContainer ) );
+		$this->setService( 'ProxyLookup', new ProxyLookup(
+			[],
+			$cdn,
+			$hookContainer,
+			$this->getServiceContainer()->getLocalServerObjectCache()
+		) );
 
 		$request = new WebRequest();
 		$result = $request->getIP();
@@ -470,7 +480,7 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 				[ '12.0.0.1', '12.0.0.2' ],
 				[],
 				false,
-				'With X-Forwaded-For'
+				'With X-Forwarded-For'
 			],
 			[
 				'12.0.0.1',
@@ -481,7 +491,7 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 				[],
 				[],
 				false,
-				'With X-Forwaded-For and disallowed server'
+				'With X-Forwarded-For and disallowed server'
 			],
 			[
 				'12.0.0.2',
@@ -492,7 +502,7 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 				[ '12.0.0.1' ],
 				[],
 				false,
-				'With multiple X-Forwaded-For and only one allowed server'
+				'With multiple X-Forwarded-For and only one allowed server'
 			],
 			[
 				'10.0.0.3',
@@ -503,7 +513,7 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 				[ '12.0.0.1', '12.0.0.2' ],
 				[],
 				false,
-				'With X-Forwaded-For and private IP (from cache proxy)'
+				'With X-Forwarded-For and private IP (from cache proxy)'
 			],
 			[
 				'10.0.0.4',
@@ -514,7 +524,7 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 				[ '12.0.0.1', '12.0.0.2', '10.0.0.3' ],
 				[],
 				true,
-				'With X-Forwaded-For and private IP (allowed)'
+				'With X-Forwarded-For and private IP (allowed)'
 			],
 			[
 				'10.0.0.4',
@@ -525,7 +535,7 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 				[ '12.0.0.1', '12.0.0.2' ],
 				[ '10.0.0.3' ],
 				true,
-				'With X-Forwaded-For and private IP (allowed)'
+				'With X-Forwarded-For and private IP (allowed)'
 			],
 			[
 				'10.0.0.3',
@@ -536,7 +546,7 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 				[ '12.0.0.1', '12.0.0.2' ],
 				[ '10.0.0.3' ],
 				false,
-				'With X-Forwaded-For and private IP (disallowed)'
+				'With X-Forwarded-For and private IP (disallowed)'
 			],
 			[
 				'12.0.0.3',
@@ -547,7 +557,7 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 				[],
 				[ '12.0.0.1', '12.0.0.2' ],
 				false,
-				'With X-Forwaded-For'
+				'With X-Forwarded-For'
 			],
 			[
 				'12.0.0.2',
@@ -558,7 +568,7 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 				[],
 				[ '12.0.0.1' ],
 				false,
-				'With multiple X-Forwaded-For and only one allowed server'
+				'With multiple X-Forwarded-For and only one allowed server'
 			],
 			[
 				'12.0.0.2',
@@ -569,7 +579,7 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 				[],
 				[ '12.0.0.2' ],
 				false,
-				'With X-Forwaded-For and private IP and hook (disallowed)'
+				'With X-Forwarded-For and private IP and hook (disallowed)'
 			],
 			[
 				'12.0.0.1',
@@ -605,7 +615,12 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 		] );
 
 		$hookContainer = $this->createHookContainer();
-		$this->setService( 'ProxyLookup', new ProxyLookup( [], [], $hookContainer ) );
+		$this->setService( 'ProxyLookup', new ProxyLookup(
+			[],
+			[],
+			$hookContainer,
+			$this->getServiceContainer()->getLocalServerObjectCache()
+		) );
 
 		$request = new WebRequest();
 		# Next call should throw an exception about lacking an IP
@@ -624,14 +639,14 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 			[
 				'zh-cn,zh-tw',
 				[ 'zh-cn' => 1.0, 'zh-tw' => 1.0 ],
-				'Two equally prefered languages, listed in appearance order per rfc3282. Checks c9119'
+				'Two equally preferred languages, listed in appearance order per rfc3282. Checks c9119'
 			],
 			[
 				'es, en; q=0.5',
 				[ 'es' => 1.0, 'en' => 0.5 ],
 				'Spanish as first language and English and second'
 			],
-			[ 'en; q=0.5, es', [ 'es' => 1.0, 'en' => 0.5 ], 'Less prefered language first' ],
+			[ 'en; q=0.5, es', [ 'es' => 1.0, 'en' => 0.5 ], 'Less preferred language first' ],
 			[ 'fr, en; q=0.5, es', [ 'fr' => 1.0, 'es' => 1.0, 'en' => 0.5 ], 'Three languages' ],
 			[ 'en; q=0.5, es', [ 'es' => 1.0, 'en' => 0.5 ], 'Two languages' ],
 			[ 'en, zh;q=0', [ 'en' => 1.0 ], "It's Chinese to me" ],
@@ -643,7 +658,7 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 			[
 				'en-gb, en-us; q=1',
 				[ 'en-gb' => 1.0, 'en-us' => 1.0 ],
-				'Two equally prefered English variants'
+				'Two equally preferred English variants'
 			],
 			[ '_', [], 'Invalid input' ],
 		];
@@ -711,18 +726,54 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 			self::INTERNAL_SERVER . '/w/index.php?title=Title&action=history',
 		];
 		return [
-			[ self::INTERNAL_SERVER . '/Title', $cdnUrls, /* matchOrder= */ false, true ],
-			[ self::INTERNAL_SERVER . '/Title', $cdnUrls, /* matchOrder= */ true, true ],
-			[ self::INTERNAL_SERVER . '/Foo', $cdnUrls, /* matchOrder= */ false, false ],
-			[ self::INTERNAL_SERVER . '/Foo', $cdnUrls, /* matchOrder= */ true, false ],
-			[ self::INTERNAL_SERVER . '/Thing', $cdnUrls, /* matchOrder= */ false, false ],
-			[ self::INTERNAL_SERVER . '/Thing', $cdnUrls, /* matchOrder= */ true, false ],
-			[ self::INTERNAL_SERVER . '/w/index.php?action=history&title=Foo', $cdnUrls, /* matchOrder= */ false, false ],
-			[ self::INTERNAL_SERVER . '/w/index.php?action=history&title=Foo', $cdnUrls, /* matchOrder= */ true, false ],
-			[ self::INTERNAL_SERVER . '/w/index.php?title=Thing&action=history', $cdnUrls, /* matchOrder= */ false, false ],
-			[ self::INTERNAL_SERVER . '/w/index.php?action=history&title=Thing', $cdnUrls, /* matchOrder= */ true, false ],
-			[ self::INTERNAL_SERVER . '/w/index.php?action=history&title=Title', $cdnUrls, /* matchOrder= */ false, true ],
-			[ self::INTERNAL_SERVER . '/w/index.php?action=history&title=Title', $cdnUrls, /* matchOrder= */ true, false ],
+			[ self::INTERNAL_SERVER . '/Title', $cdnUrls,
+				'matchOrder' => false,
+				'expected' => true
+			],
+			[ self::INTERNAL_SERVER . '/Title', $cdnUrls,
+				'matchOrder' => true,
+				'expected' => true
+			],
+			[ self::INTERNAL_SERVER . '/Foo', $cdnUrls,
+				'matchOrder' => false,
+				'expected' => false
+			],
+			[ self::INTERNAL_SERVER . '/Foo', $cdnUrls,
+				'matchOrder' => true,
+				'expected' => false
+			],
+			[ self::INTERNAL_SERVER . '/Thing', $cdnUrls,
+				'matchOrder' => false,
+				'expected' => false
+			],
+			[ self::INTERNAL_SERVER . '/Thing', $cdnUrls,
+				'matchOrder' => true,
+				'expected' => false
+			],
+			[ self::INTERNAL_SERVER . '/w/index.php?action=history&title=Foo', $cdnUrls,
+				'matchOrder' => false,
+				'expected' => false
+			],
+			[ self::INTERNAL_SERVER . '/w/index.php?action=history&title=Foo', $cdnUrls,
+				'matchOrder' => true,
+				'expected' => false
+			],
+			[ self::INTERNAL_SERVER . '/w/index.php?title=Thing&action=history', $cdnUrls,
+				'matchOrder' => false,
+				'expected' => false
+			],
+			[ self::INTERNAL_SERVER . '/w/index.php?action=history&title=Thing', $cdnUrls,
+				'matchOrder' => true,
+				'expected' => false
+			],
+			[ self::INTERNAL_SERVER . '/w/index.php?action=history&title=Title', $cdnUrls,
+				'matchOrder' => false,
+				'expected' => true
+			],
+			[ self::INTERNAL_SERVER . '/w/index.php?action=history&title=Title', $cdnUrls,
+				'matchOrder' => true,
+				'expected' => false
+			],
 		];
 	}
 
@@ -753,6 +804,52 @@ class WebRequestTest extends MediaWikiIntegrationTestCase {
 			'/wiki/',
 			'/w/index.php/Hello?x=y',
 			false
+		];
+	}
+
+	/**
+	 * @dataProvider provideGetSecurityLogContext
+	 */
+	public function testGetSecurityLogContext( ?UserIdentity $user ) {
+		$request = new WebRequest();
+		$this->setServerVars( [ 'REMOTE_ADDR' => '127.0.0.1' ] );
+		$this->setTemporaryHook(
+			'GetSecurityLogContext',
+			function ( array $info, array &$context ) use ( $request, $user ) {
+				$this->assertSame( $request, $info['request'] );
+				$this->assertSame( $user, $info['user'] );
+				$context['foo'] = 'bar';
+			}
+		);
+
+		$context = $request->getSecurityLogContext( $user );
+		$this->assertSame( '127.0.0.1', $context['clientIp'] );
+		if ( $user ) {
+			$this->assertSame( $user->getName(), $context['user'] );
+			$this->assertFalse( $context['user_is_bot'] );
+		} else {
+			$this->assertArrayNotHasKey( 'user', $context );
+		}
+		$this->assertSame( 'bar', $context['foo'] );
+
+		$this->setTemporaryHook( 'GetSecurityLogContext', fn () => $this->fail( 'should be cached' ) );
+		$request->getSecurityLogContext( $user );
+
+		$this->setTemporaryHook(
+			'GetSecurityLogContext',
+			static function ( array $info, array &$context ) use ( $request, $user ) {
+				$context['foo'] = 'bar2';
+			}
+		);
+		$context2 = $request->getSecurityLogContext( new UserIdentityValue( 0, 'DifferentTestUser' ) );
+		// different cache entry for different user
+		$this->assertSame( 'DifferentTestUser', $context2['user'] );
+	}
+
+	public static function provideGetSecurityLogContext() {
+		return [
+			[ null ],
+			[ new UserIdentityValue( 0, 'TestUser' ) ],
 		];
 	}
 }

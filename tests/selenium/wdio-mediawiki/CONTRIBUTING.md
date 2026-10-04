@@ -4,7 +4,7 @@
 
 1. Look for any outstanding bugs.
    Especially (unreleased) regressions should be addressed before a release.
-   <https://phabricator.wikimedia.org/tag/mediawiki-core-tests>
+   <https://phabricator.wikimedia.org/tag/browser_test_platform>
 
 2. Create or reset your `release` branch to the latest head of the repository
 
@@ -32,7 +32,7 @@
 5. Set the next release version in [package.json](./package.json).
 
 6. Run `npm install` in the root of MediaWiki Core to update `package-lock.json` file.
-   Make sure the machine has the same versions of Node.js and npm as CI.
+   Make sure the machine has the same versions of Node.js and npm as CI by using [https://github.com/wikimedia/fresh](Fresh).
 
    ```bash
    # From mediawiki-core
@@ -52,5 +52,8 @@
 
    ```bash
    # From tests/selenium/wdio-mediawiki/
+   npm login
    npm publish
    ```
+
+9. Please update [https://gerrit.wikimedia.org/g/mediawiki/extensions/examples](Example extension for MediaWiki) extension so it uses the newly published wdio-mediawiki.

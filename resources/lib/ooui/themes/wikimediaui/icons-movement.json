@@ -18,13 +18,16 @@
 			"color": "#d73333"
 		},
 		"warning": {
-			"color": "#edab00"
+			"color": "#ab7f2a"
 		},
 		"success": {
 			"color": "#14866d"
 		}
 	},
 	"images": {
+		"arrowDown": {
+			"file": "images/icons/arrowDown.svg"
+		},
 		"arrowNext": {
 			"file": {
 				"ltr": "images/icons/arrowNext-ltr.svg",
@@ -37,6 +40,9 @@
 				"rtl": "images/icons/arrowPrevious-rtl.svg"
 			}
 		},
+		"arrowUp": {
+			"file": "images/icons/arrowUp.svg"
+		},
 		"collapse": {
 			"file": "images/icons/collapse.svg"
 		},
@@ -44,7 +50,17 @@
 			"file": "images/icons/downTriangle.svg"
 		},
 		"draggable": {
-			"file": "images/icons/draggable.svg"
+			"file": "images/icons/draggableVertical.svg",
+			"deprecated": "Renamed since v0.55.0, use 'draggableVertical'/'draggableHorizontal'/ 'draggableXY' instead"
+		},
+		"draggableHorizontal": {
+			"file": "images/icons/draggableHorizontal.svg"
+		},
+		"draggableVertical": {
+			"file": "images/icons/draggableVertical.svg"
+		},
+		"draggableXY": {
+			"file": "images/icons/draggableXY.svg"
 		},
 		"doubleChevronEnd": {
 			"file": {

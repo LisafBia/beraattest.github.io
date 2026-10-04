@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @author Trevor Parscal
  * @author Roan Kattouw
@@ -23,20 +9,21 @@
 namespace MediaWiki\ResourceLoader;
 
 use CSSJanus;
+use InvalidArgumentException;
 use MediaWiki\Content\Content;
 use MediaWiki\Json\FormatJson;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageIdentity;
-use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Title\Title;
 use MediaWiki\Title\TitleValue;
-use MemoizedCallable;
+use MediaWiki\WikiMap\WikiMap;
 use Wikimedia\Minify\CSSMin;
-use Wikimedia\Rdbms\Database;
+use Wikimedia\ObjectCache\MemoizedCallable;
 use Wikimedia\Rdbms\IReadableDatabase;
 use Wikimedia\Timestamp\ConvertibleTimestamp;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Abstraction for ResourceLoader modules which pull from wiki pages
@@ -77,7 +64,7 @@ class WikiModule extends Module {
 	 *     ]
 	 *   ]
 	 * ]
-	 * @see self::fetchTitleInfo()
+	 * @see self::doBatchFetch()
 	 * @see self::makeTitleKey()
 	 * @var array
 	 */
@@ -209,6 +196,8 @@ class WikiModule extends Module {
 			$format = CONTENT_FORMAT_JAVASCRIPT;
 		} elseif ( $handler->isSupportedFormat( CONTENT_FORMAT_JSON ) ) {
 			$format = CONTENT_FORMAT_JSON;
+		} elseif ( $handler->isSupportedFormat( CONTENT_FORMAT_VUE ) ) {
+			$format = CONTENT_FORMAT_VUE;
 		} else {
 			return null; // Bad content model
 		}
@@ -229,7 +218,7 @@ class WikiModule extends Module {
 		PageIdentity $page, Context $context, $maxRedirects = 1
 	) {
 		$overrideCallback = $context->getContentOverrideCallback();
-		$content = $overrideCallback ? call_user_func( $overrideCallback, $page ) : null;
+		$content = $overrideCallback ? $overrideCallback( $page ) : null;
 		if ( $content ) {
 			if ( !$content instanceof Content ) {
 				$this->getLogger()->error(
@@ -241,7 +230,7 @@ class WikiModule extends Module {
 		} else {
 			$revision = MediaWikiServices::getInstance()
 				->getRevisionLookup()
-				->getKnownCurrentRevision( $page );
+				->getKnownLatestRevision( $page );
 			if ( !$revision ) {
 				return null;
 			}
@@ -275,7 +264,7 @@ class WikiModule extends Module {
 		if ( $overrideCallback && $this->getSource() === 'local' ) {
 			foreach ( $this->getPages( $context ) as $page => $info ) {
 				$title = Title::newFromText( $page );
-				if ( $title && call_user_func( $overrideCallback, $title ) !== null ) {
+				if ( $title && $overrideCallback( $title ) !== null ) {
 					return true;
 				}
 			}
@@ -290,7 +279,15 @@ class WikiModule extends Module {
 	 */
 	public function getScript( Context $context ) {
 		if ( $this->isPackaged() ) {
-			return $this->getPackageFiles( $context );
+			$packageFiles = $this->getPackageFiles( $context );
+			// TODO deduplicate this from FileModule, move up to Module?
+			foreach ( $packageFiles['files'] as &$file ) {
+				if ( $file['type'] === 'script+style' ) {
+					$file['content'] = $file['content']['script'];
+					$file['type'] = 'script';
+				}
+			}
+			return $packageFiles;
 		} else {
 			$scripts = '';
 			foreach ( $this->getPages( $context ) as $titleText => $options ) {
@@ -358,7 +355,12 @@ class WikiModule extends Module {
 
 		$files = [];
 		foreach ( $this->getPages( $context ) as $titleText => $options ) {
-			if ( $options['type'] !== 'script' && $options['type'] !== 'data' ) {
+
+			if (
+				$options['type'] !== 'script' &&
+				$options['type'] !== 'script-vue' &&
+				$options['type'] !== 'data'
+			) {
 				continue;
 			}
 			$content = $this->getContent( $titleText, $context );
@@ -372,6 +374,27 @@ class WikiModule extends Module {
 					];
 					// First script becomes the "main" script
 					$main ??= $fileKey;
+
+				} elseif ( $options['type'] === 'script-vue' ) {
+					try {
+						$files[$fileKey]['content'] = $this->parseVueContent( $context, $content );
+					} catch ( InvalidArgumentException $e ) {
+						$message = "Failed to parse vue component in $titleText: {$e->getMessage()}";
+						$files[$fileKey]['content'] = [
+							'script' => 'mw.log.error( ' . $context->encodeJson( $message ) . ' )',
+							'style' => ''
+						];
+					}
+					if ( $files[$fileKey]['content']['styleLang'] === 'less' ) {
+						$message = "Failed to parse Vue component in $titleText: Use of LESS styles is not supported.";
+						$files[$fileKey]['content'] = [
+							'script' => 'mw.log.error( ' . $context->encodeJson( $message ) . ' )',
+							'style' => ''
+						];
+					}
+					$files[$fileKey]['content']['titleText'] = $titleText;
+					$files[$fileKey]['type'] = 'script+style';
+
 				} elseif ( $options['type'] === 'data' ) {
 					$data = FormatJson::decode( $content );
 					if ( $data == null ) {
@@ -430,6 +453,26 @@ class WikiModule extends Module {
 			$style = ResourceLoader::makeComment( $titleText ) . $style;
 			$styles[$media][] = $style;
 		}
+
+		if ( $this->isPackaged() ) {
+			$packageFiles = $this->getPackageFiles( $context );
+			foreach ( $packageFiles['files'] as $fileName => $file ) {
+				if ( $file['type'] === 'script+style' ) {
+					$style = $file['content']['style'];
+					if ( $this->getFlip( $context ) ) {
+						$style = CSSJanus::transform( $style, true, false );
+					}
+
+					$style = MemoizedCallable::call(
+						[ CSSMin::class, 'remap' ],
+						[ $style, false, $remoteDir, true ]
+					);
+
+					$style = ResourceLoader::makeComment( $file['content']['titleText'] ) . $style;
+					$styles['all'][] = $style;
+				}
+			}
+		}
 		return $styles;
 	}
 
@@ -455,7 +498,7 @@ class WikiModule extends Module {
 		$summary = parent::getDefinitionSummary( $context );
 		$summary[] = [
 			'pages' => $this->getPages( $context ),
-			// Includes meta data of current revisions
+			// Includes meta data of latest revisions
 			'titleInfo' => $this->getTitleInfo( $context ),
 		];
 		return $summary;
@@ -491,12 +534,12 @@ class WikiModule extends Module {
 		return count( $revisions ) === 0;
 	}
 
-	private function setTitleInfo( $batchKey, array $titleInfo ) {
+	private function setTitleInfo( string $batchKey, array $titleInfo ) {
 		$this->titleInfo[$batchKey] = $titleInfo;
 	}
 
-	private static function makeTitleKey( LinkTarget $title ) {
-		// Used for keys in titleInfo.
+	private static function makeTitleKey( LinkTarget $title ): string {
+		// T145673: Map page title to a canonical form to avoid corruption on non-English wikis
 		return "{$title->getNamespace()}:{$title->getDBkey()}";
 	}
 
@@ -507,25 +550,43 @@ class WikiModule extends Module {
 	 */
 	protected function getTitleInfo( Context $context ) {
 		$pageNames = array_keys( $this->getPages( $context ) );
-		sort( $pageNames );
-		$batchKey = implode( '|', $pageNames );
-		if ( !isset( $this->titleInfo[$batchKey] ) ) {
-			$this->titleInfo[$batchKey] = static::fetchTitleInfo( $this->getDB(), $pageNames, __METHOD__ );
-		}
+		$titleInfo = [];
+		$db = $this->getDb();
+		if ( !WikiMap::isCurrentWikiDbDomain( $db->getDomainID() ) ) {
+			sort( $pageNames );
+			$batchKey = implode( '|', $pageNames );
+			if ( !isset( $this->titleInfo[$batchKey] ) ) {
+				$titleDetails = static::doBatchFetch( $pageNames, $db, __METHOD__ );
+				$this->setTitleInfo( $batchKey, $titleDetails );
+			}
+			$titleInfo = $this->titleInfo[$batchKey];
+		} else {
+			// Local wiki, should be a cache-hit in LinkCache from WikiModule::preloadTitleInfo
+			foreach ( $pageNames as $titleText ) {
+				$title = Title::newFromText( $titleText );
+				if ( $title && $title->exists() ) {
+						// See docs in WikiModule::doBatchFetch
+						$titleInfo[self::makeTitleKey( $title )] = [
+							'page_len' => (string)$title->getLength(),
+							'page_latest' => $title->getLatestRevID(),
+							'page_touched' => $title->getTouched(),
+						];
+				}
+			}
 
-		$titleInfo = $this->titleInfo[$batchKey];
+		}
 
 		// Override the title info from the overrides, if any
 		$overrideCallback = $context->getContentOverrideCallback();
 		if ( $overrideCallback ) {
 			foreach ( $pageNames as $page ) {
 				$title = Title::newFromText( $page );
-				$content = $title ? call_user_func( $overrideCallback, $title ) : null;
+				$content = $title ? $overrideCallback( $title ) : null;
 				if ( $content !== null ) {
 					$titleInfo[$title->getPrefixedText()] = [
 						'page_len' => $content->getSize(),
 						'page_latest' => 'TBD', // None available
-						'page_touched' => ConvertibleTimestamp::now( TS_MW ),
+						'page_touched' => ConvertibleTimestamp::now( TS::MW ),
 					];
 				}
 			}
@@ -535,37 +596,37 @@ class WikiModule extends Module {
 	}
 
 	/**
-	 * @param IReadableDatabase $db
+	 * Get title info from a foreign wiki
+	 *
 	 * @param string[] $pages
-	 * @param string $fname @phan-mandatory-param
-	 * @return array
 	 */
-	protected static function fetchTitleInfo( IReadableDatabase $db, array $pages, $fname = __METHOD__ ) {
+	protected static function doBatchFetch( array $pages, IReadableDatabase $db, string $fname ): array {
 		$titleInfo = [];
 		$linkBatchFactory = MediaWikiServices::getInstance()->getLinkBatchFactory();
-		$batch = $linkBatchFactory->newLinkBatch();
-		foreach ( $pages as $titleText ) {
-			$title = Title::newFromText( $titleText );
+		$linkbatch = $linkBatchFactory->newLinkBatch();
+
+		foreach ( $pages as $page ) {
+			$title = Title::newFromText( $page );
 			if ( $title ) {
-				// Page name may be invalid if user-provided (e.g. gadgets)
-				$batch->addObj( $title );
+				$linkbatch->addObj( $title );
 			}
 		}
-		if ( !$batch->isEmpty() ) {
+
+		if ( !$linkbatch->isEmpty() ) {
 			$res = $db->newSelectQueryBuilder()
-				// Include page_touched to allow purging if cache is poisoned (T117587, T113916)
 				->select( [ 'page_namespace', 'page_title', 'page_touched', 'page_len', 'page_latest' ] )
 				->from( 'page' )
-				->where( $batch->constructSet( 'page', $db ) )
+				->where( $linkbatch->constructSet( 'page', $db ) )
 				->caller( $fname )->fetchResultSet();
 			foreach ( $res as $row ) {
-				// Avoid including ids or timestamps of revision/page tables so
-				// that versions are not wasted
 				$title = new TitleValue( (int)$row->page_namespace, $row->page_title );
 				$titleInfo[self::makeTitleKey( $title )] = [
+					// Needed by WikiModule::isKnownEmpty
 					'page_len' => $row->page_len,
+					// Each revision forms a new module version hash and invalidate CDN/browser cache
 					'page_latest' => $row->page_latest,
-					'page_touched' => ConvertibleTimestamp::convert( TS_MW, $row->page_touched ),
+					// Include page_touched to allow purging if cache is poisoned (T117587, T113916)
+					'page_touched' => ConvertibleTimestamp::convert( TS::MW, $row->page_touched ),
 				];
 			}
 		}
@@ -616,98 +677,39 @@ class WikiModule extends Module {
 			return;
 		}
 
-		$cache = MediaWikiServices::getInstance()->getMainWANObjectCache();
-		$fname = __METHOD__;
-
 		foreach ( $byDomain as $domainId => $batch ) {
-			// Fetch title info
-			sort( $batch['pages'] );
-			$pagesHash = sha1( implode( '|', $batch['pages'] ) );
-			$allInfo = $cache->getWithSetCallback(
-				$cache->makeGlobalKey( 'resourceloader-titleinfo', $domainId, $pagesHash ),
-				$cache::TTL_HOUR,
-				static function ( $curVal, &$ttl, array &$setOpts ) use ( $batch, $fname ) {
-					$setOpts += Database::getCacheSetOptions( $batch['db'] );
-					return static::fetchTitleInfo( $batch['db'], $batch['pages'], $fname );
-				},
-				[
-					'checkKeys' => [
-						$cache->makeGlobalKey( 'resourceloader-titleinfo', $domainId ) ]
-				]
-			);
+			if ( !WikiMap::isCurrentWikiDbDomain( $domainId ) ) {
+				$pages = $batch['pages'];
+				$allInfo = static::doBatchFetch( $pages, $batch['db'], __METHOD__ );
 
-			// Inject to WikiModule objects
-			foreach ( $batch['modules'] as $wikiModule ) {
-				$pages = $wikiModule->getPages( $context );
-				$info = [];
-				foreach ( $pages as $pageName => $unused ) {
-					// Map page name to canonical form (T145673).
-					$title = Title::newFromText( $pageName );
-					if ( !$title ) {
-						// Page name may be invalid if user-provided (e.g. gadgets)
-						$rl->getLogger()->info(
-							'Invalid wiki page title "{title}" in ' . __METHOD__,
-							[ 'title' => $pageName ]
-						);
-						continue;
+				foreach ( $batch['modules'] as $wikiModule ) {
+					$pages = $wikiModule->getPages( $context );
+					$info = [];
+					foreach ( $pages as $pageName => $unused ) {
+						$title = Title::newFromText( $pageName );
+						if ( !$title ) {
+							// Page name may be invalid if user-provided (e.g. gadgets)
+							$rl->getLogger()->info(
+								'Invalid wiki page title "{title}" in ' . __METHOD__,
+								[ 'title' => $pageName ]
+							);
+							continue;
+						}
+						$infoKey = self::makeTitleKey( $title );
+						if ( isset( $allInfo[$infoKey] ) ) {
+							$info[$infoKey] = $allInfo[$infoKey];
+						}
 					}
-					$infoKey = self::makeTitleKey( $title );
-					if ( isset( $allInfo[$infoKey] ) ) {
-						$info[$infoKey] = $allInfo[$infoKey];
-					}
+					$pageNames = array_keys( $pages );
+					sort( $pageNames );
+					$batchKey = implode( '|', $pageNames );
+					$wikiModule->setTitleInfo( $batchKey, $info );
 				}
-				$pageNames = array_keys( $pages );
-				sort( $pageNames );
-				$batchKey = implode( '|', $pageNames );
-				$wikiModule->setTitleInfo( $batchKey, $info );
+			} else {
+				// Local wiki, warm up LinkCache for WikiModule::getTitleInfo
+				$linkBatchFactory = MediaWikiServices::getInstance()->getLinkBatchFactory();
+				$linkBatchFactory->preloadPersistentCache( $batch['pages'], __METHOD__ );
 			}
-		}
-	}
-
-	/**
-	 * Clear the preloadTitleInfo() cache for all wiki modules on this wiki on
-	 * page change if it was a JS or CSS page
-	 *
-	 * @internal
-	 * @param PageIdentity $page
-	 * @param RevisionRecord|null $old Prior page revision
-	 * @param RevisionRecord|null $new New page revision
-	 * @param string $domain Database domain ID
-	 */
-	public static function invalidateModuleCache(
-		PageIdentity $page,
-		?RevisionRecord $old,
-		?RevisionRecord $new,
-		string $domain
-	) {
-		static $models = [ CONTENT_MODEL_CSS, CONTENT_MODEL_JAVASCRIPT ];
-
-		$purge = false;
-		// TODO: MCR: differentiate between page functionality and content model!
-		//       Not all pages containing CSS or JS have to be modules! [PageType]
-		if ( $old ) {
-			$oldModel = $old->getMainContentModel();
-			if ( in_array( $oldModel, $models ) ) {
-				$purge = true;
-			}
-		}
-
-		if ( !$purge && $new ) {
-			$newModel = $new->getMainContentModel();
-			if ( in_array( $newModel, $models ) ) {
-				$purge = true;
-			}
-		}
-
-		if ( !$purge ) {
-			$title = Title::newFromPageIdentity( $page );
-			$purge = ( $title->isSiteConfigPage() || $title->isUserConfigPage() );
-		}
-
-		if ( $purge ) {
-			$cache = MediaWikiServices::getInstance()->getMainWANObjectCache();
-			$key = $cache->makeGlobalKey( 'resourceloader-titleinfo', $domain );
-			$cache->touchCheckKey( $key );
 		}
 	}
 

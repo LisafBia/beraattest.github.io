@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -282,6 +268,9 @@ class UserAuthority implements Authority {
 			);
 		}
 
+		// FIXME this should use getUserRightStatus() directly, but we currently can't pass
+		// in $this->uiContext. Trying to use RequestContext::getMain() directly here leads to
+		// infinite recursion in various tests.
 		if ( !$this->permissionManager->userHasRight( $this->actor, $action ) ) {
 			if ( !$status ) {
 				return false;
@@ -324,17 +313,6 @@ class UserAuthority implements Authority {
 		return !$status || $status->isOK();
 	}
 
-	// See ApiBase::BLOCK_CODE_MAP
-	private const BLOCK_CODES = [
-		'blockedtext',
-		'blockedtext-partial',
-		'autoblockedtext',
-		'systemblockedtext',
-		'blockedtext-composite',
-		'blockedtext-tempuser',
-		'autoblockedtext-tempuser',
-	];
-
 	/**
 	 * @param string $rigor
 	 * @param string $action
@@ -376,32 +354,13 @@ class UserAuthority implements Authority {
 				$rigor
 			);
 
-			if ( $tempStatus->isGood() ) {
-				// Nothing to merge, return early
-				return $status->isOK();
+			if ( !$tempStatus->isGood() ) {
+				$status->merge( $tempStatus );
 			}
 
-			// Instead of `$status->merge( $tempStatus )`, process the messages like this to ensure that
-			// the resulting status contains Message objects instead of strings+arrays, and thus does not
-			// trigger wikitext escaping in a legacy code path. See T368821 for more information about
-			// that behavior, and see T306494 for the specific bug this fixes.
-			foreach ( $tempStatus->getMessages() as $msg ) {
-				$status->fatal( $msg );
-			}
-
-			foreach ( self::BLOCK_CODES as $code ) {
-				// HACK: Detect whether the permission was denied because the user is blocked.
-				//       A similar hack exists in ApiBase::BLOCK_CODE_MAP.
-				//       When permission checking logic is moved out of PermissionManager,
-				//       we can record the block info directly when first checking the block,
-				//       rather than doing that here.
-				if ( $tempStatus->hasMessage( $code ) ) {
-					$block = $this->getBlock();
-					if ( $block ) {
-						$status->setBlock( $block );
-					}
-					break;
-				}
+			$block = $tempStatus->getBlock();
+			if ( $block ) {
+				$status->setBlock( $block );
 			}
 
 			return $status->isOK();

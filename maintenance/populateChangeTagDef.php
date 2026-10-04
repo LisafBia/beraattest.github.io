@@ -1,19 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
+ * @license GPL-2.0-or-later
  */
 
 use MediaWiki\Maintenance\LoggedUpdateMaintenance;
@@ -43,6 +30,7 @@ class PopulateChangeTagDef extends LoggedUpdateMaintenance {
 		$this->addOption( 'set-user-tags-only', 'Only update ctd_user_defined from valid_tag table' );
 	}
 
+	/** @inheritDoc */
 	protected function doDBUpdates() {
 		$this->setBatchSize( $this->getOption( 'batch-size', $this->getBatchSize() ) );
 
@@ -123,7 +111,7 @@ class PopulateChangeTagDef extends LoggedUpdateMaintenance {
 			}
 
 			if ( $this->hasOption( 'dry-run' ) ) {
-				$this->output( 'This row will be updated: ' . implode( ', ', $row ) . "\n" );
+				$this->output( 'This row will be updated: id ' . $row->ct_tag_id . ', ' . $row->hitcount . " hits\n" );
 				continue;
 			}
 
@@ -187,7 +175,7 @@ class PopulateChangeTagDef extends LoggedUpdateMaintenance {
 		}
 	}
 
-	private function backpopulateChangeTagPerTag( $tagName, $tagId ) {
+	private function backpopulateChangeTagPerTag( string $tagName, int $tagId ) {
 		$dbr = $this->getReplicaDB();
 		$dbw = $this->getPrimaryDB();
 		$sleep = (int)$this->getOption( 'sleep', 0 );
@@ -233,6 +221,7 @@ class PopulateChangeTagDef extends LoggedUpdateMaintenance {
 		$this->output( "Finished adding ct_tag_id = {$tagId} for ct_tag = {$tagName}\n" );
 	}
 
+	/** @inheritDoc */
 	protected function getUpdateKey() {
 		return __CLASS__;
 	}

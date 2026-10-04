@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -31,6 +17,18 @@ use Wikimedia\WrappedStringList;
  * @since 1.28
  */
 class ClientHtml {
+	/**
+	 * Used by extensions to apply anonymous user preferences
+	 * across domains during the authentication flow. This name
+	 * doesn't include the cookie prefix which can be the ID of
+	 * the domain we're on. See $wgCookiePrefix for that.
+	 *
+	 * @see https://www.mediawiki.org/wiki/Reading/Web/Preference_Persistence_For_Anonymous_Users
+	 *
+	 * @note Keep in sync with resources/src/mediawiki.user.js
+	 */
+	public const CLIENT_PREFS_COOKIE_NAME = 'mwclientpreferences';
+
 	/** @var Context */
 	private $context;
 
@@ -58,7 +56,6 @@ class ClientHtml {
 	/**
 	 * @param Context $context
 	 * @param array $options [optional] Array of options
-	 *  - 'target': Parameter for modules=startup request, see StartUpModule.
 	 *  - 'safemode': Parameter for modules=startup request, see StartUpModule.
 	 *  - 'clientPrefEnabled': See Skin options.
 	 *  - 'clientPrefCookiePrefix': See $wgCookiePrefix.
@@ -67,7 +64,6 @@ class ClientHtml {
 		$this->context = $context;
 		$this->resourceLoader = $context->getResourceLoader();
 		$this->options = $options + [
-			'target' => null,
 			'safemode' => null,
 			'clientPrefEnabled' => false,
 			'clientPrefCookiePrefix' => '',
@@ -345,6 +341,7 @@ RLPAGEMODULES = {$pageModulesJson};
 		}
 
 		// Inline stylesheets (embedded only=styles)
+		// @phan-suppress-next-line PhanTypeInvalidDimOffset False positive
 		if ( $data['embed']['styles'] ) {
 			$chunks[] = $this->getLoad(
 				$data['embed']['styles'],
@@ -353,17 +350,21 @@ RLPAGEMODULES = {$pageModulesJson};
 		}
 
 		// Async scripts. Once the startup is loaded, inline RLQ scripts will run.
-		// Pass-through a custom 'target' from OutputPage (T143066).
-		$startupQuery = [ 'raw' => '1' ];
-		foreach ( [ 'target', 'safemode' ] as $param ) {
-			if ( $this->options[$param] !== null ) {
-				$startupQuery[$param] = (string)$this->options[$param];
-			}
-		}
 		$chunks[] = $this->getLoad(
 			'startup',
 			Module::TYPE_SCRIPTS,
-			$startupQuery
+			// These params end up in the load.php URL by way of
+			// ClientHtml::getLoad > ResourceLoader::createLoaderURL > wfAppendQuery.
+			//
+			// The "raw" param also triggers ResourceLoader\DerivativeContext::setRaw (via ClientHtml::makeContext)
+			// which is how ClientHtml::getLoad knows to make this an external `<script async>`
+			// instead of an inline `mw.loader.load()` call.
+			[
+				'raw' => '1',
+				'safemode' => ( $this->options['safemode'] !== null )
+					? (string)$this->options['safemode']
+					: null,
+			]
 		);
 
 		return WrappedString::join( "\n", $chunks );
@@ -388,15 +389,21 @@ RLPAGEMODULES = {$pageModulesJson};
 		return WrappedString::join( "\n", $chunks );
 	}
 
-	private function getContext( $group, $type ): Context {
+	private function getContext( ?string $group, string $type ): Context {
 		return self::makeContext( $this->context, $group, $type );
 	}
 
-	private function getLoad( $modules, $only, array $extraQuery = [] ) {
+	/**
+	 * @param string|string[] $modules
+	 * @param string $only
+	 * @param array $extraQuery
+	 * @return string|WrappedStringList HTML
+	 */
+	private function getLoad( $modules, string $only, array $extraQuery = [] ) {
 		return self::makeLoad( $this->context, (array)$modules, $only, $extraQuery );
 	}
 
-	private static function makeContext( Context $mainContext, $group, $type,
+	private static function makeContext( Context $mainContext, ?string $group, string $type,
 		array $extraQuery = []
 	): DerivativeContext {
 		// Allow caller to setVersion() and setModules()
@@ -447,7 +454,7 @@ RLPAGEMODULES = {$pageModulesJson};
 				$rl->getLogger()->warning( 'Unknown module "{module}"', [ 'module' => $name ] );
 				continue;
 			}
-			$sortedModules[$module->getSource()][$module->getGroup()][$name] = $module;
+			$sortedModules[$module->getSource()][$module->getGroup() ?? ''][$name] = $module;
 		}
 
 		foreach ( $sortedModules as $source => $groups ) {

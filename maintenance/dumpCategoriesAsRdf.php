@@ -1,28 +1,16 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  */
 
 use MediaWiki\Category\CategoriesRdf;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Utils\BatchRowIterator;
 use Wikimedia\Purtle\RdfWriter;
 use Wikimedia\Purtle\RdfWriterFactory;
 use Wikimedia\Rdbms\IReadableDatabase;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -95,17 +83,21 @@ class DumpCategoriesAsRdf extends Maintenance {
 	 * @return Traversable
 	 */
 	public function getCategoryLinksIterator( IReadableDatabase $dbr, array $ids, $fname ) {
+		$qb = $dbr->newSelectQueryBuilder()
+			->select( [ 'cl_from', 'lt_title' ] )
+			->from( 'categorylinks' )
+			->join( 'linktarget', null, 'cl_target_id=lt_id' )
+			->where( [
+				'cl_type' => 'subcat',
+				'cl_from' => $ids
+			] )
+			->caller( $fname );
+			$primaryKey = [ 'cl_from', 'cl_target_id' ];
+
 		$it = new BatchRowIterator(
 			$dbr,
-			$dbr->newSelectQueryBuilder()
-				->from( 'categorylinks' )
-				->select( [ 'cl_from', 'cl_to' ] )
-				->where( [
-					'cl_type' => 'subcat',
-					'cl_from' => $ids
-				] )
-				->caller( $fname ),
-			[ 'cl_from', 'cl_to' ],
+			$qb,
+			$primaryKey,
 			$this->getBatchSize()
 		);
 		return new RecursiveIteratorIterator( $it );
@@ -126,7 +118,7 @@ class DumpCategoriesAsRdf extends Maintenance {
 			->say( 'cc', 'license' )->is( $licenseUrl )
 			->say( 'schema', 'softwareVersion' )->value( CategoriesRdf::FORMAT_VERSION )
 			->say( 'schema', 'dateModified' )
-			->value( wfTimestamp( TS_ISO_8601, $timestamp ), 'xsd', 'dateTime' )
+			->value( wfTimestamp( TS::ISO_8601, $timestamp ), 'xsd', 'dateTime' )
 			->say( 'schema', 'isPartOf' )->is( (string)$urlUtils->expand( '/', PROTO_CANONICAL ) )
 			->say( 'owl', 'imports' )->is( CategoriesRdf::OWL_URL );
 	}
@@ -165,7 +157,7 @@ class DumpCategoriesAsRdf extends Maintenance {
 			}
 
 			foreach ( $this->getCategoryLinksIterator( $dbr, array_keys( $pages ), __METHOD__ ) as $row ) {
-				$this->categoriesRdf->writeCategoryLinkData( $pages[$row->cl_from], $row->cl_to );
+				$this->categoriesRdf->writeCategoryLinkData( $pages[$row->cl_from], $row->lt_title );
 			}
 			fwrite( $output, $this->rdfWriter->drain() );
 		}

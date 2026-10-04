@@ -4,21 +4,7 @@
  * Copyright © 2004 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -26,6 +12,8 @@ namespace MediaWiki\Feed;
 
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Request\WebRequest;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Generate an Atom feed.
@@ -42,16 +30,17 @@ class AtomFeed extends ChannelFeed {
 	private function formatTime( $timestamp ) {
 		if ( $timestamp ) {
 			// need to use RFC 822 time format at least for rss2.0
-			return gmdate( 'Y-m-d\TH:i:s', (int)wfTimestamp( TS_UNIX, $timestamp ) );
+			return gmdate( 'Y-m-d\TH:i:s', (int)wfTimestamp( TS::UNIX, $timestamp ) );
 		}
 		return null;
 	}
 
 	/**
 	 * Outputs a basic header for Atom 1.0 feeds.
+	 * @inheritDoc
 	 */
-	public function outHeader() {
-		$this->outXmlHeader();
+	public function outputHeader( $output ): void {
+		$this->outputXmlHeader( $output );
 		// Manually escaping rather than letting Mustache do it because Mustache
 		// uses htmlentities, which does not work with XML
 		$templateParams = [
@@ -60,12 +49,12 @@ class AtomFeed extends ChannelFeed {
 			// for every feed we create. For now just use the URL, but who
 			// can tell if that's right? If we put options on the feed, do we
 			// have to change the id? Maybe? Maybe not.
-			'feedID' => $this->getSelfUrl(),
+			'feedID' => $this->getSelfUrl( $output->getRequest() ),
 			'title' => $this->getTitle(),
 			'url' => $this->xmlEncode(
 				$this->urlUtils->expand( $this->getUrlUnescaped(), PROTO_CURRENT ) ?? ''
 			),
-			'selfUrl' => $this->getSelfUrl(),
+			'selfUrl' => $this->getSelfUrl( $output->getRequest() ),
 			'timestamp' => $this->xmlEncode( $this->formatTime( wfTimestampNow() ) ),
 			'description' => $this->getDescription(),
 			'version' => $this->xmlEncode( MW_VERSION ),
@@ -76,19 +65,18 @@ class AtomFeed extends ChannelFeed {
 	/**
 	 * Atom 1.0 requests a self-reference to the feed.
 	 *
-	 * @return string
+	 * @param WebRequest $request
 	 */
-	private function getSelfUrl() {
-		global $wgRequest;
-		return htmlspecialchars( $wgRequest->getFullRequestURL() );
+	private function getSelfUrl( $request ): string {
+		return htmlspecialchars( $request->getFullRequestURL() );
 	}
 
 	/**
 	 * Output a given item.
 	 *
-	 * @param FeedItem $item
+	 * @inheritDoc
 	 */
-	public function outItem( $item ) {
+	public function outputItem( FeedItem $item, $output ): void {
 		$mimeType = MediaWikiServices::getInstance()->getMainConfig()
 			->get( MainConfigNames::MimeType );
 		// Manually escaping rather than letting Mustache do it because Mustache
@@ -100,7 +88,7 @@ class AtomFeed extends ChannelFeed {
 			"url" => $this->xmlEncode(
 				$this->urlUtils->expand( $item->getUrlUnescaped(), PROTO_CURRENT ) ?? ''
 			),
-			"date" => $this->xmlEncode( $this->formatTime( $item->getDate() ) ),
+			"date" => $this->xmlEncodeNullable( $this->formatTime( $item->getDate() ) ),
 			"description" => $item->getDescription(),
 			"author" => $item->getAuthor()
 		];
@@ -109,11 +97,9 @@ class AtomFeed extends ChannelFeed {
 
 	/**
 	 * Outputs the footer for Atom 1.0 feed (basically '\</feed\>').
+	 * @inheritDoc
 	 */
-	public function outFooter() {
+	public function outputFooter( $output ): void {
 		print "</feed>";
 	}
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( AtomFeed::class, 'AtomFeed' );

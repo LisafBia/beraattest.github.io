@@ -8,13 +8,13 @@ use MediaWiki\Context\IContextSource;
 use MediaWiki\Edit\ParsoidOutputStash;
 use MediaWiki\Edit\ParsoidRenderID;
 use MediaWiki\Edit\SimpleParsoidOutputStash;
+use MediaWiki\Page\WikiPage;
 use MediaWiki\Permissions\Authority;
 use MediaWiki\Permissions\UserAuthority;
 use MediaWiki\Request\FauxRequest;
 use MediaWiki\Rest\RequestData;
 use MediaWiki\User\User;
 use Wikimedia\ObjectCache\HashBagOStuff;
-use WikiPage;
 
 /**
  * This trait is used in PageHTMLHandlerTest.php & RevisionHTMLHandlerTest.php
@@ -27,8 +27,8 @@ trait HTMLHandlerTestTrait {
 
 	private function getParsoidOutputStash(): ParsoidOutputStash {
 		if ( !$this->parsoidOutputStash ) {
-			$chFactory = $this->getServiceContainer()->getContentHandlerFactory();
-			$this->parsoidOutputStash = new SimpleParsoidOutputStash( $chFactory, new HashBagOStuff(), 120 );
+			$jsonCodec = $this->getServiceContainer()->getJsonCodec();
+			$this->parsoidOutputStash = new SimpleParsoidOutputStash( $jsonCodec, new HashBagOStuff(), 120 );
 		}
 		return $this->parsoidOutputStash;
 	}

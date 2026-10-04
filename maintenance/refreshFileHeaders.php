@@ -4,26 +4,13 @@
  *
  * Usage: php refreshFileHeaders.php
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
 use MediaWiki\FileRepo\File\FileSelectQueryBuilder;
+use MediaWiki\FileRepo\LocalRepo;
 use MediaWiki\Maintenance\Maintenance;
 use Wikimedia\Rdbms\SelectQueryBuilder;
 
@@ -73,19 +60,19 @@ class RefreshFileHeaders extends Maintenance {
 			$queryBuilder = FileSelectQueryBuilder::newForFile( $dbr );
 
 			$queryBuilder->where( $dbr->expr( 'img_name', '>', $start ) );
-			if ( strlen( $end ) ) {
+			if ( $end !== '' ) {
 				$queryBuilder->andWhere( $dbr->expr( 'img_name', '<=', $end ) );
 			}
 
-			if ( strlen( $media_type ) ) {
+			if ( $media_type !== '' ) {
 				$queryBuilder->andWhere( [ 'img_media_type' => $media_type ] );
 			}
 
-			if ( strlen( $major_mime ) ) {
+			if ( $major_mime !== '' ) {
 				$queryBuilder->andWhere( [ 'img_major_mime' => $major_mime ] );
 			}
 
-			if ( strlen( $minor_mime ) ) {
+			if ( $minor_mime !== '' ) {
 				$queryBuilder->andWhere( [ 'img_minor_mime' => $minor_mime ] );
 			}
 

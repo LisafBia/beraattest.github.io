@@ -1,5 +1,3 @@
-/* eslint-disable es-x/no-array-prototype-includes */
-
 ( function () {
 	'use strict';
 
@@ -297,7 +295,8 @@
 			$( '<tr>' )
 				.append( $( '<th>' ).attr( 'scope', 'col' ).text( '#' ).css( 'width', '4em' ) )
 				.append( $( '<th>' ).attr( 'scope', 'col' ).text( 'SQL' ) )
-				.append( $( '<th>' ).attr( 'scope', 'col' ).text( 'Time' ).css( 'width', '8em' ) )
+				.append( $( '<th>' ).attr( 'scope', 'col' ).text( 'Time' ).css( 'width', '4em' ) )
+				.append( $( '<th>' ).attr( 'scope', 'col' ).text( 'Rows' ).css( 'width', '4em' ) )
 				.append( $( '<th>' ).attr( 'scope', 'col' ).text( 'Call' ).css( 'width', '18em' ) )
 				.appendTo( $table );
 
@@ -308,6 +307,7 @@
 					.append( $( '<td>' ).text( i + 1 ) )
 					.append( $( '<td>' ).text( query.sql ) )
 					.append( $( '<td>' ).text( ( query.time * 1000 ).toFixed( 3 ) + 'ms' ).addClass( 'stats' ) )
+					.append( $( '<td>' ).text( query.rows ).addClass( 'nr' ) )
 					.append( $( '<td>' ).text( query.function ) )
 					.appendTo( $table );
 			}

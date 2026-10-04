@@ -1,5 +1,6 @@
 <?php
 
+use MediaWiki\Deferred\LinksUpdate\ExternalLinksTable;
 use MediaWiki\ExternalLinks\LinkFilter;
 use MediaWiki\Maintenance\LoggedUpdateMaintenance;
 
@@ -28,12 +29,18 @@ class MigrateExternallinks extends LoggedUpdateMaintenance {
 		$this->setBatchSize( 1000 );
 	}
 
+	/** @inheritDoc */
 	protected function getUpdateKey() {
 		return __CLASS__;
 	}
 
+	/** @inheritDoc */
 	protected function doDBUpdates() {
-		$dbw = $this->getDB( DB_PRIMARY );
+		/** @var \Wikimedia\Rdbms\Database $dbw */
+		$dbw = $this->getServiceContainer()->getConnectionProvider()->getPrimaryDatabase(
+			ExternalLinksTable::VIRTUAL_DOMAIN
+		);
+		'@phan-var \Wikimedia\Rdbms\Database $dbw';
 		$table = 'externallinks';
 		if ( !$dbw->fieldExists( $table, 'el_to', __METHOD__ ) ) {
 			$this->output( "Old fields don't exist. There is no need to run this script\n" );
@@ -50,15 +57,13 @@ class MigrateExternallinks extends LoggedUpdateMaintenance {
 		$highestId = $dbw->newSelectQueryBuilder()
 			->select( 'el_id' )
 			->from( $table )
-			->limit( 1 )
 			->caller( __METHOD__ )
 			->orderBy( 'el_id', 'DESC' )
-			->fetchResultSet()->fetchRow();
+			->fetchField();
 		if ( !$highestId ) {
 			$this->output( "Page table is empty.\n" );
 			return true;
 		}
-		$highestId = $highestId[0];
 		$id = 0;
 		while ( $id <= $highestId ) {
 			$updated += $this->handleBatch( $id );
@@ -70,11 +75,13 @@ class MigrateExternallinks extends LoggedUpdateMaintenance {
 		return true;
 	}
 
-	private function handleBatch( $lowId ) {
+	private function handleBatch( int $lowId ): int {
 		$batchSize = $this->getBatchSize();
 		// range is inclusive, let's subtract one.
 		$highId = $lowId + $batchSize - 1;
-		$dbw = $this->getPrimaryDB();
+		$dbw = $this->getServiceContainer()->getConnectionProvider()->getPrimaryDatabase(
+			ExternalLinksTable::VIRTUAL_DOMAIN
+		);
 		$updated = 0;
 		$res = $dbw->newSelectQueryBuilder()
 			->select( [ 'el_id', 'el_to' ] )

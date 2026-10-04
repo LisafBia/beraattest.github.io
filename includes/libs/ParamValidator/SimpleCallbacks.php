@@ -34,28 +34,32 @@ class SimpleCallbacks implements Callbacks {
 		$this->files = $files;
 	}
 
+	/** @inheritDoc */
 	public function hasParam( $name, array $options ) {
 		return isset( $this->params[$name] );
 	}
 
+	/** @inheritDoc */
 	public function getValue( $name, $default, array $options ) {
 		return $this->params[$name] ?? $default;
 	}
 
+	/** @inheritDoc */
 	public function hasUpload( $name, array $options ) {
 		return isset( $this->files[$name] );
 	}
 
+	/** @inheritDoc */
 	public function getUploadedFile( $name, array $options ) {
 		$file = $this->files[$name] ?? null;
 		if ( $file && !$file instanceof UploadedFile ) {
 			$file = new UploadedFile( $file );
 			$this->files[$name] = $file;
 		}
-		// @phan-suppress-next-line PhanTypeMismatchReturnNullable False positive
 		return $file;
 	}
 
+	/** @inheritDoc */
 	public function recordCondition(
 		DataMessageValue $message, $name, $value, array $settings, array $options
 	) {
@@ -82,6 +86,7 @@ class SimpleCallbacks implements Callbacks {
 		$this->conditions = [];
 	}
 
+	/** @inheritDoc */
 	public function useHighLimits( array $options ) {
 		return !empty( $options['useHighLimits'] );
 	}

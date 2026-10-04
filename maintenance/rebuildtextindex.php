@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -22,6 +8,7 @@
 require_once __DIR__ . '/Maintenance.php';
 // @codeCoverageIgnoreEnd
 
+use MediaWiki\Content\ContentSerializationException;
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Search\SearchUpdate;
@@ -45,6 +32,7 @@ class RebuildTextIndex extends Maintenance {
 		$this->addDescription( 'Rebuild search index table from scratch' );
 	}
 
+	/** @inheritDoc */
 	public function getDbType() {
 		return Maintenance::DB_ADMIN;
 	}
@@ -120,7 +108,7 @@ class RebuildTextIndex extends Maintenance {
 
 					$u = new SearchUpdate( $s->page_id, $title, $content );
 					$u->doUpdate();
-				} catch ( MWContentSerializationException $ex ) {
+				} catch ( ContentSerializationException ) {
 					$this->output( "Failed to deserialize content of revision {$s->rev_id} of page "
 						. "`" . $title->getPrefixedDBkey() . "`!\n" );
 				}
@@ -135,11 +123,13 @@ class RebuildTextIndex extends Maintenance {
 	private function dropMysqlTextIndex() {
 		$dbw = $this->getDB( DB_PRIMARY );
 		$searchindex = $dbw->tableName( 'searchindex' );
-		if ( $dbw->indexExists( 'searchindex', 'si_title', __METHOD__ ) ) {
-			$this->output( "Dropping index...\n" );
-			$sql = "ALTER TABLE $searchindex DROP INDEX si_title, DROP INDEX si_text";
-			$dbw->query( $sql, __METHOD__ );
-		}
+		$this->output( "Dropping index...\n" );
+		$sql = <<<SQL
+			ALTER TABLE $searchindex
+			DROP INDEX IF EXISTS si_title,
+			DROP INDEX IF EXISTS si_text
+		SQL;
+		$dbw->query( $sql, __METHOD__ );
 	}
 
 	/**

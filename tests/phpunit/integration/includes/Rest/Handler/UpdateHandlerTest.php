@@ -7,7 +7,7 @@ use MediaWiki\Config\HashConfig;
 use MediaWiki\Content\WikitextContent;
 use MediaWiki\Content\WikitextContentHandler;
 use MediaWiki\Json\FormatJson;
-use MediaWiki\Languages\LanguageNameUtils;
+use MediaWiki\Language\LanguageNameUtils;
 use MediaWiki\Linker\LinkRenderer;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Message\Message;
@@ -19,7 +19,6 @@ use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\RequestData;
 use MediaWiki\Revision\MutableRevisionRecord;
 use MediaWiki\Revision\RevisionLookup;
-use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Session\Token;
 use MediaWiki\Status\Status;
 use MediaWiki\Tests\Unit\DummyServicesTrait;
@@ -30,8 +29,6 @@ use MockTitleTrait;
 use PHPUnit\Framework\MockObject\MockObject;
 use Wikimedia\Message\DataMessageValue;
 use Wikimedia\Message\MessageValue;
-use Wikimedia\Message\ParamType;
-use Wikimedia\Message\ScalarParam;
 use Wikimedia\UUID\GlobalIdGenerator;
 
 /**
@@ -65,8 +62,6 @@ class UpdateHandlerTest extends MediaWikiLangTestCase {
 			[ CONTENT_MODEL_WIKITEXT => $wikitextContentHandler ]
 		);
 
-		$titleCodec = $this->getDummyMediaWikiTitleCodec();
-
 		/** @var RevisionLookup|MockObject $revisionLookup */
 		$revisionLookup = $this->createNoOpMock(
 			RevisionLookup::class,
@@ -75,39 +70,29 @@ class UpdateHandlerTest extends MediaWikiLangTestCase {
 		$revisionLookup->method( 'getRevisionById' )
 			->willReturnCallback( function ( $id ) {
 				$title = $this->makeMockTitle( __CLASS__ );
-				$rev = new MutableRevisionRecord( $title );
-				$rev->setId( $id );
-				$rev->setContent( SlotRecord::MAIN, new WikitextContent( "Content of revision $id" ) );
-				$rev->setTimestamp( '2020-01-01T01:02:03Z' );
-				return $rev;
+				return MutableRevisionRecord::newFromContent( $title, new WikitextContent( "Content of revision $id" ) )
+					->setId( $id )
+					->setTimestamp( '2020-01-01T01:02:03Z' );
 			} );
 		$revisionLookup->method( 'getRevisionByTitle' )
 			->willReturnCallback( static function ( $title ) {
-				$rev = new MutableRevisionRecord( Title::castFromLinkTarget( $title ) );
-				$rev->setId( 1234 );
-				$rev->setContent( SlotRecord::MAIN, new WikitextContent( "Current content of $title" ) );
-				$rev->setTimestamp( '2020-01-01T01:02:03Z' );
-				return $rev;
+				return MutableRevisionRecord::newFromContent( Title::castFromLinkTarget( $title ), new WikitextContent( "Current content of $title" ) )
+					->setId( 1234 )
+					->setTimestamp( '2020-01-01T01:02:03Z' );
 			} );
 
 		$handler = new UpdateHandler(
 			$config,
 			$contentHandlerFactory,
-			$titleCodec,
-			$titleCodec,
+			$this->getDummyTitleParser(),
+			$this->getDummyTitleFormatter(),
 			$revisionLookup
 		);
 
 		$apiMain = $this->getApiMain( $csrfSafe );
-		$dummyModule = $this->getDummyApiModule( $apiMain, 'edit', $resultData, $throwException );
+		$this->getDummyApiModule( $apiMain, 'edit', $resultData, $throwException );
 
 		$handler->setApiMain( $apiMain );
-		$handler->overrideActionModule(
-			'edit',
-			'action',
-			$dummyModule
-		);
-
 		return $handler;
 	}
 
@@ -506,6 +491,15 @@ class UpdateHandlerTest extends MediaWikiLangTestCase {
 		];
 	}
 
+	public function testGetRequestBodyDescription() {
+		$handler = $this->newHandler( [] );
+
+		$this->assertEquals(
+			new MessageValue( 'rest-requestbody-desc-update-page' ),
+			$handler->getRequestBodyDescription()
+		);
+	}
+
 	/**
 	 * @dataProvider provideBodyValidation
 	 */
@@ -588,10 +582,8 @@ class UpdateHandlerTest extends MediaWikiLangTestCase {
 				Status::newFatal( 'apierror-badtoken', Message::plaintextParam( 'BAD' ) )
 			),
 			new LocalizedHttpException(
-				new MessageValue(
-					'apierror-badtoken',
-					[ new ScalarParam( ParamType::PLAINTEXT, 'BAD' ) ]
-				), 403
+				( new MessageValue( 'apierror-badtoken' ) )->plaintextParams( 'BAD' ),
+				403
 			),
 		];
 
@@ -671,7 +663,7 @@ class UpdateHandlerTest extends MediaWikiLangTestCase {
 
 		$apiUsageException = new ApiUsageException( null, Status::newFatal( 'apierror-editconflict' ) );
 		$handler = $this->newHandler( [], $apiUsageException );
-		$handler->setJsonDiffFunction( [ $this, 'fakeJsonDiff' ] );
+		$handler->setJsonDiffFunction( $this->fakeJsonDiff( ... ) );
 
 		$exception = $this->executeHandlerAndGetHttpException( $handler, $request );
 
@@ -684,7 +676,7 @@ class UpdateHandlerTest extends MediaWikiLangTestCase {
 			],
 			'remote' => [
 				'from' => 'Content of revision 17',
-				'to' => 'Current content of 0:Foo',
+				'to' => 'Current content of Foo',
 			],
 			'base' => 17,
 			'current' => 1234

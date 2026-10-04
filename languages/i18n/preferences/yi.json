@@ -121,7 +121,7 @@
 	"underline-always": "אייביג",
 	"tog-showhiddencats": "ווײַזן באהאלטענע קאטעגאריעס",
 	"tog-showrollbackconfirmation": "ווייזן אַ באַשטעטיקונג מודעה ווען מען קליקט אויף אַ ״צוריקזעצן״ לינק",
-	"tog-forcesafemode": "שטענדיג אַקטיווירן [[mw:Manual:Safemode|זיכערע מאָדע]]",
+	"tog-forcesafemode": "שטענדיג אַקטיווירן [[mw:Special:MyLanguage/Manual:Safemode|זיכערע מאָדע]]",
 	"prefs-editing": "באַאַרבעטן",
 	"prefs-advancedediting": "אַלגעמיינע ברירות",
 	"tog-editsectiononrightclick": "באמעגלעכן אפטייל רעדאקטירן דורכן רעכטס־קליקן אויף אפטייל קעפלעך",
@@ -189,6 +189,7 @@
 	"prefs-searchoptions": "זוכן",
 	"prefs-searchmisc": "אַלגעמיין",
 	"prefs-advancedsearchoptions": "פֿארגעשריטענע אפציעס",
+	"prefs-misc": "פֿאַרשידנס",
 	"prefs-reset-intro": "איר קענט ניצן דעם בלאַט צוריקצושטעלן אײַערע פרעפֿערענצן גרונטלעך פֿאַרן ארט.\nמען קען דאָס נישט אַנולירן.",
 	"restoreprefs": "צוריקשטעלן אלע דיפאלט אנשטעלונגען"
 }

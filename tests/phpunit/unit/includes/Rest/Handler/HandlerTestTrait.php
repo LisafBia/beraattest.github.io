@@ -4,6 +4,7 @@ namespace MediaWiki\Tests\Rest\Handler;
 
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\Permissions\Authority;
+use MediaWiki\Rest\ErrorFormatterV1;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\HttpException;
 use MediaWiki\Rest\Module\Module;
@@ -15,7 +16,6 @@ use MediaWiki\Rest\Router;
 use MediaWiki\Rest\Validator\Validator;
 use MediaWiki\Session\Session;
 use MediaWiki\Tests\Rest\RestTestTrait;
-use MediaWiki\Tests\Unit\DummyServicesTrait;
 use MediaWiki\Tests\Unit\Permissions\MockAuthorityTrait;
 use PHPUnit\Framework\Assert;
 use PHPUnit\Framework\MockObject\MockObject;
@@ -30,15 +30,15 @@ use Wikimedia\ObjectFactory\ObjectFactory;
  */
 trait HandlerTestTrait {
 	use RestTestTrait;
-	use DummyServicesTrait;
 	use MockAuthorityTrait;
 	use SessionHelperTestTrait;
 
 	/**
-	 * Calls init() on the Handler, supplying a mock RouteUrlProvider and ResponseFactory.
+	 * Initializes the Handler, supplying a mock RouteUrlProvider and ResponseFactory.
+	 * If $request is not null, the handler will be initialized for execution.
 	 *
 	 * @param Handler $handler
-	 * @param RequestInterface $request
+	 * @param ?RequestInterface $request
 	 * @param array $config
 	 * @param HookContainer|array $hooks Hook container or array of hooks
 	 * @param Authority|null $authority
@@ -49,7 +49,7 @@ trait HandlerTestTrait {
 	 */
 	private function initHandler(
 		Handler $handler,
-		RequestInterface $request,
+		?RequestInterface $request,
 		$config = [],
 		$hooks = [],
 		?Authority $authority = null,
@@ -57,7 +57,6 @@ trait HandlerTestTrait {
 		$routerOrModule = null
 	) {
 		$formatter = $this->getDummyTextFormatter( true );
-		$responseFactory = new ResponseFactory( [ 'qqx' => $formatter ] );
 
 		$module = null;
 		$router = null;
@@ -76,14 +75,9 @@ trait HandlerTestTrait {
 				$router = $this->newRouter();
 			}
 
-			$module = $this->newModule( [ 'router' => $router ] );
-		}
-
-		if ( !$request->hasBody()
-			&& in_array( $request->getMethod(), RequestInterface::BODY_METHODS )
-		) {
-			// Send an empty body if none was provided.
-			$request->setParsedBody( [] );
+			$module = $this->newModule(
+				[ 'router' => $router, 'formatter' => $formatter, ]
+			);
 		}
 
 		$authority ??= $this->mockAnonUltimateAuthority();
@@ -91,10 +85,29 @@ trait HandlerTestTrait {
 			$hooks instanceof HookContainer ? $hooks : $this->createHookContainer( $hooks );
 
 		$session ??= $this->getSession( true );
+
+		// TODO: Even if we are given a Router (either directly or via a Module), we aren't using
+		//  its formatter, authority, or session to initialize the handler. We can individually
+		//  override authority and session by passing them as parameters, but not formatter.
+		//  Consider either adding a formatter parameter, or using these values from any supplied
+		//  Router. (Router does not currently provide accessors, making this inconvenient.)
 		$handler->initContext( $module, $config['path'] ?? 'test', $config );
-		$handler->initServices( $authority, $responseFactory, $hookContainer );
+		$handler->initServices( $authority, $hookContainer );
 		$handler->initSession( $session );
-		$handler->initForExecute( $request );
+
+		if ( $request ) {
+			if ( !$request->hasBody()
+				&& in_array( $request->getMethod(), RequestInterface::BODY_METHODS )
+			) {
+				// Send an empty body if none was provided.
+				$request->setParsedBody( [] );
+			}
+
+			$textFormatters = [ 'qqx' => $formatter ];
+			$responseFactory = new ResponseFactory( $textFormatters, new ErrorFormatterV1( $textFormatters, false ) );
+
+			$handler->initForExecute( $request, $responseFactory );
+		}
 	}
 
 	/**
@@ -111,18 +124,8 @@ trait HandlerTestTrait {
 		);
 		$router->method( 'getRoutePath' )->willReturnCallback(
 			static function ( $route, $path = [], $query = [] ) {
-				foreach ( $path as $param => $value ) {
-					$route = str_replace(
-						'{' . $param . '}',
-						urlencode( (string)$value ),
-						$route
-					);
-				}
-
-				return wfAppendQuery(
-					'/rest' . $route,
-					$query
-				);
+				$route = Router::substPathParams( $route, $path );
+				return wfAppendQuery( '/rest' . $route, $query );
 			}
 		);
 		$router->method( 'getRouteUrl' )->willReturnCallback(

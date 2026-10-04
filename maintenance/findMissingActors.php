@@ -1,29 +1,15 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
+use MediaWiki\Exception\CannotCreateActorException;
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\User\ActorNormalization;
 use MediaWiki\User\UserFactory;
 use MediaWiki\User\UserNameUtils;
-use MediaWiki\User\UserRigorOptions;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -71,6 +57,7 @@ class FindMissingActors extends Maintenance {
 			'img_actor' => [ 'image', 'img_actor', 'img_name' ],
 			'oi_actor' => [ 'oldimage', 'oi_actor', 'oi_archive_name' ], // no index on oi_archive_name!
 			'fa_actor' => [ 'filearchive', 'fa_actor', 'fa_id' ],
+			'fr_actor' => [ 'filerevision', 'fr_actor', 'fr_id' ],
 			'rc_actor' => [ 'recentchanges', 'rc_actor', 'rc_id' ],
 			'log_actor' => [ 'logging', 'log_actor', 'log_id' ],
 			'rev_actor' => [ 'revision', 'rev_actor', 'rev_id' ],
@@ -109,22 +96,19 @@ class FindMissingActors extends Maintenance {
 			$this->fatalError( "Not a valid user name: '$name'" );
 		}
 
-		$name = $this->userNameUtils->getCanonical( $name, UserRigorOptions::RIGOR_NONE );
-
 		if ( $user->isRegistered() ) {
 			$this->output( "Using existing user: '$user'\n" );
-		} elseif ( !$this->userNameUtils->isValid( $name ) ) {
-			$this->fatalError( "Not a valid user name: '$name'" );
-		} elseif ( !$this->userNameUtils->isUsable( $name ) ) {
-			$this->output( "Using system user: '$name'\n" );
+		} elseif ( !$this->userNameUtils->isUsable( $user->getName() ) ) {
+			$this->output( "Using system user: '{$user->getName()}'\n" );
 		} else {
-			$this->fatalError( "Unknown user: '$name'" );
+			$this->fatalError( "Unknown user: '{$user->getName()}'" );
 		}
 
 		$dbw = $this->getPrimaryDB();
-		$actorId = $this->actorNormalization->acquireActorId( $user, $dbw );
 
-		if ( !$actorId ) {
+		try {
+			$actorId = $this->actorNormalization->acquireActorId( $user, $dbw );
+		} catch ( CannotCreateActorException ) {
 			$this->fatalError( "Failed to acquire an actor ID for user '$user'" );
 		}
 
@@ -158,7 +142,7 @@ class FindMissingActors extends Maintenance {
 			$this->output( "Do you want to OVERWRITE the listed actor IDs?\n" );
 			$this->output( "Information about the invalid IDs will be lost!\n" );
 			$this->output( "\n" );
-			$confirm = self::readconsole( 'Type "yes" to continue: ' );
+			$confirm = static::readconsole( 'Type "yes" to continue: ' );
 
 			if ( $confirm === 'yes' ) {
 				$this->overwriteActorIDs( $field, array_keys( $bad ), $overwrite );

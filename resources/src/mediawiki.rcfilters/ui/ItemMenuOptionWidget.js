@@ -59,12 +59,16 @@ const ItemMenuOptionWidget = function MwRcfiltersUiItemMenuOptionWidget(
 		this.helpLink = new OO.ui.ButtonWidget( {
 			icon: 'helpNotice',
 			framed: false,
-			title: mw.msg( 'rcfilters-tag-help', this.itemModel.getLabel() ),
+			label: mw.msg( 'rcfilters-tag-help', this.itemModel.getLabel() ),
+			invisibleLabel: true,
 			href: this.itemModel.getHelpLink(),
 			target: '_blank'
 		} );
 		// Prevent clicks on the help link from toggling the option
-		this.helpLink.$button.on( 'mousedown', ( e ) => e.stopPropagation() );
+		this.helpLink.$button.on( 'mousedown', ( e ) => {
+			e.preventDefault();
+			e.stopImmediatePropagation();
+		} );
 	}
 
 	this.highlightButton = new FilterItemHighlightButton(

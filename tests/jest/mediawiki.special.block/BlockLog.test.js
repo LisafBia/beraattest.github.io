@@ -63,4 +63,71 @@ describe( 'BlockLog', () => {
 		const rows = wrapper.findAll( '.cdx-table__table tbody tr' );
 		expect( rows ).toHaveLength( 3 );
 	} );
+
+	it( 'should show the active highlighted selected row', async () => {
+		mockMwConfigGet( { blockTargetUser: 'ActiveBlockedUser', blockTargetExists: true, blockId: 1116 } );
+		const wrapper = mount( BlockLog, {
+			propsData: { blockLogType: 'active' },
+			global: { plugins: [ createTestingPinia( { stubActions: false } ) ] }
+		} );
+		await flushPromises();
+		expect( wrapper.find( '.mw-block-log__type-active' ).exists() ).toBeTruthy();
+		const rows = wrapper.findAll( 'table.cdx-table__table tbody tr' );
+		expect( rows ).toHaveLength( 3 );
+		expect( rows[ 1 ].classes() ).toContain( 'cdx-selected-block-row' );
+	} );
+
+	it( 'should show a table with the block-user-no-active-blocks message when given a user with no active blocks', async () => {
+		mockMwConfigGet( { blockTargetUser: 'NeverBlocked' } );
+		const wrapper = mount( BlockLog, {
+			propsData: { blockLogType: 'active' },
+			global: { plugins: [ createTestingPinia( { stubActions: false } ) ] }
+		} );
+		await flushPromises();
+		// Test: The table should exist
+		expect( wrapper.find( '.mw-block-log__type-active' ).exists() ).toBeTruthy();
+		const rows = wrapper.findAll( 'table.cdx-table__table tbody tr' );
+		// Test: The table tbody should have one row
+		expect( rows ).toHaveLength( 1 );
+		// Test: The row should contain the block-user-no-active-blocks message
+		expect( rows[ 0 ].text() ).toContain( 'block-user-no-active-blocks' );
+	} );
+
+	it( 'should show a list of block parameters', async () => {
+		mockMwConfigGet( { blockTargetUser: 'PartiallyBlockedUser' } );
+		const wrapper = mount( BlockLog, {
+			propsData: { blockLogType: 'active' },
+			global: { plugins: [ createTestingPinia( { stubActions: false } ) ] }
+		} );
+		await flushPromises();
+		expect( wrapper.find( '.mw-block-log__type-active' ).exists() ).toBeTruthy();
+		const rows = wrapper.findAll( 'table.cdx-table__table tbody tr' );
+		expect( rows ).toHaveLength( 1 );
+		expect( rows[ 0 ].find( 'ul' ).text() ).toContain( 'blocklist-editing blocklist-editing-page Foobar' );
+	} );
+
+	it( 'should show relative expiries where appropriate', async () => {
+		mockMwConfigGet( { blockTargetUser: 'BlockedALot' } );
+		const wrapper = mount( BlockLog, {
+			propsData: { blockLogType: 'recent' },
+			global: { plugins: [ createTestingPinia( { stubActions: false } ) ] }
+		} );
+		await flushPromises();
+		// First expiry (5 years)
+		expect( wrapper.find(
+			'.mw-block-log__type-recent tr:first-child .mw-block-log__parameters li:first-child'
+		).text() ).toStrictEqual( '5 years' );
+		// Second is an unblock event, so no expiry
+		expect(
+			wrapper.find( '.mw-block-log__type-recent tr:nth-child(2) .mw-block-log__parameters' ).text()
+		).toStrictEqual( '' );
+		// Third row is an indefinite block
+		expect( wrapper.find(
+			'.mw-block-log__type-recent tr:nth-child(3) .mw-block-log__parameters li:first-child'
+		).text() ).toStrictEqual( 'infinite' );
+		// Fourth is a block entered with an exact datetime, and so should not show a relative expiry.
+		expect( wrapper.find(
+			'.mw-block-log__type-recent tr:nth-child(4) .mw-block-log__parameters li:first-child'
+		).text() ).toStrictEqual( '2029-09-20T14:31:51.000Z' );
+	} );
 } );

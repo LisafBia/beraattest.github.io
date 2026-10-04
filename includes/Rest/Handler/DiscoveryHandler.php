@@ -6,7 +6,8 @@ use MediaWiki\Config\Config;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Rest\Handler;
-use MediaWiki\Rest\Module\Module;
+use MediaWiki\Rest\Module\ModuleInfo;
+use MediaWiki\Rest\Module\ModuleMode;
 
 /**
  * Core REST API endpoint that outputs discovery information, including a
@@ -21,27 +22,26 @@ class DiscoveryHandler extends Handler {
 		MainConfigNames::RightsUrl,
 		MainConfigNames::RightsText,
 		MainConfigNames::EmergencyContact,
+		MainConfigNames::RestTermsOfServiceUrl,
 		MainConfigNames::Sitename,
 		MainConfigNames::Server,
+		MainConfigNames::CanonicalServer,
 	];
 
-	/** @var ServiceOptions */
-	private ServiceOptions $options;
+	private readonly ServiceOptions $options;
 
-	/**
-	 * @param Config $config
-	 */
 	public function __construct( Config $config ) {
 		$options = new ServiceOptions( self::CONSTRUCTOR_OPTIONS, $config );
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
 		$this->options = $options;
 	}
 
+	/** @inheritDoc */
 	public function execute() {
-		// NOTE: must match docs/rest/discovery-1.0.json
+		// NOTE: Must match docs/rest/discovery-1.1.json
 		return [
-			'mw-discovery' => '1.0',
-			'$schema' => 'https://www.mediawiki.org/schema/discovery-1.0',
+			'mw-discovery' => '1.1',
+			'$schema' => 'https://www.mediawiki.org/schema/discovery-1.1',
 			'info' => $this->getInfoSpec(),
 			'servers' => $this->getServerList(),
 			'modules' => $this->getModuleMap(),
@@ -50,18 +50,23 @@ class DiscoveryHandler extends Handler {
 		];
 	}
 
-	private function getModuleMap(): array {
+	private function getModuleMap(): object {
 		$modules = [];
 
-		foreach ( $this->getRouter()->getModuleIds() as $moduleName ) {
-			$module = $this->getRouter()->getModule( $moduleName );
-
-			if ( $module ) {
-				$modules[$moduleName] = $this->getModuleSpec( $moduleName, $module );
+		$router = $this->getRouter();
+		$moduleInfos = $router->getModuleManager()->getModuleInfos();
+		foreach ( $moduleInfos as $moduleId => $moduleInfo ) {
+			$availability = $moduleInfo->getAvailability();
+			// `getModuleInfos()` includes all registered modules.
+			// Exclude `HIDDEN` and `DISABLED` modules from `/discovery`.
+			if ( $availability === ModuleMode::DISABLED || $availability === ModuleMode::HIDDEN ) {
+				continue;
 			}
+
+			$modules[$moduleId] = $this->getModuleSpec( $moduleInfo );
 		}
 
-		return $modules;
+		return (object)$modules;
 	}
 
 	private function getServerList(): array {
@@ -73,17 +78,22 @@ class DiscoveryHandler extends Handler {
 		];
 	}
 
-	private function getInfoSpec() {
-		return [
+	private function getInfoSpec(): array {
+		$info = [
 			'title' => $this->options->get( MainConfigNames::Sitename ),
 			'mediawiki' => MW_VERSION,
 			'license' => $this->getLicenseSpec(),
 			'contact' => $this->getContactSpec(),
-			// TODO: terms of service
 			// TODO: owner/operator
-			// TODO: link to Special:RestSandbox
 			// TODO: link to https://www.mediawiki.org/wiki/API:REST_API
 		];
+
+		$termsOfService = $this->options->get( MainConfigNames::RestTermsOfServiceUrl );
+		if ( is_string( $termsOfService ) && $termsOfService !== '' ) {
+			$info['termsOfService'] = $termsOfService;
+		}
+
+		return $info;
 	}
 
 	private function getLicenseSpec(): array {
@@ -97,16 +107,50 @@ class DiscoveryHandler extends Handler {
 
 	private function getContactSpec(): array {
 		// https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.0.3.md#contact-object
+		$contact = [
+			'name' => $this->options->get( MainConfigNames::Sitename ),
+			'url' => $this->options->get( MainConfigNames::CanonicalServer ),
+		];
+
+		$email = $this->options->get( MainConfigNames::EmergencyContact );
+		// OpenAPI requires contact.email to be a valid email address. Keep the rest
+		// of the contact object intact and omit the field when the configured value
+		// does not satisfy that format.
+		if ( is_string( $email ) && filter_var( $email, FILTER_VALIDATE_EMAIL ) !== false ) {
+			$contact['email'] = $email;
+		}
+
+		return $contact;
+	}
+
+	private function getModuleSpec( ModuleInfo $moduleInfo ): array {
+		$moduleId = $moduleInfo->getId();
+		$infoSpec = [
+			'title' => $moduleInfo->getTitle() ?? $moduleId,
+			'groups' => $moduleInfo->getGroups(),
+		];
+		if ( $moduleInfo->getVersion() !== null ) {
+			$infoSpec['version'] = $moduleInfo->getVersion();
+		}
+		if ( $moduleInfo->getDescription() !== null ) {
+			$infoSpec['description'] = $moduleInfo->getDescription();
+		}
+
+		$router = $this->getRouter();
 		return [
-			'email' => $this->options->get( MainConfigNames::EmergencyContact ),
+			'moduleId' => $moduleId,
+			'info' => $infoSpec,
+			'base' => $router->getModuleBaseUrl( $moduleId ) ?? '',
+			'spec' => $router->getModuleSpecUrl( $moduleId ) ?? '',
 		];
 	}
 
-	private function getModuleSpec( string $moduleId, Module $module ): array {
-		return $module->getModuleDescription();
+	protected function getResponseBodySchemaFileName( string $method ): ?string {
+		return MW_INSTALL_PATH . '/docs/rest/discovery-1.1.json';
 	}
 
-	protected function getResponseBodySchemaFileName( string $method ): ?string {
-		return 'docs/rest/discovery-1.0.json';
+	/** @inheritDoc */
+	public function needsWriteAccess() {
+		return false;
 	}
 }

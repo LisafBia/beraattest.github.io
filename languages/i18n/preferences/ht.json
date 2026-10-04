@@ -143,7 +143,7 @@
 	"underline-always": "Toujou",
 	"tog-showhiddencats": "Montre kategori kache yo",
 	"tog-showrollbackconfirmation": "Montre yon demann konfimasyon lè gen klik sou yon lyen revokasyon",
-	"tog-forcesafemode": "Toujou aktive [[mw:Manual:Safemode|mòd asire]]",
+	"tog-forcesafemode": "Toujou aktive [[mw:Special:MyLanguage/Manual:Safemode|mòd asire]]",
 	"prefs-help-forcesafemode": "Dezaktive eskrip ak paj estil sou wiki a.",
 	"prefs-editing": "Modifikasyon",
 	"prefs-description-editing": "Pèsonalize fason ou fè, swiv, ak revize modifikasyon yo.",
@@ -228,6 +228,7 @@
 	"search-thumbnail-extra-namespaces-label": "Afiche viyèt yo nan Espesyal:Chache sou òdinatè",
 	"search-thumbnail-extra-namespaces-message": "Afiche viyèt pou $1 {{PLURAL:$2| }} espas non sou paj {{#special:search}} la.",
 	"prefs-advancedsearchoptions": "Opsyon avanse",
+	"prefs-misc": "Divès",
 	"prefs-reset-intro": "Ou ka itilize paj sa a pou retabli preferans ou yo ak valè padefo sou sit la. Sa pa ka anile anile ankò.",
 	"prefs-reset-confirm": "Wi, mwen vle retabli preferans mwen yo.",
 	"restoreprefs": "Retabli tout paramèt yo pa defo"

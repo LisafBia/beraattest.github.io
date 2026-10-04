@@ -1,26 +1,29 @@
 <?php
+declare( strict_types = 1 );
 
 namespace MediaWiki\Tests\OutputTransform;
 
 use MediaWiki\Context\RequestContext;
 use MediaWiki\MainConfigNames;
+use Mediawiki\MediaWikiServices;
 use MediaWiki\OutputTransform\OutputTransformStage;
-use MediaWiki\Parser\Parsoid\PageBundleParserOutputConverter;
+use MediaWiki\Parser\ParserOptions;
+use MediaWiki\Parser\ParserOutput;
 use MediaWikiIntegrationTestCase;
 
 abstract class OutputTransformStageTestBase extends MediaWikiIntegrationTestCase {
 	abstract public function createStage(): OutputTransformStage;
 
-	abstract public function provideShouldRun(): iterable;
+	abstract public static function provideShouldRun(): iterable;
 
-	abstract public function provideShouldNotRun(): iterable;
+	abstract public static function provideShouldNotRun(): iterable;
 
-	abstract public function provideTransform(): iterable;
+	abstract public static function provideTransform(): iterable;
 
 	/**
 	 * @dataProvider provideShouldRun
 	 */
-	public function testShouldRun( $parserOutput, $parserOptions, $options ) {
+	public function testShouldRun( ParserOutput $parserOutput, ParserOptions $parserOptions, array $options ) {
 		$stage = $this->createStage();
 		$this->assertTrue( $stage->shouldRun( $parserOutput, $parserOptions, $options ) );
 	}
@@ -28,17 +31,21 @@ abstract class OutputTransformStageTestBase extends MediaWikiIntegrationTestCase
 	public function setUp(): void {
 		RequestContext::resetMain();
 		$this->overrideConfigValues( [
+			MainConfigNames::CanonicalServer => 'https://TEST_SERVER',
 			MainConfigNames::ScriptPath => '/w',
 			MainConfigNames::Script => '/w/index.php',
 			MainConfigNames::Server => '//TEST_SERVER',
 			MainConfigNames::DefaultSkin => 'fallback'
 		] );
+
+		// Prevent extensions from interfering with the output
+		$this->clearHook( 'SkinEditSectionLinks' );
 	}
 
 	/**
 	 * @dataProvider provideShouldNotRun
 	 */
-	public function testShouldNotRun( $parserOutput, $parserOptions, $options ) {
+	public function testShouldNotRun( ParserOutput $parserOutput, ParserOptions $parserOptions, array $options ) {
 		$stage = $this->createStage();
 		$this->assertFalse( $stage->shouldRun( $parserOutput, $parserOptions, $options ) );
 	}
@@ -46,19 +53,19 @@ abstract class OutputTransformStageTestBase extends MediaWikiIntegrationTestCase
 	/**
 	 * @dataProvider provideTransform
 	 */
-	public function testTransform( $parserOutput, $parserOptions, $options, $expected, $message = '' ) {
+	public function testTransform( ParserOutput $parserOutput, ParserOptions $parserOptions, array $options,
+								   ParserOutput $expected, string $message = '' ): void {
 		$stage = $this->createStage();
 		$result = $stage->transform( $parserOutput, $parserOptions, $options );
-		// If this has Parsoid internal metadata, clear it in both the expected
-		// value and the result; these are internal implementation details
-		// that shouldn't be hardwired into tests.
-		if ( PageBundleParserOutputConverter::hasPageBundle( $result ) ) {
-			$key = PageBundleParserOutputConverter::PARSOID_PAGE_BUNDLE_KEY;
-			$expected->setExtensionData( $key, $result->getExtensionData( $key ) );
-		}
-		// Similarly, clear the parse start time to avoid a spurious diff.
+
+		// Clear the parse start time to avoid a spurious diff.
 		$result->clearParseStartTime();
 		$expected->clearParseStartTime();
-		$this->assertEquals( $expected, $result, $message );
+		$jsonCodec = MediaWikiServices::getInstance()->getJsonCodec();
+		$this->assertEquals(
+			$jsonCodec->toJsonArray( $expected ),
+			$jsonCodec->toJsonArray( $result ),
+			$message
+		);
 	}
 }

@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -68,20 +54,20 @@ class CommentStoreComment {
 	/**
 	 * Create a new, unsaved CommentStoreComment
 	 *
-	 * @param string|Message|CommentStoreComment $comment Comment text or Message object.
+	 * @param string|Message|self $comment Comment text or Message object.
 	 *  A CommentStoreComment is also accepted here, in which case it is returned unchanged.
 	 * @param array|null $data Structured data to store. Keys beginning with '_' are reserved.
 	 *  Ignored if $comment is a CommentStoreComment.
-	 * @return CommentStoreComment
+	 * @return self
 	 */
 	public static function newUnsavedComment( $comment, ?array $data = null ) {
-		if ( $comment instanceof CommentStoreComment ) {
+		if ( $comment instanceof self ) {
 			return $comment;
 		}
 
 		if ( $data !== null ) {
 			foreach ( $data as $k => $v ) {
-				if ( substr( $k, 0, 1 ) === '_' ) {
+				if ( str_starts_with( $k, '_' ) ) {
 					throw new InvalidArgumentException( 'Keys in $data beginning with "_" are reserved' );
 				}
 			}
@@ -93,12 +79,14 @@ class CommentStoreComment {
 			$text = $message->inLanguage( MediaWikiServices::getInstance()->getContentLanguage() )
 				->setInterfaceMessageFlag( true )
 				->text();
-			return new CommentStoreComment( null, $text, $message, $data );
+			return new self( null, $text, $message, $data );
 		} else {
-			return new CommentStoreComment( null, $comment, null, $data );
+			return new self( null, $comment, null, $data );
 		}
 	}
 }
 
+// This alias can not be removed, because serialized instances of this class are stored in Echo
+// tables, until we either migrate to JSON serialization (T325703) or expire those events (T383948).
 /** @deprecated class alias since 1.40 */
 class_alias( CommentStoreComment::class, 'CommentStoreComment' );

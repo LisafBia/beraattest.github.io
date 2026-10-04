@@ -1,39 +1,39 @@
 <?php
+declare( strict_types = 1 );
 
 namespace MediaWiki\Tests\OutputTransform\Stages;
 
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\OutputTransform\OutputTransformStage;
 use MediaWiki\OutputTransform\Stages\AddRedirectHeader;
+use MediaWiki\Parser\ParserOptions;
 use MediaWiki\Parser\ParserOutput;
 use MediaWiki\Tests\OutputTransform\OutputTransformStageTestBase;
 use Psr\Log\NullLogger;
 
 /**
  * @covers \MediaWiki\OutputTransform\Stages\AddRedirectHeader
- * @group Database
- *        ^ Title shenanigans seem to require this
  */
 class AddRedirectHeaderTest extends OutputTransformStageTestBase {
 
 	public function createStage(): OutputTransformStage {
 		return new AddRedirectHeader(
 			new ServiceOptions( [] ),
-			new NullLogger()
+			new NullLogger(),
 		);
 	}
 
-	public function provideShouldRun(): iterable {
+	public static function provideShouldRun(): iterable {
 		$po = new ParserOutput();
 		$po->setRedirectHeader( 'xyz' );
-		yield [ $po, null, [] ];
+		yield [ $po, ParserOptions::newFromAnon(), [] ];
 	}
 
-	public function provideShouldNotRun(): array {
-		return [ [ new ParserOutput(), null, [] ] ];
+	public static function provideShouldNotRun(): array {
+		return [ [ new ParserOutput(), ParserOptions::newFromAnon(), [] ] ];
 	}
 
-	public function provideTransform(): array {
+	public static function provideTransform(): array {
 		$text = "<h1>header</h1>\n<p>hello world</p>";
 		$redirect = '<div class="redirectMsg">REDIRECT</div>';
 		$expectedText = <<<EOF
@@ -42,8 +42,17 @@ EOF;
 
 		$po = new ParserOutput( $text );
 		$po->setRedirectHeader( $redirect );
+		$po->getContentHolder()->setAsHtmlString( 'My Fragment', 'this is just a random fragment' );
 		$expected = new ParserOutput( $expectedText );
 		$expected->setRedirectHeader( $redirect );
-		return [ [ $po, null, [], $expected ] ];
+		$expected->getContentHolder()->setAsHtmlString( 'My Fragment', 'this is just a random fragment' );
+
+		// DOM version
+		$po2 = clone $po;
+		$po2->getContentHolder()->getAsDom();
+		return [
+			'text' => [ $po, ParserOptions::newFromAnon(), [], $expected ],
+			'dom' => [ $po2, ParserOptions::newFromAnon(), [], $expected ],
+		];
 	}
 }

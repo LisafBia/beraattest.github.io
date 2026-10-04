@@ -1,4 +1,5 @@
 <?php
+declare( strict_types = 1 );
 
 namespace MediaWiki\OutputTransform;
 
@@ -8,12 +9,15 @@ use MediaWiki\Parser\ParserOutput;
 use Psr\Log\LoggerInterface;
 
 /**
- * Classes implementing the OutputTransformStage aim at being added to a pipeline of transformations that transform
- * a ParserOutput. The argument ParserOutput can explicitly be modified in place; ensuring that cached objects
- * do not suffer from side effects is the caller's (typically the pipeline's) responsibility.
+ * Classes extending OutputTransformStage are typically added to a
+ * pipeline of transformations that transform a ParserOutput. The
+ * argument ParserOutput can explicitly be modified in place; ensuring
+ * that cached objects do not suffer from side effects is the caller's
+ * (typically the pipeline's) responsibility.
  * @unstable
  */
 abstract class OutputTransformStage {
+
 	protected ServiceOptions $options;
 	protected LoggerInterface $logger;
 
@@ -21,7 +25,10 @@ abstract class OutputTransformStage {
 	public const CONSTRUCTOR_OPTIONS = [];
 
 	/** @internal */
-	public function __construct( ServiceOptions $options, LoggerInterface $logger ) {
+	public function __construct(
+		ServiceOptions $options,
+		LoggerInterface $logger,
+	) {
 		// Note this is static:: not self:: so we use the subclass options
 		$options->assertRequiredOptions( static::CONSTRUCTOR_OPTIONS );
 		$this->options = $options;
@@ -32,11 +39,14 @@ abstract class OutputTransformStage {
 	 * Decides whether or not the stage should be run
 	 * @param ParserOutput $po
 	 * @unstable
-	 * @param ParserOptions|null $popts
+	 * @param ParserOptions $popts
 	 * @param array $options
 	 * @return bool
 	 */
-	abstract public function shouldRun( ParserOutput $po, ?ParserOptions $popts, array $options = [] ): bool;
+	public function shouldRun( ParserOutput $po, ParserOptions $popts, array $options = [] ): bool {
+		// A simple default implementation.
+		return true;
+	}
 
 	/**
 	 * Transforms the input ParserOutput into the returned ParserOutput.
@@ -48,5 +58,5 @@ abstract class OutputTransformStage {
 	 * Modifying $options during this pass is considered deprecated.
 	 * @unstable
 	 */
-	abstract public function transform( ParserOutput $po, ?ParserOptions $popts, array &$options ): ParserOutput;
+	abstract public function transform( ParserOutput $po, ParserOptions $popts, array &$options ): ParserOutput;
 }

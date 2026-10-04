@@ -1,6 +1,7 @@
 /*!
  * Add search suggestions to the search form.
  */
+// setup API
 ( function () {
 	// eslint-disable-next-line no-jquery/no-map-util
 	const searchNS = $.map( mw.config.get( 'wgFormattedNamespaces' ), ( nsName, nsID ) => {
@@ -33,14 +34,14 @@
 		/**
 		 * @callback mw.searchSuggest~ResponseFunction
 		 * @param {string[]} titles titles of pages that match search
-		 * @param {ResponseMetaData} meta meta data relating to search.
+		 * @param {mw.searchSuggest~ResponseMetaData} meta meta data relating to search.
 		 */
 		/**
 		 * Queries the wiki and calls response with the result.
 		 *
 		 * @param {mw.Api} api
 		 * @param {string} query
-		 * @param {ResponseFunction} response
+		 * @param {mw.searchSuggest~ResponseFunction} response
 		 * @param {string|number} [limit]
 		 * @param {string|number|string[]|number[]} [namespace]
 		 * @return {jQuery.Deferred}
@@ -61,7 +62,9 @@
 			} );
 		}
 	};
+}() );
 
+const init = () => {
 	$( () => {
 		let api;
 		// Region where the suggestions box will appear directly below
@@ -92,7 +95,7 @@
 				const $form = context.config.$region.closest( 'form' );
 
 				let baseHref = $form.attr( 'action' ) || '';
-				baseHref += baseHref.indexOf( '?' ) > -1 ? '&' : '?';
+				baseHref += baseHref.includes( '?' ) ? '&' : '?';
 
 				const linkParams = serializeObject( $form.serializeArray() );
 
@@ -398,5 +401,8 @@
 			$searchForm.find( '.mw-fallbackSearchButton' ).remove();
 		}
 	} );
+};
 
-}() );
+// Expose module for enabling search suggestions at skin level, separately
+// from public mw.searchSuggest API.
+module.exports = { init };

@@ -9,7 +9,6 @@ use MediaWiki\Settings\Source\Format\SettingsFormat;
 use MediaWiki\Settings\Source\Format\YamlFormat;
 use Stringable;
 use UnexpectedValueException;
-use Wikimedia\AtEase\AtEase;
 
 /**
  * Settings loaded from a local file path.
@@ -94,8 +93,6 @@ class FileSource implements Stringable, CacheableSource, SettingsIncludeLocator 
 	 * Disallow stale results from file sources in the case of load failure as
 	 * failing to read from disk would be quite catastrophic and worthy of
 	 * propagation.
-	 *
-	 * @return bool
 	 */
 	public function allowsStaleLoad(): bool {
 		return false;
@@ -118,7 +115,7 @@ class FileSource implements Stringable, CacheableSource, SettingsIncludeLocator 
 		}
 
 		foreach ( self::BUILT_IN_FORMATS as $format ) {
-			if ( call_user_func( [ $format, 'supportsFileExtension' ], $ext ) ) {
+			if ( $format::supportsFileExtension( $ext ) ) {
 				return $this->readAndDecode( new $format() );
 			}
 		}
@@ -133,8 +130,6 @@ class FileSource implements Stringable, CacheableSource, SettingsIncludeLocator 
 
 	/**
 	 * The cache expiry TTL (in seconds) for this file source.
-	 *
-	 * @return int
 	 */
 	public function getExpiryTtl(): int {
 		return self::EXPIRY_TTL;
@@ -143,8 +138,6 @@ class FileSource implements Stringable, CacheableSource, SettingsIncludeLocator 
 	/**
 	 * Coefficient used in determining early expiration of cached settings to
 	 * avoid stampedes.
-	 *
-	 * @return float
 	 */
 	public function getExpiryWeight(): float {
 		return self::EXPIRY_WEIGHT;
@@ -153,8 +146,6 @@ class FileSource implements Stringable, CacheableSource, SettingsIncludeLocator 
 	/**
 	 * Returns a hash key computed from the file's inode, size, and last
 	 * modified timestamp.
-	 *
-	 * @return string
 	 */
 	public function getHashKey(): string {
 		$stat = stat( $this->path );
@@ -171,8 +162,6 @@ class FileSource implements Stringable, CacheableSource, SettingsIncludeLocator 
 
 	/**
 	 * Returns this file source as a string.
-	 *
-	 * @return string
 	 */
 	public function __toString(): string {
 		return $this->path;
@@ -187,7 +176,8 @@ class FileSource implements Stringable, CacheableSource, SettingsIncludeLocator 
 	 * @throws SettingsBuilderException
 	 */
 	private function readAndDecode( SettingsFormat $format ): array {
-		$contents = AtEase::quietCall( 'file_get_contents', $this->path );
+		// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+		$contents = @file_get_contents( $this->path );
 
 		if ( $contents === false ) {
 			if ( !is_readable( $this->path ) ) {

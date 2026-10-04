@@ -14,10 +14,9 @@ use Wikimedia\ParamValidator\ParamValidator;
  * discouraged, and you should preferably require that the endpoint be used with a session provider that is
  * safe against CSRF, such as OAuth.
  * @see Handler::requireSafeAgainstCsrf()
- *
- * @package MediaWiki\Rest
  */
 trait TokenAwareHandlerTrait {
+	/** @inheritDoc */
 	abstract public function getValidatedBody();
 
 	abstract public function getSession(): Session;
@@ -34,6 +33,7 @@ trait TokenAwareHandlerTrait {
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => false,
 				ParamValidator::PARAM_DEFAULT => '',
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-csrf-token-description' ),
 			]
 		];
 	}
@@ -66,8 +66,6 @@ trait TokenAwareHandlerTrait {
 	 *
 	 * Returns false if the request has been authenticated in a way that
 	 * protects against CSRF, such as OAuth.
-	 *
-	 * @return bool
 	 */
 	protected function needsToken(): bool {
 		return !$this->getSession()->getProvider()->safeAgainstCsrf();
@@ -76,8 +74,6 @@ trait TokenAwareHandlerTrait {
 	/**
 	 * Returns a standard error message to use when the given CSRF token is invalid.
 	 * In the future, this trait may also provide a method for checking the token.
-	 *
-	 * @return MessageValue
 	 */
 	protected function getBadTokenMessage(): MessageValue {
 		return DataMessageValue::new( 'rest-badtoken' );

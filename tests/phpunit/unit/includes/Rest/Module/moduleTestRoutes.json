@@ -1,11 +1,25 @@
 {
 	"$schema": "https://www.mediawiki.org/schema/mwapi-1.0",
-	"mwapi": "1.0.0",
+	"mwapi": "1.1.0",
 	"moduleId": "test.v1",
 	"info": {
 		"title": "test",
 		"version": "1.0"
 	},
+	"externalDocs": {
+		"description": "Test docs",
+		"url": "https://example.com/docs"
+	},
+	"tags": [
+		{
+			"name": "Foo",
+			"description": "Foo operations"
+		},
+		{
+			"name": "Bar",
+			"description": "Bar operations"
+		}
+	],
 	"paths": {
 		"/ModuleTest/HELLO/{name}": {
 			"get": {
@@ -16,9 +30,22 @@
 		},
 		"/ModuleTest/hello/{name}": {
 			"get": {
+				"operationId": "getHelloName",
+				"summary": "hello summary",
+				"x-i18n-description": "rest-endpoint-desc-mock-desc",
 				"handler": {
 					"class": "MediaWiki\\Tests\\Rest\\Handler\\HelloHandler",
 					"hello": "hi!"
+				}
+			}
+		},
+		"/ModuleTest/do-action": {
+			"get": {
+				"handler": {
+					"adapter": {
+						"type": "action",
+						"action": "move"
+					}
 				}
 			}
 		},
@@ -47,6 +74,17 @@
 			"get": {
 				"handler": {
 					"factory": "MediaWiki\\Tests\\Rest\\MockHandlerFactory::throwWrappedHandlerFactory"
+				}
+			}
+		},
+		"/ModuleTest/deprecated": {
+			"get": {
+				"deprecationSettings": {
+					"since": 1735689600
+				},
+				"handler": {
+					"class": "MediaWiki\\Tests\\Rest\\Handler\\HelloHandler",
+					"hello": "hi!"
 				}
 			}
 		}

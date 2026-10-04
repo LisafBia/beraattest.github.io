@@ -1,6 +1,4 @@
-'use strict';
-
-const Page = require( 'wdio-mediawiki/Page' );
+import Page from 'wdio-mediawiki/Page.js';
 
 class RecentChangesPage extends Page {
 	get changesList() {
@@ -11,8 +9,8 @@ class RecentChangesPage extends Page {
 		return $( '.mw-rcfilters-ui-liveUpdateButtonWidget' );
 	}
 
-	get titles() {
-		return this.changesList.$$( '.mw-changeslist-title' );
+	title( name ) {
+		return this.changesList.$( `=${ name }` );
 	}
 
 	async open() {
@@ -21,4 +19,4 @@ class RecentChangesPage extends Page {
 
 }
 
-module.exports = new RecentChangesPage();
+export default new RecentChangesPage();

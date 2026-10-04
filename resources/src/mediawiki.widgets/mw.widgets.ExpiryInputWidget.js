@@ -35,11 +35,15 @@
 			items: [
 				new OO.ui.ButtonOptionWidget( {
 					data: 'relative',
-					icon: 'edit'
+					icon: 'edit',
+					invisibleLabel: true,
+					label: mw.msg( 'mw-widgets-expiryinput-relative' )
 				} ),
 				new OO.ui.ButtonOptionWidget( {
 					data: 'date',
-					icon: 'calendar'
+					icon: 'calendar',
+					invisibleLabel: true,
+					label: mw.msg( 'mw-widgets-expiryinput-calendar' )
 				} )
 			]
 		} );
@@ -85,7 +89,7 @@
 
 			const datetime = moment( value );
 
-			// If the datetime is invlaid for some reason, reset the relative field.
+			// If the datetime is invalid for some reason, reset the relative field.
 			if ( !datetime.isValid() ) {
 				this.relativeField.setValue( undefined );
 			}

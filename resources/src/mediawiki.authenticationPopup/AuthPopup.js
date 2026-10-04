@@ -1,4 +1,4 @@
-const { SUCCESS_PAGE_MESSAGE } = require( './constants.js' );
+const { SUCCESS_PAGE_MESSAGE, CANCEL_PAGE_MESSAGE } = require( './constants.js' );
 const AuthMessageDialog = require( './AuthMessageDialog.js' );
 const AuthPopupError = require( './AuthPopupError.js' );
 
@@ -257,83 +257,6 @@ class AuthPopup {
 	}
 
 	/**
-	 * Open the login form in a new browser tab or window.
-	 *
-	 * In the parent window, display a backdrop message dialog,
-	 * to provide an alternative method to log in if the browser refuses to open the window,
-	 * and to allow the user to restart the process if they lose track of the new tab or window.
-	 *
-	 * This should only be called in response to a user-initiated event like 'click',
-	 * otherwise the user's browser will always refuse to open the window.
-	 *
-	 * @return {Promise<any>} Resolved when the login succeeds with the value returned by the
-	 *     `checkLoggedIn` callback. Resolved with a falsy value if the user cancels the process.
-	 *     Rejected when an unexpected error stops the login process.
-	 */
-	startNewTabOrWindow() {
-		const openWindow = () => window.open( this.loginPopupUrl, '_blank' );
-
-		return this.showDialog( {
-			initOpenWindow: openWindow,
-
-			openWindow: openWindow,
-
-			data: {
-				title: OO.ui.deferMsg( 'userlogin-authpopup-loggingin-title' ),
-				message: this.message
-			}
-		} );
-	}
-
-	/**
-	 * Open the login form in an iframe in a modal message dialog.
-	 *
-	 * In order for this to work, the wiki must be configured to allow the login page to be framed
-	 * ($wgEditPageFrameOptions), which has security implications.
-	 *
-	 * Add a button to provide an alternative method to log in, just in case.
-	 *
-	 * @return {Promise<any>} Resolved when the login succeeds with the value returned by the
-	 *     `checkLoggedIn` callback. Resolved with a falsy value if the user cancels the process.
-	 *     Rejected when an unexpected error stops the login process.
-	 */
-	startIframe() {
-		const $iframe = $( '<iframe>' )
-			.attr( 'src', this.loginPopupUrl )
-			.css( {
-				border: '0',
-				display: 'block',
-				width: '100%',
-				height: '100%'
-			} );
-
-		return this.showDialog( {
-			initOpenWindow: () => {},
-
-			openWindow: ( m ) => {
-				// We can't pass it as .data.message, because that has wrappers that mess up the styles
-				m.$body.empty().append( $iframe );
-				// Allow default click handling on the fallback link-action (eww)
-				m.actions.get( { actions: 'fallback' } )[ 0 ].off( 'click' );
-			},
-
-			data: {
-				title: '',
-				message: '',
-				actions: [ {
-					action: 'fallback',
-					href: this.loginFallbackUrl,
-					target: '_blank',
-					label: OO.ui.deferMsg( 'userlogin-authpopup-loggingin-body-link' ),
-					flags: 'safe'
-				} ].concat(
-					AuthMessageDialog.static.actions.filter( ( a ) => a.action === 'cancel' )
-				)
-			}
-		} );
-	}
-
-	/**
 	 * Open the backdrop dialog for a customizable popup window.
 	 *
 	 * Caller must provide callback functions that open their popup window, and/or provide the dialog
@@ -417,13 +340,23 @@ class AuthPopup {
 				window.addEventListener( 'focus', onFocus );
 				instance.closed.then( () => window.removeEventListener( 'focus', onFocus ) );
 
-				// Wait for a message from authSuccess.js.
+				// Wait for a message from authSuccess.js or authCancel.js.
 				// Beware that it may never come if the initial popup was blocked,
 				// in which case we rely on checking in the 'focus' event.
 				const onMessage = ( event ) => {
-					if ( event.origin !== window.origin ) {
+					if ( event.data === CANCEL_PAGE_MESSAGE ) {
+						// User explicitly cancelled the auth workflow. Close the popup and
+						// resolve without checking checkLoggedIn — the user may still have a
+						// valid session from before, but they've chosen not to complete this
+						// action.
+						if ( w ) {
+							w.close();
+						}
+						m.close();
+						resolve( null );
 						return;
 					}
+
 					if ( event.data !== SUCCESS_PAGE_MESSAGE ) {
 						return;
 					}

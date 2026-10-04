@@ -6,21 +6,7 @@
  * of their caller, and B) MediaWiki has way too many globals. So instead
  * we'll kinda fake it, and do the requires() inline. <3 PHP
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
@@ -39,7 +25,7 @@ if ( !defined( 'RUN_MAINTENANCE_IF_MAIN' ) ) {
 
 // Wasn't included from the file scope, halt execution (probably wanted the class).
 // This typically happens when a maintenance script is executed using run.php.
-// @phan-suppress-next-line PhanSuspiciousValueComparisonInGlobalScope
+// @phan-suppress-next-line PhanRedundantValueComparisonInGlobalScope
 if ( !MaintenanceRunner::shouldExecute() && $maintClass != CommandLineInc::class ) {
 	return;
 }
@@ -53,7 +39,7 @@ if ( !$maintClass || !class_exists( $maintClass ) ) {
 // Define the MediaWiki entrypoint
 define( 'MEDIAWIKI', true );
 
-$IP = wfDetectInstallPath();
+$IP = wfDetectInstallPath(); // ensures MW_INSTALL_PATH is defined
 require_once "$IP/includes/AutoLoader.php";
 
 $runner = new MaintenanceRunner();
@@ -68,14 +54,16 @@ $runner->defineSettings();
 // Custom setup for Maintenance entry point
 if ( !defined( 'MW_FINAL_SETUP_CALLBACK' ) ) {
 
-	// Define a function, since we can't put a closure or object
-	// reference into MW_FINAL_SETUP_CALLBACK.
+	/**
+	 * Define a function, since we can't put a closure or object
+	 * reference into MW_FINAL_SETUP_CALLBACK.
+	 */
 	function wfMaintenanceSetup( SettingsBuilder $settingsBuilder ) {
 		global $runner;
 		$runner->setup( $settingsBuilder );
 	}
 
-	define( 'MW_FINAL_SETUP_CALLBACK', 'wfMaintenanceSetup' );
+	define( 'MW_FINAL_SETUP_CALLBACK', wfMaintenanceSetup( ... ) );
 }
 
 // Initialize MediaWiki (load settings, initialized session,

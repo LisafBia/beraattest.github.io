@@ -14,8 +14,21 @@ const presetTestCases = [
 			blockExpiryPreset: 'indefinite'
 		},
 		expected: {
-			expiryType: 'preset-duration',
-			presetDuration: 'infinite'
+			expiryType: 'indefinite'
+		}
+	},
+	{
+		title: 'no default, wpExpiry=indefinite [preset] custom "indefinite" expiry option',
+		config: {
+			isInfinity: true,
+			blockExpiryPreset: 'indefinite',
+			blockExpiryOptions: {
+				infinite: 'indefinite',
+				'31 horas': '31 hours'
+			}
+		},
+		expected: {
+			expiryType: 'indefinite'
 		}
 	},
 	{
@@ -102,7 +115,7 @@ describe( 'ExpiryField', () => {
 			} );
 			await wrapper.vm.$nextTick();
 
-			Object.keys( expected ).forEach( ( key ) => {
+			for ( const key in expected ) {
 				// Test against the app instance
 				expect( wrapper.vm[ key ] ).toStrictEqual( expected[ key ] );
 
@@ -127,7 +140,7 @@ describe( 'ExpiryField', () => {
 							.toStrictEqual( expected[ key ] );
 						break;
 				}
-			} );
+			}
 		}
 	);
 } );

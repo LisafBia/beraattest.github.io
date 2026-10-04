@@ -15,25 +15,18 @@ namespace MediaWiki\Rest;
 class RedirectException extends HttpException {
 
 	/**
-	 * The redirect target (an absolute URL)
-	 * @var string
-	 */
-	private $target;
-
-	/**
 	 * @stable to call
 	 *
 	 * @param int $code The HTTP status code (3xx) for this redirect
 	 * @param string $target The redirect target (an absolute URL)
 	 */
-	public function __construct( int $code, string $target ) {
+	public function __construct(
+		int $code,
+		private readonly string $target,
+	) {
 		parent::__construct( 'Redirect', $code );
-		$this->target = $target;
 	}
 
-	/**
-	 * @return string
-	 */
 	public function getTarget(): string {
 		return $this->target;
 	}

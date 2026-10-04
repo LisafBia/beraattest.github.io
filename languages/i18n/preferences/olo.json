@@ -136,7 +136,7 @@
 	"underline-always": "Ainos",
 	"tog-showhiddencats": "Ozuta peitetyt kategouriet",
 	"tog-showrollbackconfirmation": "Ozuta lujuandupakičus sua endizeh kundoh -linkua painaldajes",
-	"tog-forcesafemode": "Ota ainos käyttöh [[mw:Manual:Safemode|turvalline ruandutaba]]",
+	"tog-forcesafemode": "Ota ainos käyttöh [[mw:Special:MyLanguage/Manual:Safemode|turvalline ruandutaba]]",
 	"prefs-help-forcesafemode": "Ota iäre käytöspäi wiki-skriptat da CSS.",
 	"prefs-editing": "Kohendamine",
 	"prefs-description-editing": "Azeta, kui luajit, tarkailet da kačot kohenduksii.",
@@ -219,6 +219,7 @@
 	"search-thumbnail-extra-namespaces-label": "Ozuta pienet kuvat Special:Search:s tiedokonehen ruadostolal",
 	"search-thumbnail-extra-namespaces-message": "Ozuttau pienii kuvii {{PLURAL:$2|nimitilan|nimitiloin}} $1 eččotuloksile sivul {{#special:search}}",
 	"prefs-advancedsearchoptions": "Ližäazetukset",
+	"prefs-misc": "Muut azetukset",
 	"prefs-reset-intro": "Voit käyttiä tädä sivuu, ku tahtonet muuttua omii azetuksii miärättylöih alguazetuksih. Tädä sit ei sua kumata.",
 	"prefs-reset-confirm": "Muga, minä tahton kumata omii azetuksii.",
 	"restoreprefs": "Sua endizeh kundoh kai azetukset, kudamat oli miärätty"

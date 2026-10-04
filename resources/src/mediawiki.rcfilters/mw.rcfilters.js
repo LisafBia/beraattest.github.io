@@ -98,6 +98,38 @@ function init() {
 	} else if ( specialPage === 'Watchlist' ) {
 		$( '.mw-watchlist-owner, .mw-watchlist-toollinks, form#mw-watchlist-resetbutton' ).remove();
 		$topSection = $( '.watchlistDetails' ).detach().contents();
+		if ( mw.config.get( 'enableWatchlistLabels', false ) ) {
+			conditionalViews.wllabels = {
+				title: mw.msg( 'watchlist-filters-labels-list-title' ),
+				trigger: '=',
+				groups: [ {
+					// Group definition (single group)
+					name: 'wllabel', // Parameter name
+					type: 'string_options',
+					title: 'watchlist-filters-labels-list-title',
+					separator: ';',
+					supportsAll: false,
+					fullCoverage: false,
+					filters: mw.config.get( 'watchlistLabels' ),
+					labelPrefixKey: {
+						default: 'watchlist-filters-tag-prefix-labels',
+						inverted: 'watchlist-filters-tag-prefix-labels-inverted'
+					}
+				} ]
+			};
+			conditionalViews.invertwlLabels = {
+				groups: [
+					{
+						name: 'invertWLLabelsGroup',
+						type: 'boolean',
+						hidden: true,
+						filters: [ {
+							name: 'invertwllabels',
+							default: '0'
+						} ]
+					} ]
+			};
+		}
 	} else if ( specialPage === 'Recentchangeslinked' ) {
 		conditionalViews.recentChangesLinked = {
 			groups: [
@@ -142,7 +174,8 @@ function init() {
 			$filtersContainer: $( '.mw-rcfilters-container' ),
 			$changesListContainer: $( '.mw-changeslist, .mw-changeslist-empty' ),
 			$formContainer: $initialFieldset,
-			collapsed: initialCollapsedState
+			collapsed: initialCollapsedState,
+			specialPage: specialPage
 		}
 	);
 
@@ -151,20 +184,24 @@ function init() {
 	// call will do that and add the -loading class right back.
 	$( document.body ).removeClass( 'mw-rcfilters-ui-loading' );
 
+	// Restricted tags the user may view are sent per-request, outside the
+	// publicly cached module (empty for most users).
+	let changeTags = require( './config.json' ).RCFiltersChangeTags;
+	const restrictedTags = mw.config.get( 'wgStructuredChangeFiltersRestrictedTags' ) || [];
+	if ( restrictedTags.length ) {
+		changeTags = changeTags.concat( restrictedTags )
+			.sort( ( a, b ) => a.label.localeCompare( b.label ) );
+	}
+
 	controller.initialize(
 		mw.config.get( 'wgStructuredChangeFilters' ),
 		// All namespaces without Media namespace
 		getNamespaces( [ 'Media' ] ),
-		require( './config.json' ).RCFiltersChangeTags,
+		changeTags,
 		conditionalViews
 	);
 
 	mainWrapperWidget.initFormWidget( specialPage );
-
-	$( 'a.mw-helplink' ).attr(
-		'href',
-		'https://www.mediawiki.org/wiki/Special:MyLanguage/Help:New_filters_for_edit_review'
-	);
 
 	controller.replaceUrl();
 

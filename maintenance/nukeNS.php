@@ -12,21 +12,7 @@
  * back up your DB if there's anything in the MediaWiki that is important to
  * you.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  * @author Steve Sanbeg
@@ -60,7 +46,7 @@ class NukeNS extends Maintenance {
 		$delete = $this->hasOption( 'delete' );
 		$all = $this->hasOption( 'all' );
 		$dbw = $this->getPrimaryDB();
-		$this->beginTransaction( $dbw, __METHOD__ );
+		$this->beginTransactionRound( __METHOD__ );
 
 		$res = $dbw->newSelectQueryBuilder()
 			->select( 'page_title' )
@@ -91,14 +77,16 @@ class NukeNS extends Maintenance {
 				// as much as I hate to cut & paste this, it's a little different, and
 				// I already have the id & revs
 				if ( $delete ) {
-					$dbw->newDeleteQueryBuilder()
+					$deleteQueryBuilder = $dbw->newDeleteQueryBuilder()
 						->deleteFrom( 'page' )
 						->where( [ 'page_id' => $id ] )
-						->caller( __METHOD__ )->execute();
-					$this->commitTransaction( $dbw, __METHOD__ );
+						->caller( __METHOD__ );
+					$deleteQueryBuilder->execute();
+					$this->getServiceContainer()->getLinkWriteDuplicator()->duplicate( $deleteQueryBuilder );
+					$this->commitTransactionRound( __METHOD__ );
 					// Delete revisions as appropriate
 					/** @var NukePage $child */
-					$child = $this->runChild( NukePage::class, 'nukePage.php' );
+					$child = $this->createChild( NukePage::class, 'nukePage.php' );
 					'@phan-var NukePage $child';
 					$child->deleteRevisions( $revs );
 					$n_deleted++;
@@ -107,7 +95,7 @@ class NukeNS extends Maintenance {
 				$this->output( "skip: " . $title->getPrefixedText() . "\n" );
 			}
 		}
-		$this->commitTransaction( $dbw, __METHOD__ );
+		$this->commitTransactionRound( __METHOD__ );
 
 		if ( $n_deleted > 0 ) {
 			$this->purgeRedundantText( true );

@@ -2,21 +2,7 @@
 /**
  * Representation for a category.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @author Simetrical
  */
@@ -24,6 +10,7 @@
 namespace MediaWiki\Category;
 
 use MediaWiki\Deferred\DeferredUpdates;
+use MediaWiki\Deferred\LinksUpdate\CategoryLinksTable;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Title\Title;
@@ -31,6 +18,7 @@ use MediaWiki\Title\TitleArrayFromResult;
 use MediaWiki\Title\TitleFactory;
 use RuntimeException;
 use stdClass;
+use Wikimedia\LockManager\ILockManager;
 use Wikimedia\Rdbms\IConnectionProvider;
 use Wikimedia\Rdbms\ReadOnlyMode;
 
@@ -68,20 +56,17 @@ class Category {
 	public const COUNT_ALL_MEMBERS = 0;
 	public const COUNT_CONTENT_PAGES = 1;
 
-	/** @var IConnectionProvider */
-	private $dbProvider;
-
-	/** @var ReadOnlyMode */
-	private $readOnlyMode;
-
-	/** @var TitleFactory */
-	private $titleFactory;
+	private readonly IConnectionProvider $dbProvider;
+	private readonly ReadOnlyMode $readOnlyMode;
+	private readonly TitleFactory $titleFactory;
+	private ILockManager $lockManager;
 
 	private function __construct() {
 		$services = MediaWikiServices::getInstance();
 		$this->dbProvider = $services->getConnectionProvider();
 		$this->readOnlyMode = $services->getReadOnlyMode();
 		$this->titleFactory = $services->getTitleFactory();
+		$this->lockManager = $services->getLockManager();
 	}
 
 	/**
@@ -120,7 +105,7 @@ class Category {
 
 				# If the page exists, call refreshCounts to add a row for it.
 				if ( $mode === self::LAZY_INIT_ROW && $this->mPage->exists() ) {
-					DeferredUpdates::addCallableUpdate( [ $this, 'refreshCounts' ] );
+					DeferredUpdates::addCallableUpdate( $this->refreshCounts( ... ) );
 				}
 
 				return true;
@@ -154,7 +139,7 @@ class Category {
 			$this->mPages = max( $this->mPages, $this->mSubcats + $this->mFiles );
 
 			if ( $mode === self::LAZY_INIT_ROW ) {
-				DeferredUpdates::addCallableUpdate( [ $this, 'refreshCounts' ] );
+				DeferredUpdates::addCallableUpdate( $this->refreshCounts( ... ) );
 			}
 		}
 
@@ -166,19 +151,17 @@ class Category {
 	 *
 	 * @param string $name A category name (no "Category:" prefix).  It need
 	 *   not be normalized, with spaces replaced by underscores.
-	 * @return Category|bool Category, or false on a totally invalid name
+	 * @return self|false Category, or false on a totally invalid name
 	 */
 	public static function newFromName( $name ) {
-		$cat = new self();
 		$title = Title::makeTitleSafe( NS_CATEGORY, $name );
-
-		if ( !is_object( $title ) ) {
+		if ( !$title ) {
 			return false;
 		}
 
+		$cat = new self();
 		$cat->mPage = $title;
 		$cat->mName = $title->getDBkey();
-
 		return $cat;
 	}
 
@@ -186,7 +169,7 @@ class Category {
 	 * Factory function.
 	 *
 	 * @param PageIdentity $page Category page. Warning, no validation is performed!
-	 * @return Category
+	 * @return self
 	 */
 	public static function newFromTitle( PageIdentity $page ): self {
 		$cat = new self();
@@ -201,7 +184,7 @@ class Category {
 	 * Factory function.
 	 *
 	 * @param int $id A category id. Warning, no validation is performed!
-	 * @return Category
+	 * @return self
 	 */
 	public static function newFromID( $id ) {
 		$cat = new self();
@@ -217,7 +200,7 @@ class Category {
 	 *   given. If the fields are null and no PageIdentity was given, this method fails and returns
 	 *   false.
 	 * @param PageIdentity|null $page This must be provided if there is no cat_title field in $row.
-	 * @return Category|false
+	 * @return self|false
 	 */
 	public static function newFromRow( stdClass $row, ?PageIdentity $page = null ) {
 		$cat = new self();
@@ -338,13 +321,14 @@ class Category {
 	 * @return TitleArrayFromResult Title objects for category members.
 	 */
 	public function getMembers( $limit = false, $offset = '' ) {
-		$dbr = $this->dbProvider->getReplicaDatabase();
+		$dbr = $this->dbProvider->getReplicaDatabase( CategoryLinksTable::VIRTUAL_DOMAIN );
 		$queryBuilder = $dbr->newSelectQueryBuilder();
 		$queryBuilder->select( [ 'page_id', 'page_namespace', 'page_title', 'page_len',
 				'page_is_redirect', 'page_latest' ] )
 			->from( 'categorylinks' )
 			->join( 'page', null, [ 'cl_from = page_id' ] )
-			->where( [ 'cl_to' => $this->getName() ] )
+			->join( 'linktarget', null, 'cl_target_id = lt_id' )
+			->where( [ 'lt_title' => $this->getName(), 'lt_namespace' => NS_CATEGORY ] )
 			->orderBy( 'cl_sortkey' );
 
 		if ( $limit ) {
@@ -389,14 +373,17 @@ class Category {
 		}
 
 		$dbw = $this->dbProvider->getPrimaryDatabase();
+		$categoryLinksDbw = $this->dbProvider->getPrimaryDatabase( CategoryLinksTable::VIRTUAL_DOMAIN );
+
 		# Avoid excess contention on the same category (T162121)
 		$name = __METHOD__ . ':' . md5( $this->mName );
-		$scopedLock = $dbw->getScopedLockAndFlush( $name, __METHOD__, 0 );
+		$scopedLock = $this->lockManager->scopedLock( $name );
 		if ( !$scopedLock ) {
 			return false;
 		}
 
 		$dbw->startAtomic( __METHOD__ );
+		$categoryLinksDbw->startAtomic( __METHOD__ );
 
 		// Lock the `category` row before potentially locking `categorylinks` rows to try
 		// to avoid deadlocks with LinksDeletionUpdate (T195397)
@@ -407,40 +394,48 @@ class Category {
 			->forUpdate()
 			->acquireRowLocks();
 
-		$rowCount = $dbw->newSelectQueryBuilder()
+		$rowCount = $categoryLinksDbw->newSelectQueryBuilder()
 			->select( '*' )
 			->from( 'categorylinks' )
 			->join( 'page', null, 'page_id = cl_from' )
-			->where( [ 'cl_to' => $this->mName ] )
+			->join( 'linktarget', null, 'cl_target_id = lt_id' )
+			->where( [ 'lt_title' => $this->mName, 'lt_namespace' => NS_CATEGORY ] )
 			->limit( 110 )
-			->caller( __METHOD__ )->fetchRowCount();
+			->caller( __METHOD__ )
+			->fetchRowCount();
+
 		// Only lock if there are below 100 rows (T352628)
 		if ( $rowCount < 100 ) {
 			// Lock all the `categorylinks` records and gaps for this category;
 			// this is a separate query due to postgres limitations
-			$dbw->newSelectQueryBuilder()
+			$categoryLinksDbw->newSelectQueryBuilder()
 				->select( '*' )
 				->from( 'categorylinks' )
+				->join( 'linktarget', null, 'cl_target_id = lt_id' )
 				->join( 'page', null, 'page_id = cl_from' )
-				->where( [ 'cl_to' => $this->mName ] )
+				->where( [ 'lt_title' => $this->mName, 'lt_namespace' => NS_CATEGORY ] )
 				->lockInShareMode()
 				->caller( __METHOD__ )
 				->acquireRowLocks();
 		}
 
 		// Get the aggregate `categorylinks` row counts for this category
-		$catCond = $dbw->conditional( [ 'page_namespace' => NS_CATEGORY ], '1', 'NULL' );
-		$fileCond = $dbw->conditional( [ 'page_namespace' => NS_FILE ], '1', 'NULL' );
-		$result = $dbw->newSelectQueryBuilder()
+		$catCond = $categoryLinksDbw->conditional( [ 'page_namespace' => NS_CATEGORY ], 1, 'NULL' );
+		$fileCond = $categoryLinksDbw->conditional( [ 'page_namespace' => NS_FILE ], 1, 'NULL' );
+		$result = $categoryLinksDbw->newSelectQueryBuilder()
 			->select( [
 				'pages' => 'COUNT(*)',
 				'subcats' => "COUNT($catCond)",
 				'files' => "COUNT($fileCond)"
 			] )
 			->from( 'categorylinks' )
+			->join( 'linktarget', null, 'cl_target_id = lt_id' )
 			->join( 'page', null, 'page_id = cl_from' )
-			->where( [ 'cl_to' => $this->mName ] )
-			->caller( __METHOD__ )->fetchRow();
+			->where( [ 'lt_title' => $this->mName, 'lt_namespace' => NS_CATEGORY ] )
+			->caller( __METHOD__ )
+			->fetchRow();
+
+		$categoryLinksDbw->endAtomic( __METHOD__ );
 
 		$shouldExist = $result->pages > 0 || $this->getPage()->exists();
 
@@ -528,20 +523,24 @@ class Category {
 	 * @since 1.34
 	 */
 	public function refreshCountsIfSmall( $maxSize = self::ROW_COUNT_SMALL ) {
+		$categoryLinksDbr = $this->dbProvider->getReplicaDatabase( CategoryLinksTable::VIRTUAL_DOMAIN );
+
+		$typeOccurrences = $categoryLinksDbr->newSelectQueryBuilder()
+			->select( 'cl_type' )
+			->from( 'categorylinks' )
+			->join( 'linktarget', null, 'cl_target_id = lt_id' )
+			->where( [ 'lt_title' => $this->getName(), 'lt_namespace' => NS_CATEGORY ] )
+			->limit( $maxSize + 1 )
+			->caller( __METHOD__ )
+			->fetchFieldValues();
+
 		$dbw = $this->dbProvider->getPrimaryDatabase();
 		$dbw->startAtomic( __METHOD__ );
 
-		$typeOccurances = $dbw->newSelectQueryBuilder()
-			->select( 'cl_type' )
-			->from( 'categorylinks' )
-			->where( [ 'cl_to' => $this->getName() ] )
-			->limit( $maxSize + 1 )
-			->caller( __METHOD__ )->fetchFieldValues();
-
-		if ( !$typeOccurances ) {
+		if ( !$typeOccurrences ) {
 			$doRefresh = true; // delete any category table entry
-		} elseif ( count( $typeOccurances ) <= $maxSize ) {
-			$countByType = array_count_values( $typeOccurances );
+		} elseif ( count( $typeOccurrences ) <= $maxSize ) {
+			$countByType = array_count_values( $typeOccurrences );
 			$doRefresh = !$dbw->newSelectQueryBuilder()
 				->select( '1' )
 				->from( 'category' )
@@ -567,6 +566,3 @@ class Category {
 		return false;
 	}
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( Category::class, 'Category' );

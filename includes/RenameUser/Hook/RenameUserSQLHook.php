@@ -18,9 +18,7 @@ use MediaWiki\RenameUser\RenameuserSQL;
 interface RenameUserSQLHook {
 
 	/**
-	 * Called in the constructer of RenameuserSQL (which performs the actual renaming of users).
-	 *
-	 * @param RenameuserSQL $renameUserSql
+	 * Called in the constructor of RenameuserSQL (which performs the actual renaming of users).
 	 */
 	public function onRenameUserSQL( RenameuserSQL $renameUserSql ): void;
 

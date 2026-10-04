@@ -4,21 +4,7 @@
  *
  * Made on an original idea by Fooey (freenode)
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  * @author Antoine Musso <hashar at free dot fr>
@@ -192,7 +178,7 @@ WARN
 				'user_id = up_user',
 				'up_property' => $option,
 			] )
-			->fields( [ 'user_id', 'user_name' ] )
+			->fields( [ 'user_id', 'user_name', 'up_value' ] )
 			// up_value is unindexed so this can be slow, but should be acceptable in a script
 			->where( [ 'up_value' => $fromIsDefault ? null : $from ] )
 			// need to order by ID so we can use ID ranges for query continuation
@@ -216,27 +202,37 @@ WARN
 			$result = $queryBuilder->fetchResultSet();
 			foreach ( $result as $row ) {
 				$fromUserId = (int)$row->user_id;
-				$oldOptionIsDefault = true;
-
 				$user = UserIdentityValue::newRegistered( $row->user_id, $row->user_name );
+
 				if ( $fromIsDefault ) {
 					// $user has the default value for $option; skip if it doesn't match
 					// NOTE: This is intentionally a loose comparison. $from is always a string
 					// (coming from the command line), but the default value might be of a
 					// different type.
 					$oldOptionMatchingDefault = null;
+					$oldOptionIsDefault = true;
 					foreach ( $from as $oldOption ) {
-						$oldOptionIsDefault = $oldOption != $userOptionsManager->getDefaultOption( $option, $user );
+						$oldOptionIsDefault = $oldOption == $userOptionsManager->getDefaultOption( $option, $user );
 						if ( $oldOptionIsDefault ) {
 							$oldOptionMatchingDefault = $oldOption;
 							break;
 						}
 					}
-					$fromAsText = $oldOptionMatchingDefault ?? $fromAsText;
+					if ( !$oldOptionIsDefault ) {
+						$this->output(
+							"Skipping $option for $row->user_name as the default value for that user is not " .
+							"specified in --from\n"
+						);
+						continue;
+					}
+
+					$fromForThisUser = $oldOptionMatchingDefault ?? $fromAsText;
+				} else {
+					$fromForThisUser = $row->up_value;
 				}
 
-				$this->output( "$settingWord {$option} for {$row->user_name} from '{$fromAsText}' to '{$to}'\n" );
-				if ( !$dryRun && $oldOptionIsDefault ) {
+				$this->output( "$settingWord $option for $row->user_name from '$fromForThisUser' to '$to'\n" );
+				if ( !$dryRun ) {
 					$userOptionsManager->setOption( $user, $option, $to );
 					$userOptionsManager->saveOptions( $user );
 				}
@@ -329,19 +325,20 @@ WARN
 			$this->fatalError( "Option name is required" );
 		}
 
-		if ( !$dryRun ) {
-			$this->warn( <<<WARN
+		if ( $dryRun ) {
+			$this->fatalError( "--delete-defaults does not support a dry run." );
+		}
+
+		$this->warn( <<<WARN
 This script is about to delete all rows in user_properties that match the current
 defaults for the user (including conditional defaults).
 This action is IRREVERSIBLE.
 
 Abort with control-c in the next five seconds....
 WARN
-			);
-		}
+		);
 
-		$dbr = $this->getDB( DB_REPLICA );
-		$dbw = $this->getDB( DB_PRIMARY );
+		$dbr = $this->getReplicaDB();
 
 		$queryBuilderTemplate = $dbr->newSelectQueryBuilder()
 			->select( [ 'user_id', 'user_name', 'up_value' ] )
@@ -377,8 +374,6 @@ WARN
 
 	/**
 	 * The warning message and countdown
-	 *
-	 * @param string $message
 	 */
 	private function warn( string $message ) {
 		if ( $this->hasOption( 'nowarn' ) ) {

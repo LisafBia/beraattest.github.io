@@ -51,22 +51,22 @@ class PrewarmParsoidParserCache extends Maintenance {
 	}
 
 	private function getPageLookup(): PageLookup {
-		$this->pageLookup = $this->getServiceContainer()->getPageStore();
+		$this->pageLookup ??= $this->getServiceContainer()->getPageStore();
 		return $this->pageLookup;
 	}
 
 	private function getRevisionLookup(): RevisionLookup {
-		$this->revisionLookup = $this->getServiceContainer()->getRevisionLookup();
+		$this->revisionLookup ??= $this->getServiceContainer()->getRevisionLookup();
 		return $this->revisionLookup;
 	}
 
 	private function getParserOutputAccess(): ParserOutputAccess {
-		$this->parserOutputAccess = $this->getServiceContainer()->getParserOutputAccess();
+		$this->parserOutputAccess ??= $this->getServiceContainer()->getParserOutputAccess();
 		return $this->parserOutputAccess;
 	}
 
 	private function getParsoidSiteConfig(): ParsoidSiteConfig {
-		$this->parsoidSiteConfig = $this->getServiceContainer()->getParsoidSiteConfig();
+		$this->parsoidSiteConfig ??= $this->getServiceContainer()->getParsoidSiteConfig();
 		return $this->parsoidSiteConfig;
 	}
 
@@ -100,14 +100,14 @@ class PrewarmParsoidParserCache extends Maintenance {
 		}
 	}
 
-	/*
+	/**
 	 * NamespaceInfo::getCanonicalIndex() requires the namespace to be in lowercase,
 	 * so let's do some normalization and return its canonical index.
 	 *
 	 * @param string $namespace The namespace string from the command line
-	 * @return int The canonical index of the namespace
+	 * @return ?int The canonical index of the namespace
 	 */
-	private function normalizeNamespace( string $namespace ): int {
+	private function normalizeNamespace( string $namespace ): ?int {
 		return $this->getServiceContainer()->getNamespaceInfo()
 			->getCanonicalIndex( strtolower( $namespace ) );
 	}

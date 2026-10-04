@@ -110,4 +110,69 @@ class EntryPointTest extends MediaWikiIntegrationTestCase {
 		$this->assertStringContainsString( 'hello', $entryPoint->getCapturedOutput() );
 	}
 
+	public function testGetTextFormatters() {
+		$services = $this->getServiceContainer();
+		$env = new MockEnvironment();
+		$context = $env->makeFauxContext();
+
+		// Case 1: No lang parameter
+		$request = new RequestData( [] );
+		$entryPoint = new EntryPoint( $request, $context, $env, $services );
+		$wrapper = \Wikimedia\TestingAccessWrapper::newFromObject( $entryPoint );
+		$formatters = $wrapper->getTextFormatters();
+		$this->assertNotEmpty( $formatters );
+		$this->assertSame( $services->getContentLanguageCode()->toString(), $formatters[0]->getLangCode() );
+
+		// Case 2: Valid requested language (e.g. 'fr' or 'es')
+		$request = new RequestData( [ 'queryParams' => [ 'lang' => 'fr' ] ] );
+		$entryPoint = new EntryPoint( $request, $context, $env, $services );
+		$wrapper = \Wikimedia\TestingAccessWrapper::newFromObject( $entryPoint );
+		$formatters = $wrapper->getTextFormatters();
+		$this->assertNotEmpty( $formatters );
+		$this->assertSame( 'fr', $formatters[0]->getLangCode() );
+
+		// Case 3: Invalid requested language code (falls back)
+		$request = new RequestData( [ 'queryParams' => [ 'lang' => 'invalid-lang-code' ] ] );
+		$entryPoint = new EntryPoint( $request, $context, $env, $services );
+		$wrapper = \Wikimedia\TestingAccessWrapper::newFromObject( $entryPoint );
+		$formatters = $wrapper->getTextFormatters();
+		$this->assertNotEmpty( $formatters );
+		$this->assertSame( $services->getContentLanguageCode()->toString(), $formatters[0]->getLangCode() );
+	}
+
+	public static function mockHandlerCookies() {
+		return new class extends Handler {
+			public function execute() {
+				$response = $this->getResponseFactory()->create();
+				$response->setCookie( 'TestCookie', 'cookie-val', 123456789 );
+				return $response;
+			}
+		};
+	}
+
+	public function testCookies() {
+		$this->overrideConfigValue( MainConfigNames::CookiePrefix, '' );
+
+		$uri = '/rest/mock/v1/EntryPoint/cookies';
+		$request = new RequestData( [ 'uri' => new Uri( $uri ) ] );
+
+		$env = new MockEnvironment();
+		$env->setRequestInfo( $uri );
+
+		$entryPoint = $this->getEntryPoint(
+			$request,
+			$env
+		);
+
+		$entryPoint->enableOutputCapture();
+		$entryPoint->run();
+
+		$env->assertStatusCode( 200 );
+		$cookies = $env->getFauxResponse()->getCookies();
+		$this->assertArrayHasKey( 'TestCookie', $cookies );
+		$cookieData = $cookies['TestCookie'];
+		$this->assertSame( 'cookie-val', $cookieData['value'] );
+		$this->assertSame( 123456789, $cookieData['expire'] );
+	}
+
 }

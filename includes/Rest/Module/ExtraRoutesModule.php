@@ -5,11 +5,14 @@ namespace MediaWiki\Rest\Module;
 use AppendIterator;
 use ArrayIterator;
 use Iterator;
+use MediaWiki\Config\ServiceOptions;
+use MediaWiki\HookContainer\HookContainer;
+use MediaWiki\MainConfigNames;
 use MediaWiki\Rest\BasicAccess\BasicAuthorizerInterface;
 use MediaWiki\Rest\Handler\RedirectHandler;
+use MediaWiki\Rest\JsonLocalizer;
 use MediaWiki\Rest\PathTemplateMatcher\ModuleConfigurationException;
 use MediaWiki\Rest\Reporter\ErrorReporter;
-use MediaWiki\Rest\ResponseFactory;
 use MediaWiki\Rest\RouteDefinitionException;
 use MediaWiki\Rest\Router;
 use MediaWiki\Rest\Validator\Validator;
@@ -61,13 +64,12 @@ use Wikimedia\ObjectFactory\ObjectFactory;
  */
 class ExtraRoutesModule extends MatcherBasedModule {
 
-	/** @var string[] */
-	private array $routeFiles;
-
-	/**
-	 * @var array<int,array> A list of route definitions
-	 */
-	private array $extraRoutes;
+	public const CONSTRUCTOR_OPTIONS = [
+		MainConfigNames::Sitename,
+		MainConfigNames::CanonicalServer,
+		MainConfigNames::EmergencyContact,
+		MainConfigNames::RestTermsOfServiceUrl,
+	];
 
 	/**
 	 * @var array<int,array>|null A list of route definitions loaded from
@@ -78,7 +80,6 @@ class ExtraRoutesModule extends MatcherBasedModule {
 	/** @var int[]|null */
 	private ?array $routeFileTimestamps = null;
 
-	/** @var string|null */
 	private ?string $configHash = null;
 
 	/**
@@ -90,32 +91,32 @@ class ExtraRoutesModule extends MatcherBasedModule {
 	 *        of this class for a description of the expected structure.
 	 */
 	public function __construct(
-		array $routeFiles,
-		array $extraRoutes,
+		private array $routeFiles,
+		private readonly array $extraRoutes,
 		Router $router,
-		ResponseFactory $responseFactory,
+		JsonLocalizer $jsonLocalizer,
 		BasicAuthorizerInterface $basicAuth,
 		ObjectFactory $objectFactory,
 		Validator $restValidator,
-		ErrorReporter $errorReporter
+		ErrorReporter $errorReporter,
+		HookContainer $hookContainer,
+		private readonly ServiceOptions $options,
 	) {
 		parent::__construct(
 			$router,
 			'',
-			$responseFactory,
+			$jsonLocalizer,
 			$basicAuth,
 			$objectFactory,
 			$restValidator,
-			$errorReporter
+			$errorReporter,
+			$hookContainer
 		);
-		$this->routeFiles = $routeFiles;
-		$this->extraRoutes = $extraRoutes;
+		$this->options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
 	}
 
 	/**
 	 * Get a config version hash for cache invalidation
-	 *
-	 * @return string
 	 */
 	protected function getConfigHash(): string {
 		if ( $this->configHash === null ) {
@@ -238,19 +239,63 @@ class ExtraRoutesModule extends MatcherBasedModule {
 				'config' => array_diff_key( $route, array_flip( $objectSpecKeys ) ),
 			];
 		}
+		if ( isset( $route['openApiSpec'] ) ) {
+			$jsonLocalizer = $this->getJsonLocalizer();
+			$info['openApiSpec'] = $jsonLocalizer->localizeJson( $route['openApiSpec'] );
+		}
 
 		$info['path'] = $route['path'];
 		return $info;
 	}
 
+	/** @inheritDoc */
 	public function getOpenApiInfo() {
 		// Note that mwapi-1.0 is based on OAS 3.0, so it doesn't support the
 		// "summary" property introduced in 3.1.
+		$jsonLocalizer = $this->getJsonLocalizer();
+		$info = [
+			'title' => $jsonLocalizer->getFormattedMessage( 'rest-module-extra-routes-title' ),
+			'description' => $jsonLocalizer->getFormattedMessage( 'rest-module-extra-routes-desc' ),
+			'version' => '0.1.0',
+			'contact' => $this->getOpenApiContact(),
+		];
+
+		$termsOfService = $this->options->get( MainConfigNames::RestTermsOfServiceUrl );
+		if ( is_string( $termsOfService ) && $termsOfService !== '' ) {
+			$info['termsOfService'] = $termsOfService;
+		}
+
+		return $info;
+	}
+
+	/** @inheritDoc */
+	public function getOpenApiContact(): array {
+		$contact = [
+			'name' => $this->options->get( MainConfigNames::Sitename ),
+			'url' => $this->options->get( MainConfigNames::CanonicalServer ),
+		];
+
+		$email = $this->options->get( MainConfigNames::EmergencyContact );
+		// OpenAPI requires contact.email to be a valid email address. Keep the rest
+		// of the contact object intact and omit the field when the configured value
+		// does not satisfy that format.
+		if ( is_string( $email ) && filter_var( $email, FILTER_VALIDATE_EMAIL ) !== false ) {
+			$contact['email'] = $email;
+		}
+
+		return $contact;
+	}
+
+	/** @inheritDoc */
+	public function getOpenApiExternalDocs(): array {
 		return [
-			'title' => 'Extra Routes',
-			'description' => 'REST endpoints not associated with a module',
-			'version' => 'undefined',
+			'description' => 'API documentation',
+			'url' => 'https://www.mediawiki.org/wiki/API:REST_API',
 		];
 	}
 
+	/** @inheritDoc */
+	public function getDeprecatedDate(): ?int {
+		return null;
+	}
 }

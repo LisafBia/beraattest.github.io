@@ -4,7 +4,6 @@ use MediaWiki\Logger\LegacyLogger;
 use MediaWiki\MainConfigNames;
 
 /**
- * @group Database
  * @group GlobalFunctions
  */
 class GlobalTest extends MediaWikiIntegrationTestCase {
@@ -20,34 +19,6 @@ class GlobalTest extends MediaWikiIntegrationTestCase {
 				'file://', # Non-default
 			],
 		] );
-	}
-
-	/**
-	 * @dataProvider provideForWfArrayDiff2
-	 * @covers ::wfArrayDiff2
-	 */
-	public function testWfArrayDiff2( $a, $b, $expected ) {
-		$this->expectDeprecationAndContinue( '/wfArrayDiff2/' );
-		$this->assertEquals(
-			$expected, wfArrayDiff2( $a, $b )
-		);
-	}
-
-	// @todo Provide more tests
-	public static function provideForWfArrayDiff2() {
-		// $a $b $expected
-		return [
-			[
-				[ 'a', 'b' ],
-				[ 'a', 'b' ],
-				[],
-			],
-			[
-				[ [ 'a' ], [ 'a', 'b', 'c' ] ],
-				[ [ 'a' ], [ 'a', 'b' ] ],
-				[ 1 => [ 'a', 'b', 'c' ] ],
-			],
-		];
 	}
 
 	/*
@@ -252,6 +223,7 @@ class GlobalTest extends MediaWikiIntegrationTestCase {
 		int $accuracy = 2,
 		bool $round = true
 	) {
+		$this->hideDeprecated( 'wfPercent' );
 		$this->assertSame( $expected, wfPercent( $input, $accuracy, $round ) );
 	}
 
@@ -270,7 +242,6 @@ class GlobalTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * test @see wfShorthandToInteger()
 	 * @dataProvider provideShorthand
 	 * @covers ::wfShorthandToInteger
 	 */
@@ -348,7 +319,7 @@ class GlobalTest extends MediaWikiIntegrationTestCase {
 	 * @param string $expectedText Text after merge has been completed
 	 * @param string $expectedMergeAttemptResult Diff3 output if conflicts occur
 	 *
-	 * @dataProvider provideMerge()
+	 * @dataProvider provideMerge
 	 * @group medium
 	 * @covers ::wfMerge
 	 */
@@ -439,16 +410,6 @@ class GlobalTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * Same tests as the UrlUtils method to ensure they don't fall out of sync
-	 * @dataProvider UrlUtilsProviders::provideMatchesDomainList
-	 * @covers ::wfMatchesDomainList
-	 */
-	public function testWfMatchesDomainList( $url, $domains, $expected ) {
-		$actual = wfMatchesDomainList( $url, $domains );
-		$this->assertEquals( $expected, $actual );
-	}
-
-	/**
 	 * @covers ::wfMkdirParents
 	 */
 	public function testWfMkdirParents() {
@@ -464,6 +425,7 @@ class GlobalTest extends MediaWikiIntegrationTestCase {
 	public function testWfShellWikiCmd( $script, $parameters, $options,
 		$expected, $description
 	) {
+		$this->expectDeprecationAndContinue( '/wfShellWikiCmd was deprecated in MediaWiki 1\.30/' );
 		if ( wfIsWindows() ) {
 			// Approximation that's good enough for our purposes just now
 			$expected = str_replace( "'", '"', $expected );

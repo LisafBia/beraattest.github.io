@@ -9,22 +9,24 @@ use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\ParamValidator\TypeDef;
 
 /**
- * Type definition for boolean types
+ * Type definition for optional boolean values.
  *
  * This type accepts certain defined strings to mean 'true' or 'false'.
- * The result from validate() is a PHP boolean.
+ * The result from validate() is a PHP boolean if the parameter was given.
+ * If the parameter was not given (and no default was defined),
+ * the value will be null.
  *
  * Failure codes:
  *  - 'badbool': The value is not a recognized boolean. No data.
  *
  * @since 1.34
- * @unstable
  */
 class BooleanDef extends TypeDef {
 
 	public const TRUEVALS = [ 'true', 't', 'yes', 'y', 'on', '1' ];
 	public const FALSEVALS = [ 'false', 'f', 'no', 'n', 'off', '0' ];
 
+	/** @inheritDoc */
 	public function validate( $name, $value, array $settings, array $options ) {
 		if ( is_bool( $value ) ) {
 			return $value;
@@ -46,10 +48,10 @@ class BooleanDef extends TypeDef {
 
 		$this->fatal(
 			$this->failureMessage( 'badbool' )
-				->textListParams( array_map( [ $this, 'quoteVal' ], self::TRUEVALS ) )
+				->textListParams( array_map( $this->quoteVal( ... ), self::TRUEVALS ) )
 				->numParams( count( self::TRUEVALS ) )
 				->textListParams( array_merge(
-					array_map( [ $this, 'quoteVal' ], self::FALSEVALS ),
+					array_map( $this->quoteVal( ... ), self::FALSEVALS ),
 					[ MessageValue::new( 'paramvalidator-emptystring' ) ]
 				) )
 				->numParams( count( self::FALSEVALS ) + 1 ),
@@ -57,14 +59,16 @@ class BooleanDef extends TypeDef {
 		);
 	}
 
-	private function quoteVal( $v ) {
+	private function quoteVal( string $v ): ScalarParam {
 		return new ScalarParam( ParamType::TEXT, "\"$v\"" );
 	}
 
+	/** @inheritDoc */
 	public function stringifyValue( $name, $value, array $settings, array $options ) {
 		return $value ? self::TRUEVALS[0] : self::FALSEVALS[0];
 	}
 
+	/** @inheritDoc */
 	public function getHelpInfo( $name, array $settings, array $options ) {
 		$info = parent::getHelpInfo( $name, $settings, $options );
 

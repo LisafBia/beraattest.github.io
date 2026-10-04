@@ -3,9 +3,12 @@
 use MediaWiki\Context\DerivativeContext;
 use MediaWiki\Context\RequestContext;
 use MediaWiki\Output\OutputPage;
+use MediaWiki\Registration\ExtensionRegistry;
 use MediaWiki\Request\FauxRequest;
 use MediaWiki\ResourceLoader\Context;
 use MediaWiki\ResourceLoader\Module;
+use MediaWiki\Skin\Skin;
+use MediaWiki\Skin\SkinException;
 use MediaWiki\User\User;
 
 /**
@@ -13,6 +16,16 @@ use MediaWiki\User\User;
  * @coversNothing
  */
 class PerformanceBudgetTest extends MediaWikiIntegrationTestCase {
+	/**
+	 * @var array
+	 */
+	private $cachedBudgetConfig = null;
+
+	/**
+	 * @var array
+	 */
+	private $dependencyOf = [];
+
 	/**
 	 * Calculates the size of a module
 	 *
@@ -48,8 +61,10 @@ class PerformanceBudgetTest extends MediaWikiIntegrationTestCase {
 		);
 		// Create a module response for the given module and calculate the size
 		$content = $resourceLoader->makeModuleResponse( $contentContext, $modules );
-		$contentTransferSize = strlen( gzencode( $content, 9 ) );
-		return $contentTransferSize;
+		return [
+			'compressed' => strlen( gzencode( $content, 9 ) ),
+			'uncompressed' => strlen( $content ),
+		];
 	}
 
 	/**
@@ -57,10 +72,10 @@ class PerformanceBudgetTest extends MediaWikiIntegrationTestCase {
 	 *
 	 * @param string $skinName
 	 *
-	 * @return \Skin
-	 * @throws \SkinException
+	 * @return Skin
+	 * @throws SkinException
 	 */
-	protected function prepareSkin( string $skinName ): \Skin {
+	protected function prepareSkin( string $skinName ): Skin {
 		$skinFactory = $this->getServiceContainer()->getSkinFactory();
 		$skin = $skinFactory->makeSkin( $skinName );
 		$title = $this->getExistingTestPage()->getTitle();
@@ -105,21 +120,22 @@ class PerformanceBudgetTest extends MediaWikiIntegrationTestCase {
 		$size = $this->getContentTransferSize( $moduleNames, $skinName, $isScripts );
 
 		$moduleType = $isScripts ? 'scripts' : 'styles';
-		$sizeKb = ceil( ( $size * 10 ) / 1024 ) / 10;
-		$warning = "Total size of $moduleType modules is " . $sizeKb . "kB.\n" .
+		$sizeKb = ceil( ( $size['compressed'] * 10 ) / 1024 ) / 10;
+		$sizeKbUncompressed = ceil( ( $size['uncompressed'] * 10 ) / 1024 ) / 10;
+		$warning = "Total size of $moduleType modules is " . $sizeKb . "kB ( $sizeKbUncompressed kB uncompressed).\n" .
 			"If you are adding code on page load, please reduce $moduleType that you are loading on page load.\n" .
 			"Read https://www.mediawiki.org/wiki/Performance_budgeting for more context on this number.\n\n";
-		print( $warning );
-		$this->markTestSkipped( 'Tests are non-blocking for now.' );
+		$this->addEndOfRunTestWarning( $warning );
 	}
 
 	/**
 	 * Find all bundle size configs in all repos and create a way to look up
 	 * the bundle size for a given module.
-	 *
-	 * @return array
 	 */
 	private function getBudgetConfig(): array {
+		if ( $this->cachedBudgetConfig ) {
+			return $this->cachedBudgetConfig;
+		}
 		$installed = ExtensionRegistry::getInstance()->getAllThings();
 		$allModules = [];
 
@@ -138,35 +154,109 @@ class PerformanceBudgetTest extends MediaWikiIntegrationTestCase {
 						$maxSize = $this->getSizeInBytes(
 							$moduleBundle['maxSize'] ?? '0 KB'
 						);
-						$allModules[$module] = $maxSize;
+						$allModules[$module] = [
+							"maxSize" => $maxSize,
+							"ignoreDependencies" => $moduleBundle['ignoreDependencies'] ?? false,
+						];
 					}
 				}
 			}
 		}
+		$this->cachedBudgetConfig = $allModules;
 		return $allModules;
 	}
 
 	/**
-	 * @param string $skinName
 	 * @param array $moduleNames
-	 * @param bool $isScripts
 	 */
-	private function testForUnexpectedModules( $skinName, $moduleNames, $isScripts = false ) {
+	private function testForUnexpectedModules( $moduleNames ) {
 		$budgetConfig = $this->getBudgetConfig();
 		$undefinedModules = [];
 		foreach ( $moduleNames as $moduleName ) {
-			$expectedModuleSize = $budgetConfig[ $moduleName ] ?? false;
-			if ( $expectedModuleSize === false ) {
+			$existingModule = $budgetConfig[ $moduleName ] ?? false;
+			if ( $existingModule === false ) {
 				$undefinedModules[] = $moduleName;
 			}
 		}
-		$debugInformation = "PLEASE DO NOT SKIP THIS TEST. If this is blocking a merge this might " .
-			"signal a potential performance regression with the desktop site.\n\n" .
-			"All extensions/skins adding code to page load for an article must monitor their ResourceLoader modules.\n" .
-			"Read https://www.mediawiki.org/wiki/Performance_budgeting for guidance on how to suppress this error message.\n" .
-			"The following modules have not declared budgets:\n" .
-			implode( "\n", $undefinedModules );
-		$this->assertCount( 0, $undefinedModules, $debugInformation );
+
+		// Check undefined modules for known exceptions.
+		// This allows known offenders to fail but prevents against new offenders.
+		// This block can be removed when https://phabricator.wikimedia.org/T395698 is resolved.
+		$unexpectedModules = [];
+		foreach ( $undefinedModules as $moduleName ) {
+			$loadedByModules = $this->dependencyOf[ $moduleName ] ?? [];
+			$unknownDependencies = array_filter(
+				$loadedByModules,
+				static function ( $moduleName ) use ( $undefinedModules ) {
+					return !in_array(
+						$moduleName,
+						[
+							// https://phabricator.wikimedia.org/T395698
+							'wikibase.client.data-bridge.init'
+						]
+					) && !in_array( $moduleName, $undefinedModules );
+				}
+			);
+			$isUnknown = count( $loadedByModules ) === 0 || count( $unknownDependencies ) > 0;
+			if ( $isUnknown ) {
+				$unexpectedModules[] = $moduleName;
+			}
+		}
+		$undefinedModuleMessage = implode( "\n",
+			array_map(
+				function ( $moduleName ) {
+					$loadedBy = implode( ",", $this->dependencyOf[ $moduleName ] ?? [ 'unknown' ] );
+					return "$moduleName (loaded by $loadedBy)";
+				},
+				$unexpectedModules
+			)
+		);
+		$debugInformation = "⚠️ PLEASE DO NOT SKIP THIS TEST ⚠️\n\n" .
+			"If this is blocking a merge this might signal a potential performance regression with the desktop site.\n\n" .
+			"All extensions/skins adding code to page load for an article must monitor their ResourceLoader modules.\n\n" .
+			"Read https://www.mediawiki.org/wiki/Performance_budgeting for guidance on how to suppress this error message.\n\n" .
+			"The following modules have not declared budgets:\n\n" .
+			$undefinedModuleMessage .
+			"\n";
+		$this->assertCount( 0, $unexpectedModules, $debugInformation );
+	}
+
+	/**
+	 * Expand a list of modules based on what modules they depend on.
+	 *
+	 * @param array $modules
+	 * @param array $ignore a list of module names to not expand due to known issues.
+	 * @return array
+	 */
+	private function expandWithModuleDependencies( $modules, $ignore = [] ) {
+		$expandedModules = [];
+		$budgetConfig = $this->getBudgetConfig();
+		$resourceLoader = $this->getServiceContainer()->getResourceLoader();
+		foreach ( $modules as $moduleName ) {
+			$budgetDefinition = $budgetConfig[ $moduleName ] ?? [
+				'ignoreDependencies' => false,
+			];
+			// Do not expand the module if it has a known issue!
+			if ( in_array( $moduleName, $ignore ) ) {
+				continue;
+			}
+			$expandedModules[] = $moduleName;
+			$module = $resourceLoader->getModule( $moduleName );
+			// Check module dependencies unless told otherwise.
+			$dependencies = $budgetDefinition[ 'ignoreDependencies' ] ? [] :
+				$module->getDependencies();
+			$dependenciesExpanded = $this->expandWithModuleDependencies( $dependencies, $ignore );
+			foreach ( $dependenciesExpanded as $dependencyName ) {
+				if ( !isset( $this->dependencyOf[ $dependencyName ] ) ) {
+					$this->dependencyOf[ $dependencyName ] = [];
+				}
+				$this->dependencyOf[ $dependencyName ][] = $moduleName;
+				if ( !in_array( $dependencyName, $expandedModules ) ) {
+					$expandedModules[] = $dependencyName;
+				}
+			}
+		}
+		return $expandedModules;
 	}
 
 	/**
@@ -182,10 +272,16 @@ class PerformanceBudgetTest extends MediaWikiIntegrationTestCase {
 		$skinName = 'vector-2022';
 		$skin = $this->prepareSkin( $skinName );
 		$moduleStyles = $skin->getOutput()->getModuleStyles();
-		$moduleScripts = $skin->getOutput()->getModules();
-		$this->testForUnexpectedModules( $skinName, $moduleStyles );
-		$this->testForUnexpectedModules( $skinName, $moduleScripts, true );
+		$moduleScripts = $this->expandWithModuleDependencies(
+			$skin->getOutput()->getModules(),
+			// This list should be empty. If exceptions are needed they should have
+			// an associated Phabricator ticket.
+			[]
+		);
+		$this->testForUnexpectedModules( $moduleStyles );
+		$this->testForUnexpectedModules( $moduleScripts );
 		$this->testModuleSizes( $skinName, $moduleStyles );
 		$this->testModuleSizes( $skinName, $moduleScripts, true );
+		$this->markTestSkipped( 'Tests are non-blocking for now.' );
 	}
 }

@@ -1,10 +1,13 @@
 <template>
 	<cdx-field
+		:key="refreshKey"
 		:is-fieldset="true"
 		:status="status"
 		:messages="messages"
 	>
+		<!-- eslint-disable vue/no-unused-refs -->
 		<cdx-lookup
+			id="mw-bi-target"
 			v-model:selected="selection"
 			v-model:input-value="currentSearchTerm"
 			class="mw-block-target"
@@ -16,33 +19,40 @@
 			:start-icon="cdxIconSearch"
 			@input="onInput"
 			@change="onChange"
-			@blur="onChange"
 			@clear="onClear"
 			@update:selected="onSelect"
+			@keydown.enter.prevent="true/* See T391085 */"
 		>
 		</cdx-lookup>
+		<!-- eslint-enable vue/no-unused-refs -->
 		<template #label>
 			{{ $i18n( 'block-target' ).text() }}
 		</template>
-		<div class="mw-block-conveniencelinks">
-			<span v-if="!!targetUser">
-				<a
-					:href="mw.util.getUrl( contribsTitle )"
-					:title="contribsTitle"
-				>
-					{{ $i18n( 'ipb-blocklist-contribs', targetUser ) }}
-				</a>
-			</span>
-		</div>
+		<component
+			:is="customComponent"
+			v-for="customComponent in customComponents"
+			:key="customComponent.name"
+			:target-user="targetExists ? targetUser : null"
+			:block-id="blockId"
+		></component>
 	</cdx-field>
 </template>
 
 <script>
-const { computed, defineComponent, onMounted, ref, watch } = require( 'vue' );
+const {
+	defineComponent,
+	onMounted,
+	ref,
+	shallowRef,
+	watch,
+	DefineSetupFnComponent,
+	Ref
+} = require( 'vue' );
 const { CdxLookup, CdxField } = require( '@wikimedia/codex' );
 const { storeToRefs } = require( 'pinia' );
 const { cdxIconSearch } = require( '../icons.json' );
 const useBlockStore = require( '../stores/block.js' );
+const util = require( '../util.js' );
 const api = new mw.Api();
 
 /**
@@ -61,32 +71,93 @@ module.exports = exports = defineComponent( {
 	],
 	setup( props ) {
 		const store = useBlockStore();
-		const { targetUser } = storeToRefs( store );
-		let htmlInput;
+		const { blockId, targetExists, targetUser } = storeToRefs( store );
+		const blockCIDRLimit = mw.config.get( 'blockCIDRLimit' );
+		/**
+		 * Custom components to be added to the bottom of the field.
+		 *
+		 * @type {Ref<DefineSetupFnComponent>}
+		 */
+		const customComponents = shallowRef( [] );
+		/**
+		 * A key to force the component to re-render.
+		 *
+		 * @type {Ref<number>}
+		 */
+		const refreshKey = ref( 0 );
+		/**
+		 * Codex Lookup component requires a v-modeled `selected` prop.
+		 * Until a selection is made, the value may be set to null.
+		 * We instead want to only update the targetUser for non-null values
+		 * (made either via selection, or the 'change' event).
+		 *
+		 * @type {Ref<string>}
+		 */
+		const selection = ref( props.modelValue || '' );
+		/**
+		 * This is the source of truth for what should be the target user,
+		 * but it should only change on 'change' or 'select' events,
+		 * otherwise we'd fire off API queries for the block log unnecessarily.
+		 *
+		 * @type {Ref<string>}
+		 */
+		const currentSearchTerm = ref( props.modelValue || '' );
+		/**
+		 * Menu items for the Lookup component.
+		 *
+		 * @type {Ref<Object[]>}
+		 */
+		const menuItems = ref( [] );
+		/**
+		 * Error status of the field.
+		 *
+		 * @type {Ref<string>}
+		 */
+		const status = ref( 'default' );
+		/**
+		 * Error messages for the field.
+		 *
+		 * @type {Ref<Object>}
+		 */
+		const messages = ref( {} );
 
-		onMounted( () => {
-			// Get the input element.
-			htmlInput = document.querySelector( 'input[name="wpTarget"]' );
-			// Focus the input on mount.
-			htmlInput.focus();
-		} );
+		let htmlInput;
 
 		// Set a flag to keep track of pending API requests, so we can abort if
 		// the target string changes
 		let pending = false;
 
-		// Codex Lookup component requires a v-modeled `selected` prop.
-		// Until a selection is made, the value may be set to null.
-		// We instead want to only update the targetUser for non-null values
-		// (made either via selection, or the 'change' event).
-		const selection = ref( props.modelValue || '' );
-		// This is the source of truth for what should be the target user,
-		// but it should only change on 'change' or 'select' events,
-		// otherwise we'd fire off API queries for the block log unnecessarily.
-		const currentSearchTerm = ref( props.modelValue || '' );
-		const menuItems = ref( [] );
-		const status = ref( 'default' );
-		const messages = ref( {} );
+		onMounted( () => {
+			// Get the input element.
+			htmlInput = document.getElementById( 'mw-bi-target' );
+
+			// Focus the input on mount if there's no initial value.
+			if ( !targetUser.value ) {
+				htmlInput.focus();
+			}
+
+			// Ensure error messages are displayed for missing users.
+			if ( !!targetUser.value && !store.targetExists ) {
+				validate();
+			}
+
+			// If loaded from bfcache, re-render the component to ensure the correct state.
+			window.addEventListener( 'pageshow', ( event ) => {
+				if ( event.persisted ) {
+					refreshKey.value += 1;
+				}
+			} );
+
+			/**
+			 * Hook for custom components to be added to the UserLookup component.
+			 *
+			 * @event codex.userlookup
+			 * @param {Ref<DefineSetupFnComponent[]>} customComponents
+			 * @private
+			 * @internal
+			 */
+			mw.hook( 'codex.userlookup' ).fire( customComponents );
+		} );
 
 		watch( targetUser, ( newValue ) => {
 			if ( newValue ) {
@@ -118,6 +189,7 @@ module.exports = exports = defineComponent( {
 		 * Handle lookup input.
 		 *
 		 * @param {string} value
+		 * @return {Promise}
 		 */
 		function onInput( value ) {
 			// Abort any existing request if one is still pending
@@ -132,10 +204,10 @@ module.exports = exports = defineComponent( {
 			// Do nothing if we have no input.
 			if ( !value ) {
 				menuItems.value = [];
-				return;
+				return Promise.resolve();
 			}
 
-			fetchResults( value )
+			return fetchResults( value )
 				.then( ( data ) => {
 					pending = false;
 
@@ -163,18 +235,49 @@ module.exports = exports = defineComponent( {
 		}
 
 		/**
-		 * Validate the input element.
+		 * Validate the target user and set the status and messages.
 		 *
-		 * @param {HTMLInputElement} el
+		 * @return {boolean} Whether the target user is valid.
 		 */
-		function validate( el ) {
-			if ( el.checkValidity() ) {
+		function validate() {
+			const inResults = menuItems.value.some( ( item ) => item.value === currentSearchTerm.value );
+			let error = null;
+			const isIpAddress = mw.util.isIPAddress( currentSearchTerm.value, true );
+
+			if ( !htmlInput.checkValidity() ) {
+				// Validation constraints on the HTMLInputElement failed.
+				error = htmlInput.validationMessage;
+			} else if ( !inResults && isIpAddress ) {
+				// Valid IP, we need to check if there's a valid range
+				const range = currentSearchTerm.value.split( '/', 2 );
+				const minLength = mw.util.isIPv4Address( currentSearchTerm.value, true ) ? blockCIDRLimit.IPv4 : blockCIDRLimit.IPv6;
+
+				if ( range[ 1 ] < minLength ) {
+					// Not a valid IP range.
+					error = mw.message( 'ip_range_toolarge', minLength ).text();
+				}
+			} else if ( !inResults && !isIpAddress ) {
+				// Not a valid username or IP.
+				error = mw.message( 'nosuchusershort', currentSearchTerm.value ).text();
+			}
+
+			if ( error ) {
+				status.value = 'error';
+				messages.value = { error };
+				targetExists.value = false;
+
+				// If there is a previously set targetUser then we need to clear all store data
+				// since we now have an invalid target in the UserLookup text field.
+				if ( targetUser.value ) {
+					store.resetForm( true );
+				}
+			} else {
 				status.value = 'default';
 				messages.value = {};
-			} else {
-				status.value = 'error';
-				messages.value = { error: el.validationMessage };
+				targetExists.value = true;
 			}
+
+			return !error;
 		}
 
 		/**
@@ -192,6 +295,8 @@ module.exports = exports = defineComponent( {
 		function onClear() {
 			store.resetForm( true );
 			htmlInput.focus();
+			status.value = 'default';
+			messages.value = {};
 		}
 
 		/**
@@ -199,6 +304,7 @@ module.exports = exports = defineComponent( {
 		 */
 		function onSelect() {
 			if ( selection.value !== null ) {
+				currentSearchTerm.value = selection.value;
 				setTarget( selection.value );
 			}
 		}
@@ -209,26 +315,22 @@ module.exports = exports = defineComponent( {
 		 * @param {string} value
 		 */
 		function setTarget( value ) {
-			validate( htmlInput );
-			targetUser.value = value;
+			validate();
+
+			if ( mw.util.isIPAddress( value, true ) ) {
+				// Sanitize IP & IP ranges
+				targetUser.value = util.sanitizeRange( value );
+			} else {
+				targetUser.value = value;
+			}
+
+			onInput( value );
 		}
 
-		// Change the address bar to reflect the newly-selected target (while keeping all URL parameters).
-		// Do this when the targetUser changes, which is not necessarily when the CdxLookup selection changes.
-		watch( () => targetUser.value, () => {
-			const specialBlockUrl = mw.util.getUrl( 'Special:Block' + ( targetUser.value ? '/' + targetUser.value : '' ) );
-			if ( window.location.pathname !== specialBlockUrl ) {
-				const newUrl = ( new URL( `${ specialBlockUrl }${ window.location.search }`, window.location.origin ) ).toString();
-				window.history.replaceState( null, '', newUrl );
-			}
-		} );
-
-		const contribsTitle = computed( () => `Special:Contributions/${ targetUser.value }` );
-
 		return {
-			mw,
-			contribsTitle,
+			targetExists,
 			targetUser,
+			blockId,
 			menuItems,
 			onChange,
 			onInput,
@@ -238,7 +340,9 @@ module.exports = exports = defineComponent( {
 			currentSearchTerm,
 			selection,
 			status,
-			messages
+			messages,
+			customComponents,
+			refreshKey
 		};
 	}
 } );

@@ -2,21 +2,7 @@
 /**
  * Class for generating clickable toggle links for a list of checkboxes.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -33,17 +19,14 @@ use MediaWiki\Output\OutputPage;
  * @since 1.27
  */
 class ListToggle {
-	/** @var OutputPage */
-	private $output;
-
-	public function __construct( OutputPage $output ) {
-		$this->output = $output;
-
+	public function __construct(
+		private readonly OutputPage $output,
+	) {
 		$output->addModules( 'mediawiki.checkboxtoggle' );
 		$output->addModuleStyles( 'mediawiki.checkboxtoggle.styles' );
 	}
 
-	private function checkboxLink( $checkboxType ) {
+	private function checkboxLink( string $checkboxType ): string {
 		return Html::element(
 			// CSS classes: mw-checkbox-all, mw-checkbox-none, mw-checkbox-invert
 			'a', [ 'class' => 'mw-checkbox-' . $checkboxType, 'role' => 'button', 'tabindex' => 0 ],
@@ -72,6 +55,3 @@ class ListToggle {
 		);
 	}
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( ListToggle::class, 'ListToggle' );

@@ -1,21 +1,7 @@
 <?php
 
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -31,32 +17,16 @@ use MediaWiki\StubObject\StubObject;
  */
 class StubObjectTest extends MediaWikiIntegrationTestCase {
 
-	/** @var int */
-	private $oldErrorLevel;
-
 	protected function setUp(): void {
 		parent::setUp();
 
-		// Make sure deprecation notices are seen
-		$this->oldErrorLevel = error_reporting( -1 );
-
 		global $wgDummy;
-		$wgDummy = new StubObject(
-			'wgDummy',
-			[ __CLASS__, 'factory' ]
-		);
-	}
-
-	protected function tearDown(): void {
-		error_reporting( $this->oldErrorLevel );
-		parent::tearDown();
+		$wgDummy = new StubObject( 'wgDummy', self::factory( ... ) );
 	}
 
 	/**
 	 * Static factory method for creating the underlying global, which is
 	 * a DemoStubbed with the starting value of 5
-	 *
-	 * @return DemoStubbed
 	 */
 	public static function factory(): DemoStubbed {
 		return new DemoStubbed( 5 );
@@ -172,16 +142,10 @@ class DemoStubbed {
 	/** @var int */
 	public $num;
 
-	/**
-	 * @param int $num
-	 */
 	public function __construct( int $num ) {
 		$this->num = $num;
 	}
 
-	/**
-	 * @return int
-	 */
 	public function getNum(): int {
 		return $this->num;
 	}

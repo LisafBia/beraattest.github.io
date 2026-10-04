@@ -64,6 +64,9 @@
 				"externalDocs": {
 					"$ref": "https://spec.openapis.org/oas/3.0/schema/2021-09-28#/definitions/ExternalDocumentation"
 				}
+			},
+			"patternProperties": {
+				"^x-i18n-": { "$ref": "#/definitions/i18n" }
 			}
 		},
 		"OperationImpl": {
@@ -94,16 +97,19 @@
 				},
 				"args": {
 					"type": "array",
-					"description": "Arguments to pass to the constructor or the factory method."
+					"description": "Arguments to pass to the constructor or the factory method.",
+					"items": {
+						"type": "object"
+					}
 				},
 				"services": {
 					"type": "array",
-					"item": { "type": "string" },
+					"items": { "type": "string" },
 					"description": "List of services to pass as arguments. Each name will be looked up in MediaWikiServices."
 				},
 				"optional_services": {
 					"type": "array",
-					"item": { "type": "string" },
+					"items": { "type": "string" },
 					"description": "List of services to pass as arguments. Each name will be looked up in MediaWikiServices. If the service is unknown the parameter is set to 'null' instead of causing an error."
 				}
 			},
@@ -122,6 +128,10 @@
 					"additionalProperties": false
 				}
 			}
+		},
+		"i18n": {
+			"description": "internationalized version of some other key",
+			"type": "string"
 		}
 	}
 }

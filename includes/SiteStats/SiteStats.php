@@ -2,31 +2,16 @@
 /**
  * Accessors and mutators for the site-wide statistics.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\SiteStats;
 
-use JobQueueError;
+use MediaWiki\JobQueue\Exceptions\JobQueueError;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use stdClass;
-use Wikimedia\Rdbms\Database;
 use Wikimedia\Rdbms\ILoadBalancer;
 use Wikimedia\Rdbms\IReadableDatabase;
 
@@ -153,9 +138,8 @@ class SiteStats {
 		return $cache->getWithSetCallback(
 			$cache->makeKey( 'SiteStats', 'groupcounts', $group ),
 			$cache::TTL_HOUR,
-			static function ( $oldValue, &$ttl, array &$setOpts ) use ( $group, $fname ) {
+			static function () use ( $group, $fname ) {
 				$dbr = self::getLB()->getConnection( DB_REPLICA );
-				$setOpts += Database::getCacheSetOptions( $dbr );
 				return (int)$dbr->newSelectQueryBuilder()
 					->select( 'COUNT(*)' )
 					->from( 'user_groups' )
@@ -185,7 +169,7 @@ class SiteStats {
 			static function ( $oldValue, &$ttl, array &$setOpts ) {
 				try {
 					$jobs = array_sum( MediaWikiServices::getInstance()->getJobQueueGroup()->getQueueSizes() );
-				} catch ( JobQueueError $e ) {
+				} catch ( JobQueueError ) {
 					$jobs = 0;
 				}
 				return $jobs;
@@ -205,10 +189,8 @@ class SiteStats {
 		return $cache->getWithSetCallback(
 			$cache->makeKey( 'SiteStats', 'page-in-namespace', $ns ),
 			$cache::TTL_HOUR,
-			static function ( $oldValue, &$ttl, array &$setOpts ) use ( $ns, $fname ) {
+			static function () use ( $ns, $fname ) {
 				$dbr = self::getLB()->getConnection( DB_REPLICA );
-				$setOpts += Database::getCacheSetOptions( $dbr );
-
 				return (int)$dbr->newSelectQueryBuilder()
 					->select( 'COUNT(*)' )
 					->from( 'page' )

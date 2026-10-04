@@ -11,6 +11,9 @@
 		"block": {
 			"file": "../wikimediaui/images/icons/block.svg"
 		},
+		"blockOutline": {
+			"file": "../wikimediaui/images/icons/blockOutline.svg"
+		},
 		"unBlock": {
 			"file": "../wikimediaui/images/icons/unBlock.svg"
 		},
@@ -58,6 +61,9 @@
 				"ltr": "../wikimediaui/images/icons/ongoingConversation-ltr.svg",
 				"rtl": "../wikimediaui/images/icons/ongoingConversation-rtl.svg"
 			}
+		},
+		"suggestedInvestigations": {
+			"file": "../wikimediaui/images/icons/suggestedInvestigations.svg"
 		}
 	}
 }

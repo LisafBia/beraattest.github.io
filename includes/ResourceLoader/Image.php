@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -22,14 +8,14 @@ namespace MediaWiki\ResourceLoader;
 
 use DOMDocument;
 use InvalidArgumentException;
-use InvalidSVGException;
-use MediaWiki\Languages\LanguageFallback;
+use MediaWiki\Language\LanguageFallbackMode;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Media\InvalidSVGException;
+use MediaWiki\Media\SvgHandler;
+use MediaWiki\Media\SVGReader;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Shell\Shell;
 use RuntimeException;
-use SvgHandler;
-use SVGReader;
 use Wikimedia\FileBackend\FileBackend;
 use Wikimedia\Minify\CSSMin;
 
@@ -89,7 +75,7 @@ class Image {
 		// → [ "en" => "foo.svg", "de" => "foo.svg", "fr" => "foo.svg" ]
 		if ( is_array( $this->descriptor ) && isset( $this->descriptor['lang'] ) ) {
 			foreach ( $this->descriptor['lang'] as $langList => $_ ) {
-				if ( strpos( $langList, ',' ) !== false ) {
+				if ( str_contains( $langList, ',' ) ) {
 					$this->descriptor['lang'] += array_fill_keys(
 						explode( ',', $langList ),
 						$this->descriptor['lang'][$langList]
@@ -159,7 +145,7 @@ class Image {
 	protected function getLangFallbacks( string $lang ): array {
 		return MediaWikiServices::getInstance()
 			->getLanguageFallback()
-			->getAll( $lang, LanguageFallback::STRICT );
+			->getAll( $lang, LanguageFallbackMode::STRICT );
 	}
 
 	/**
@@ -298,7 +284,7 @@ class Image {
 		}
 
 		if ( $this->getExtension() !== 'svg' ) {
-			return file_get_contents( $path );
+			return $this->readFile( $path );
 		}
 
 		if ( $variant && isset( $this->variants[$variant] ) ) {
@@ -307,7 +293,7 @@ class Image {
 			$defaultColor = $this->defaultColor;
 			$data = $defaultColor ?
 				$this->variantize( [ 'color' => $defaultColor ], $context ) :
-				file_get_contents( $path );
+				$this->readFile( $path );
 		}
 
 		if ( $format === 'rasterized' ) {
@@ -319,6 +305,19 @@ class Image {
 		}
 
 		return $data;
+	}
+
+	/**
+	 * @param string $path
+	 * @return string
+	 * @throws RuntimeException if the file cannot be read or is empty
+	 */
+	private function readFile( string $path ): string {
+		$content = file_get_contents( $path );
+		if ( $content === false || $content === '' ) {
+			throw new RuntimeException( "File '$path' could not be read or is empty" );
+		}
+		return $content;
 	}
 
 	/**
@@ -349,7 +348,7 @@ class Image {
 	 */
 	protected function variantize( array $variantConf, Context $context ) {
 		$dom = new DOMDocument;
-		$dom->loadXML( file_get_contents( $this->getPath( $context ) ) );
+		$dom->loadXML( $this->readFile( $this->getPath( $context ) ) );
 		$root = $dom->documentElement;
 		$titleNode = null;
 		$wrapper = $dom->createElementNS( 'http://www.w3.org/2000/svg', 'g' );
@@ -425,7 +424,7 @@ class Image {
 		$svg = $this->massageSvgPathdata( $svg );
 
 		// Sometimes this might be 'rsvg-secure'. Long as it's rsvg.
-		if ( strpos( $svgConverter, 'rsvg' ) === 0 ) {
+		if ( str_starts_with( $svgConverter, 'rsvg' ) ) {
 			$command = 'rsvg-convert';
 			if ( $svgConverterPath ) {
 				$command = Shell::escape( "{$svgConverterPath}/" ) . $command;

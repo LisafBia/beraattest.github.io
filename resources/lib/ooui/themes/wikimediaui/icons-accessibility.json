@@ -18,7 +18,7 @@
 			"color": "#d73333"
 		},
 		"warning": {
-			"color": "#edab00"
+			"color": "#ab7f2a"
 		},
 		"success": {
 			"color": "#14866d"
@@ -54,6 +54,9 @@
 		},
 		"smallerText": {
 			"file": "images/icons/smallerText.svg"
+		},
+		"universalDesign": {
+			"file": "images/icons/universalDesign.svg"
 		},
 		"visionSimulator": {
 			"file": "images/icons/visionSimulator.svg"

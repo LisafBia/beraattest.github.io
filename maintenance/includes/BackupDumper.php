@@ -5,21 +5,7 @@
  * Copyright © 2005 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Dump
  * @ingroup Maintenance
@@ -29,19 +15,31 @@ namespace MediaWiki\Maintenance;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/../Maintenance.php';
-require_once __DIR__ . '/../../includes/export/WikiExporter.php';
+require_once __DIR__ . '/../../includes/Export/WikiExporter.php';
 // @codeCoverageIgnoreEnd
 
-use DumpMultiWriter;
-use DumpOutput;
-use ExportProgressFilter;
+use MediaWiki\Export\Dump7ZipOutput;
+use MediaWiki\Export\DumpBZip2Output;
+use MediaWiki\Export\DumpDBZip2Output;
+use MediaWiki\Export\DumpFileOutput;
+use MediaWiki\Export\DumpFilter;
+use MediaWiki\Export\DumpGZipOutput;
+use MediaWiki\Export\DumpLatestFilter;
+use MediaWiki\Export\DumpLBZip2Output;
+use MediaWiki\Export\DumpMultiWriter;
+use MediaWiki\Export\DumpNamespaceFilter;
+use MediaWiki\Export\DumpNotalkFilter;
+use MediaWiki\Export\DumpOutput;
+use MediaWiki\Export\ExportProgressFilter;
+use MediaWiki\Export\WikiExporter;
+use MediaWiki\Export\XmlDumpWriter;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Settings\SettingsBuilder;
 use MediaWiki\WikiMap\WikiMap;
-use WikiExporter;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\IMaintainableDatabase;
-use XmlDumpWriter;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * @ingroup Dump
@@ -92,9 +90,9 @@ abstract class BackupDumper extends Maintenance {
 	/** @var int */
 	protected $revCountLast = 0;
 
-	/** @var string[] */
+	/** @var array<string,class-string<DumpOutput>> */
 	protected $outputTypes = [];
-	/** @var string[] */
+	/** @var array<string,class-string<DumpFilter>> */
 	protected $filterTypes = [];
 
 	/** @var int */
@@ -144,16 +142,16 @@ abstract class BackupDumper extends Maintenance {
 		$this->stderr = fopen( "php://stderr", "wt" );
 
 		// Built-in output and filter plugins
-		$this->registerOutput( 'file', \DumpFileOutput::class );
-		$this->registerOutput( 'gzip', \DumpGZipOutput::class );
-		$this->registerOutput( 'bzip2', \DumpBZip2Output::class );
-		$this->registerOutput( 'dbzip2', \DumpDBZip2Output::class );
-		$this->registerOutput( 'lbzip2', \DumpLBZip2Output::class );
-		$this->registerOutput( '7zip', \Dump7ZipOutput::class );
+		$this->registerOutput( 'file', DumpFileOutput::class );
+		$this->registerOutput( 'gzip', DumpGZipOutput::class );
+		$this->registerOutput( 'bzip2', DumpBZip2Output::class );
+		$this->registerOutput( 'dbzip2', DumpDBZip2Output::class );
+		$this->registerOutput( 'lbzip2', DumpLBZip2Output::class );
+		$this->registerOutput( '7zip', Dump7ZipOutput::class );
 
-		$this->registerFilter( 'latest', \DumpLatestFilter::class );
-		$this->registerFilter( 'notalk', \DumpNotalkFilter::class );
-		$this->registerFilter( 'namespace', \DumpNamespaceFilter::class );
+		$this->registerFilter( 'latest', DumpLatestFilter::class );
+		$this->registerFilter( 'notalk', DumpNotalkFilter::class );
+		$this->registerFilter( 'namespace', DumpNamespaceFilter::class );
 
 		// These three can be specified multiple times
 		$this->addOption( 'plugin', 'Load a dump plugin class. Specify as <class>[:<file>].',
@@ -190,7 +188,7 @@ abstract class BackupDumper extends Maintenance {
 
 	/**
 	 * @param string $name
-	 * @param string $class Name of output filter plugin class
+	 * @param class-string<DumpOutput> $class Name of output filter plugin class
 	 */
 	public function registerOutput( $name, $class ) {
 		$this->outputTypes[$name] = $class;
@@ -198,7 +196,7 @@ abstract class BackupDumper extends Maintenance {
 
 	/**
 	 * @param string $name
-	 * @param string $class Name of filter plugin class
+	 * @param class-string<DumpFilter> $class Name of filter plugin class
 	 */
 	public function registerFilter( $name, $class ) {
 		$this->filterTypes[$name] = $class;
@@ -207,7 +205,7 @@ abstract class BackupDumper extends Maintenance {
 	/**
 	 * Load a plugin and register it
 	 *
-	 * @param string $class Name of plugin class; must have a static 'register'
+	 * @param class-string $class Name of plugin class; must have a static 'register'
 	 *   method that takes a BackupDumper as a parameter.
 	 * @param string $file Full or relative path to the PHP file to load, or empty
 	 */
@@ -310,6 +308,10 @@ abstract class BackupDumper extends Maintenance {
 		}
 	}
 
+	/**
+	 * @param int $history
+	 * @param int $text
+	 */
 	public function dump( $history, $text = WikiExporter::TEXT ) {
 		# Notice messages will foul up your XML output even if they're
 		# relatively harmless.
@@ -427,7 +429,7 @@ abstract class BackupDumper extends Maintenance {
 		$this->report();
 	}
 
-	public function report( $final = false ) {
+	public function report( bool $final = false ) {
 		if ( $final xor ( $this->revCount % $this->reportingInterval == 0 ) ) {
 			$this->showReport();
 		}
@@ -435,7 +437,7 @@ abstract class BackupDumper extends Maintenance {
 
 	public function showReport() {
 		if ( $this->reporting ) {
-			$now = wfTimestamp( TS_DB );
+			$now = ConvertibleTimestamp::now( TS::DB );
 			$nowts = microtime( true );
 			$deltaAll = $nowts - $this->startTime;
 			$deltaPart = $nowts - $this->lastTime;
@@ -445,7 +447,7 @@ abstract class BackupDumper extends Maintenance {
 			if ( $deltaAll ) {
 				$portion = $this->revCount / $this->maxCount;
 				$eta = $this->startTime + $deltaAll / $portion;
-				$etats = wfTimestamp( TS_DB, intval( $eta ) );
+				$etats = wfTimestamp( TS::DB, intval( $eta ) );
 				$pageRate = $this->pageCount / $deltaAll;
 				$revRate = $this->revCount / $deltaAll;
 			} else {
@@ -474,7 +476,7 @@ abstract class BackupDumper extends Maintenance {
 		}
 	}
 
-	protected function progress( $string ) {
+	protected function progress( string $string ) {
 		if ( $this->reporting ) {
 			fwrite( $this->stderr, $string . "\n" );
 		}

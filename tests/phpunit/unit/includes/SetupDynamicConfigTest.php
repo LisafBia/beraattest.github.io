@@ -1,6 +1,13 @@
 <?php
 
+use MediaWiki\FileRepo\FileRepo;
+use MediaWiki\FileRepo\ForeignAPIRepo;
+use MediaWiki\FileRepo\ForeignDBRepo;
+use MediaWiki\FileRepo\LocalRepo;
 use MediaWiki\Language\LanguageCode;
+use MediaWiki\Logging\LogFormatter;
+use MediaWiki\Logging\NewUsersLogFormatter;
+use MediaWiki\Logging\PageLangLogFormatter;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MainConfigSchema;
 use MediaWiki\Registration\ExtensionRegistry;
@@ -11,6 +18,8 @@ use MediaWiki\Settings\DynamicDefaultValues;
 use MediaWiki\Settings\SettingsBuilder;
 use MediaWiki\Settings\Source\ReflectionSchemaSource;
 use MediaWiki\Title\NamespaceInfo;
+use Wikimedia\LockManager\FSLockManager;
+use Wikimedia\LockManager\NullLockManager;
 
 class SetupDynamicConfigTest extends MediaWikiUnitTestCase {
 	/** @var string */
@@ -120,8 +129,6 @@ class SetupDynamicConfigTest extends MediaWikiUnitTestCase {
 			MainConfigNames::SharedPrefix => '',
 			MainConfigNames::SharedSchema => null,
 			MainConfigNames::MetaNamespace => 'MediaWiki',
-			MainConfigNames::EnableUserEmailMuteList => false,
-			'EnableUserEmailBlacklist' => false,
 			MainConfigNames::NamespaceProtection => [ NS_MEDIAWIKI => 'editinterface' ],
 			MainConfigNames::LockManagers => [ [
 				'name' => 'fsLockManager',
@@ -296,33 +303,6 @@ class SetupDynamicConfigTest extends MediaWikiUnitTestCase {
 				'MimeTypeBlacklist' => [ 'eviler' ],
 			],
 		];
-		yield '$wgEnableUserEmailMuteList set' => [
-			[ MainConfigNames::EnableUserEmailMuteList => true ],
-			[
-				MainConfigNames::EnableUserEmailMuteList => true,
-				'EnableUserEmailBlacklist' => true,
-			],
-		];
-		yield '$wgEnableUserEmailMuteList and $wgEnableUserEmailBlacklist both true' => [
-			[
-				MainConfigNames::EnableUserEmailMuteList => true,
-				'EnableUserEmailBlacklist' => true,
-			],
-			[
-				MainConfigNames::EnableUserEmailMuteList => true,
-				'EnableUserEmailBlacklist' => true,
-			],
-		];
-		yield '$wgEnableUserEmailMuteList true and $wgEnableUserEmailBlacklist false' => [
-			[
-				MainConfigNames::EnableUserEmailMuteList => true,
-				'EnableUserEmailBlacklist' => false,
-			],
-			[
-				MainConfigNames::EnableUserEmailMuteList => false,
-				'EnableUserEmailBlacklist' => false,
-			],
-		];
 		yield '$wgShortPagesNamespaceExclusions set' => [
 			[ MainConfigNames::ShortPagesNamespaceExclusions => [ NS_TALK ] ],
 			[
@@ -408,7 +388,17 @@ class SetupDynamicConfigTest extends MediaWikiUnitTestCase {
 				MainConfigNames::StylePath => '/resources/skins',
 				MainConfigNames::Logo => '/resources/resources/assets/change-your-logo.svg',
 				MainConfigNames::FooterIcons => [ 'poweredby' => [ 'mediawiki' => [
-					'src' => '/resources/resources/assets/poweredby_mediawiki.svg',
+					'src' => '/resources/resources/assets/mediawiki_compact.svg',
+					'sources' => [
+						[
+							'media' => '(min-width: 500px)',
+							'srcset' => '/resources/resources/assets/poweredby_mediawiki.svg',
+							'width' => 88,
+							'height' => 31,
+						]
+					],
+					'width' => 25,
+					'height' => 25
 				] ] ],
 			],
 		];
@@ -464,7 +454,19 @@ class SetupDynamicConfigTest extends MediaWikiUnitTestCase {
 		yield 'Set $wgLocalFileRepo' => [
 			[ MainConfigNames::LocalFileRepo => [ 'name' => 'asdfgh' ] ],
 			[ MainConfigNames::LocalFileRepo => [
-				'name' => 'asdfgh', 'backend' => 'asdfgh-backend'
+				'name' => 'asdfgh',
+				'directory' => '/install/path/images',
+				'scriptDirUrl' => '/wiki',
+				'favicon' => '/favicon.ico',
+				'url' => '/wiki/images',
+				'hashLevels' => 2,
+				'thumbScriptUrl' => false,
+				'transformVia404' => false,
+				'deletedDir' => '/install/path/images/deleted',
+				'deletedHashLevels' => 3,
+				'updateCompatibleMetadata' => false,
+				'reserializeMetadata' => false,
+				'backend' => 'asdfgh-backend',
 			] ],
 		];
 		$sharedUploadsExpected = [
@@ -498,6 +500,7 @@ class SetupDynamicConfigTest extends MediaWikiUnitTestCase {
 			'dbName' => 'shared_uploads',
 			'dbFlags' => DBO_DEFAULT,
 			'tablePrefix' => '',
+			'dbSchema' => null,
 			'hasSharedCache' => true,
 			'descBaseUrl' => 'https://commons.wikimedia.org/wiki/File:',
 			'fetchDescription' => false,
@@ -620,8 +623,6 @@ class SetupDynamicConfigTest extends MediaWikiUnitTestCase {
 				MainConfigNames::EmailAuthentication => true,
 				MainConfigNames::EnableUserEmail => true,
 				MainConfigNames::EnotifFromEditor => true,
-				MainConfigNames::EnotifImpersonal => true,
-				MainConfigNames::EnotifMaxRecips => 0,
 				MainConfigNames::EnotifMinorEdits => true,
 				MainConfigNames::EnotifRevealEditorAddress => true,
 				MainConfigNames::EnotifUseRealName => true,
@@ -635,8 +636,6 @@ class SetupDynamicConfigTest extends MediaWikiUnitTestCase {
 				MainConfigNames::EmailAuthentication => false,
 				MainConfigNames::EnableUserEmail => false,
 				MainConfigNames::EnotifFromEditor => false,
-				MainConfigNames::EnotifImpersonal => false,
-				MainConfigNames::EnotifMaxRecips => 0,
 				MainConfigNames::EnotifMinorEdits => false,
 				MainConfigNames::EnotifRevealEditorAddress => false,
 				MainConfigNames::EnotifUseRealName => false,
@@ -753,15 +752,15 @@ class SetupDynamicConfigTest extends MediaWikiUnitTestCase {
 				$testObj->assertSame( 'newuserlogpage', $vars[MainConfigNames::LogNames]['newusers'] );
 				$testObj->assertSame( 'newuserlogpagetext', $vars[MainConfigNames::LogHeaders]['newusers'] );
 				$testObj->assertSame( NewUsersLogFormatter::class,
-					$vars[MainConfigNames::LogActionsHandlers]['newusers/newusers'] );
+					$vars[MainConfigNames::LogActionsHandlers]['newusers/newusers']['class'] );
 				$testObj->assertSame( NewUsersLogFormatter::class,
-					$vars[MainConfigNames::LogActionsHandlers]['newusers/create'] );
+					$vars[MainConfigNames::LogActionsHandlers]['newusers/create']['class'] );
 				$testObj->assertSame( NewUsersLogFormatter::class,
-					$vars[MainConfigNames::LogActionsHandlers]['newusers/create2'] );
+					$vars[MainConfigNames::LogActionsHandlers]['newusers/create2']['class'] );
 				$testObj->assertSame( NewUsersLogFormatter::class,
-					$vars[MainConfigNames::LogActionsHandlers]['newusers/byemail'] );
+					$vars[MainConfigNames::LogActionsHandlers]['newusers/byemail']['class'] );
 				$testObj->assertSame( NewUsersLogFormatter::class,
-					$vars[MainConfigNames::LogActionsHandlers]['newusers/autocreate'] );
+					$vars[MainConfigNames::LogActionsHandlers]['newusers/autocreate']['class'] );
 
 				return $expectedDefault;
 			},
@@ -867,18 +866,6 @@ class SetupDynamicConfigTest extends MediaWikiUnitTestCase {
 				$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
 			}
 		];
-		yield 'Bogus $wgPHPSessionHandling' => [
-			[ MainConfigNames::PHPSessionHandling => 'bogus' ],
-			[ MainConfigNames::PHPSessionHandling => 'warn' ],
-		];
-		yield 'Enable $wgPHPSessionHandling' => [
-			[ MainConfigNames::PHPSessionHandling => 'enable' ],
-			[ MainConfigNames::PHPSessionHandling => 'enable' ],
-		];
-		yield 'Disable $wgPHPSessionHandling' => [
-			[ MainConfigNames::PHPSessionHandling => 'disable' ],
-			[ MainConfigNames::PHPSessionHandling => 'disable' ],
-		];
 
 		// use old deprecated rate limit names
 		$rateLimits = [
@@ -903,7 +890,7 @@ class SetupDynamicConfigTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
-	 * Test that if the variables $test are set after DefaultSettings.php is loaded, then
+	 * Test that if the variables $test are set after MainConfigSchema.php is loaded, then
 	 * DynamicDefaultValues and SetupDynamicConfig.php will result in the variables
 	 * in $expected being set to the given values.
 	 * (This does not test that other variables aren't also set.)

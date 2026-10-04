@@ -3,11 +3,15 @@
 namespace MediaWiki\Rest\Module;
 
 use LogicException;
+use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\Profiler\ProfilingContext;
 use MediaWiki\Rest\BasicAccess\BasicAuthorizerInterface;
 use MediaWiki\Rest\CorsUtils;
 use MediaWiki\Rest\Handler;
+use MediaWiki\Rest\Handler\GenericActionHandler;
+use MediaWiki\Rest\Hook\HookRunner;
 use MediaWiki\Rest\HttpException;
+use MediaWiki\Rest\JsonLocalizer;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\PathTemplateMatcher\ModuleConfigurationException;
 use MediaWiki\Rest\Reporter\ErrorReporter;
@@ -17,10 +21,13 @@ use MediaWiki\Rest\ResponseFactory;
 use MediaWiki\Rest\ResponseInterface;
 use MediaWiki\Rest\Router;
 use MediaWiki\Rest\Validator\Validator;
+use PHPUnit\Exception as PHPUnitException;
 use Throwable;
+use Wikimedia\Assert\Assert;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ObjectFactory\ObjectFactory;
 use Wikimedia\Stats\StatsFactory;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 /**
  * A REST module represents a collection of endpoints.
@@ -37,44 +44,34 @@ abstract class Module {
 	 */
 	public const CACHE_CONFIG_HASH_KEY = 'CONFIG-HASH';
 
-	protected string $pathPrefix;
-	protected ResponseFactory $responseFactory;
-	private BasicAuthorizerInterface $basicAuth;
-	private ObjectFactory $objectFactory;
-	private Validator $restValidator;
-	private ErrorReporter $errorReporter;
-	private Router $router;
-
 	private StatsFactory $stats;
 	private ?CorsUtils $cors = null;
+	private readonly HookRunner $hookRunner;
+
+	// Set by initForExecute() when the module is initialized to handle a
+	// request. Null while the module is uninitialized (e.g. when generating
+	// OpenAPI specs).
+	private ?ResponseFactory $responseFactory = null;
+
+	public function __construct(
+		private readonly Router $router,
+		protected readonly string $pathPrefix,
+		protected readonly JsonLocalizer $jsonLocalizer,
+		private readonly BasicAuthorizerInterface $basicAuth,
+		private readonly ObjectFactory $objectFactory,
+		private readonly Validator $restValidator,
+		private readonly ErrorReporter $errorReporter,
+		HookContainer $hookContainer,
+	) {
+		$this->hookRunner = new HookRunner( $hookContainer );
+		$this->stats = StatsFactory::newNull();
+	}
 
 	/**
-	 * @param Router $router
-	 * @param string $pathPrefix
-	 * @param ResponseFactory $responseFactory
-	 * @param BasicAuthorizerInterface $basicAuth
-	 * @param ObjectFactory $objectFactory
-	 * @param Validator $restValidator
-	 * @param ErrorReporter $errorReporter
+	 * @since 1.47
 	 */
-	public function __construct(
-		Router $router,
-		string $pathPrefix,
-		ResponseFactory $responseFactory,
-		BasicAuthorizerInterface $basicAuth,
-		ObjectFactory $objectFactory,
-		Validator $restValidator,
-		ErrorReporter $errorReporter
-	) {
-		$this->router = $router;
-		$this->pathPrefix = $pathPrefix;
-		$this->responseFactory = $responseFactory;
-		$this->basicAuth = $basicAuth;
-		$this->objectFactory = $objectFactory;
-		$this->restValidator = $restValidator;
-		$this->errorReporter = $errorReporter;
-
-		$this->stats = StatsFactory::newNull();
+	public function getJsonLocalizer(): JsonLocalizer {
+		return $this->jsonLocalizer;
 	}
 
 	public function getPathPrefix(): string {
@@ -112,6 +109,15 @@ abstract class Module {
 	abstract public function initFromCacheData( array $cacheData ): bool;
 
 	/**
+	 * Initialize this module for handling requests via execute().
+	 *
+	 * @internal
+	 */
+	public function initForExecute( ResponseFactory $responseFactory ) {
+		$this->responseFactory = $responseFactory;
+	}
+
+	/**
 	 * Create a Handler for the given path, taking into account the request
 	 * method.
 	 *
@@ -137,6 +143,11 @@ abstract class Module {
 		RequestInterface $request,
 		bool $initForExecute = false
 	): Handler {
+		Assert::precondition(
+			!$initForExecute || $this->responseFactory !== null,
+			'The $initForExecute flag cannot be true if initForExecute() has not been called'
+		);
+
 		$requestMethod = strtoupper( $request->getMethod() );
 
 		$match = $this->findHandlerMatch( $path, $requestMethod );
@@ -169,8 +180,17 @@ abstract class Module {
 		$config = $match['config'] ?? [];
 		$config['path'] ??= $match['path'];
 
+		// Remember the method the module was registered for.
+		// Useful during spec generation.
+		// NOTE: With this in place, we no longer need $method as a parameter
+		// in spec generation. But we can't change the method signatures
+		// without breaking subclasses.
+		$config['method'] ??= $requestMethod;
+
+		$openApiSpec = $match['openApiSpec'] ?? [];
+
 		// Provide context about the module
-		$handler->initContext( $this, $match['path'], $config );
+		$handler->initContext( $this, $match['path'], $config, $openApiSpec );
 
 		// Inject services and state from the router
 		$this->getRouter()->prepareHandler( $handler );
@@ -180,7 +200,7 @@ abstract class Module {
 			$pathParams = array_map( 'rawurldecode', $match['params'] ?? [] );
 			$request->setPathParams( $pathParams );
 
-			$handler->initForExecute( $request );
+			$handler->initForExecute( $request, $this->responseFactory );
 		}
 
 		return $handler;
@@ -198,20 +218,20 @@ abstract class Module {
 	 * @param string $requestMethod
 	 *
 	 * @return array<string,mixed>
-	 *         - bool "found": Whether a match was found. If true, the `handler`
-	 *           or `spec` field must be set.
-	 *         - Handler handler: the Handler object to use. Either "handler" or
-	 *           "spec" must be given.
-	 *         - array "spec":" an object spec for use with ObjectFactory
-	 *         - array "config": the route config, to be passed to Handler::initContext()
-	 *         - string "path": the path the handler is responsible for,
-	 *           including placeholders for path parameters.
-	 *         - string[] "params": path parameters, to be passed the
-	 *           Request::setPathPrams()
-	 *         - string[] "methods": supported methods, if the path is known but
-	 *           the method did not match. Only meaningful if "found" is false.
-	 *           To be used in the Allow header of a 405 response and included
-	 *           in CORS pre-flight.
+	 *   - bool "found": Whether a match was found. If true, the `handler`
+	 *     or `spec` field must be set.
+	 *   - Handler handler: the Handler object to use. Either "handler" or
+	 *     "spec" must be given.
+	 *   - array "spec":" an object spec for use with ObjectFactory
+	 *   - array "config": the route config, to be passed to Handler::initContext()
+	 *   - string "path": the path the handler is responsible for,
+	 *     including placeholders for path parameters.
+	 *   - string[] "params": path parameters, to be passed the
+	 *     Request::setPathPrams()
+	 *   - string[] "methods": supported methods, if the path is known but
+	 *     the method did not match. Only meaningful if "found" is false.
+	 *     To be used in the Allow header of a 405 response and included
+	 *     in CORS pre-flight.
 	 */
 	abstract protected function findHandlerMatch(
 		string $path,
@@ -229,12 +249,12 @@ abstract class Module {
 	 * @return never
 	 * @throws HttpException
 	 */
-	protected function throwNoMatch( string $path, string $method, array $allowed ): void {
+	protected function throwNoMatch( string $path, string $method, array $allowed ): never {
 		// Check for CORS Preflight. This response will *not* allow the request unless
 		// an Access-Control-Allow-Origin header is added to this response.
-		if ( $this->cors && $method === 'OPTIONS' && $allowed ) {
+		if ( $this->cors && $this->responseFactory && $method === 'OPTIONS' && $allowed ) {
 			// IDEA: Create a CorsHandler, which getHandlerForPath can return in this case.
-			$response = $this->cors->createPreflightResponse( $allowed );
+			$response = $this->cors->createPreflightResponse( $allowed, $this->responseFactory );
 			throw new ResponseException( $response );
 		}
 
@@ -256,33 +276,58 @@ abstract class Module {
 		}
 	}
 
+	private function runRestCheckCanExecuteHook(
+		Handler $handler,
+		string $path,
+		RequestInterface $request
+	): void {
+		$error = null;
+		$canExecute = $this->hookRunner->onRestCheckCanExecute( $this, $handler, $path, $request, $error );
+		if ( $canExecute !== ( $error === null ) ) {
+			throw new LogicException(
+				'Hook RestCheckCanExecute returned ' . ( $canExecute ? 'true' : 'false' )
+					. ' but ' . ( $error ? 'did' : 'did not' ) . ' set an error'
+			);
+		} elseif ( $error instanceof HttpException ) {
+			throw $error;
+		} elseif ( $error ) {
+			throw new LogicException(
+				'RestCheckCanExecute must set a HttpException when returning false, '
+					. 'but got ' . get_class( $error )
+			);
+		}
+	}
+
 	/**
 	 * Find the handler for a request and execute it
 	 */
 	public function execute( string $path, RequestInterface $request ): ResponseInterface {
 		$handler = null;
-		$startTime = microtime( true );
+		$startTime = ConvertibleTimestamp::hrtime();
+
+		Assert::precondition(
+			$this->responseFactory !== null,
+			'execute() cannot be called before initForExecute()'
+		);
 
 		try {
 			$handler = $this->getHandlerForPath( $path, $request, true );
-
+			$this->runRestCheckCanExecuteHook( $handler, $path, $request );
 			$response = $this->executeHandler( $handler );
+			$this->hookRunner->onRestAfterExecute( $this, $handler, $path, $request, $response );
 		} catch ( HttpException $e ) {
-			$extraData = [];
-			if ( $this->router->isRestbaseCompatEnabled( $request )
-				&& $e instanceof LocalizedHttpException
-			) {
-				$extraData = $this->router->getRestbaseCompatErrorData( $request, $e );
-			}
-			$response = $this->responseFactory->createFromException( $e, $extraData );
+			$response = $this->responseFactory->createFromException( $e );
+			$this->hookRunner->onRestAfterExecute( $this, $handler, $path, $request, $response );
 		} catch ( Throwable $e ) {
+			if ( $e instanceof PHPUnitException ) {
+				throw $e;
+			}
 			// Note that $handler is allowed to be null here.
 			$this->errorReporter->reportError( $e, $handler, $request );
 			$response = $this->responseFactory->createFromException( $e );
 		}
 
 		$this->recordMetrics( $handler, $request, $response, $startTime );
-
 		return $response;
 	}
 
@@ -292,16 +337,15 @@ abstract class Module {
 		ResponseInterface $response,
 		float $startTime
 	) {
-		$latency = ( microtime( true ) - $startTime ) * 1000;
+		$latency = ConvertibleTimestamp::hrtime() - $startTime;
 
 		// NOTE: The "/" prefix is for consistency with old logs. It's rather ugly.
-		$pathForMetrics = $this->getPathPrefix();
-
-		if ( $pathForMetrics !== '' ) {
-			$pathForMetrics = '/' . $pathForMetrics;
+		if ( $handler ) {
+			$pathForMetrics = $handler->getRoutePath();
+		} else {
+			$prefix = $this->getPathPrefix();
+			$pathForMetrics = ( $prefix !== '' ) ? "/$prefix/UNKNOWN" : '/UNKNOWN';
 		}
-
-		$pathForMetrics .= $handler ? $handler->getPath() : '/UNKNOWN';
 
 		// Replace any characters that may have a special meaning in the metrics DB.
 		$pathForMetrics = strtr( $pathForMetrics, '{}:/.', '---__' );
@@ -314,7 +358,6 @@ abstract class Module {
 				->setLabel( 'path', $pathForMetrics )
 				->setLabel( 'method', $requestMethod )
 				->setLabel( 'status', "$statusCode" )
-				->copyToStatsdAt( [ "rest_api_errors.$pathForMetrics.$requestMethod.$statusCode" ] )
 				->increment();
 		} else {
 			// measure how long it takes to generate a response
@@ -322,9 +365,64 @@ abstract class Module {
 				->setLabel( 'path', $pathForMetrics )
 				->setLabel( 'method', $requestMethod )
 				->setLabel( 'status', "$statusCode" )
-				->copyToStatsdAt( "rest_api_latency.$pathForMetrics.$requestMethod.$statusCode" )
-				->observe( $latency );
+				->observeNanoseconds( $latency );
 		}
+
+		// New unified metrics for the API
+		// Only record those if there's a handler
+		if ( !$handler ) {
+			return;
+		}
+		$moduleDescription = $this->getModuleDescription();
+
+		$metricsLabels = [
+			'api_module' => $moduleDescription['moduleId'],
+			// as a starting point, we'll use the Handler class name for the endpoint
+			'api_endpoint' => $handler::class,
+			'path' => $pathForMetrics,
+			'method' => $requestMethod,
+			'status' => "$statusCode",
+		];
+
+		$approvedLabels = [
+			'api_module',
+			'api_endpoint',
+			'path',
+			'method',
+			'status',
+		];
+
+		// Hit metrics
+		$metricHitStats = $this->stats->getCounter( 'rest_api_modules_hit_total' )
+			->setLabel( 'api_type', 'REST_API' );
+		// Iterate over the approved labels and set the labels for the metric
+		foreach ( $approvedLabels as $label ) {
+			// Set a fallback value for empty strings
+			$value = (
+				array_key_exists( $label, $metricsLabels ) &&
+				is_string( $metricsLabels[$label] ) &&
+				trim( $metricsLabels[$label] ) !== ''
+			) ? $metricsLabels[$label] : 'EMPTY_VALUE';
+
+			$metricHitStats->setLabel( $label, $value );
+		}
+		$metricHitStats->increment();
+
+		// Latency metrics
+		$metricLatencyStats = $this->stats->getTiming( 'rest_api_modules_latency' )
+			->setLabel( 'api_type', 'REST_API' );
+		// Iterate over the approved labels and set the labels for the metric
+		foreach ( $approvedLabels as $label ) {
+			// Set a fallback value for empty strings
+			$value = (
+				array_key_exists( $label, $metricsLabels ) &&
+				is_string( $metricsLabels[$label] ) &&
+				trim( $metricsLabels[$label] ) !== ''
+			) ? $metricsLabels[$label] : 'EMPTY_VALUE';
+
+			$metricLatencyStats->setLabel( $label, $value );
+		}
+		$metricLatencyStats->observeNanoseconds( $latency );
 	}
 
 	/**
@@ -349,6 +447,16 @@ abstract class Module {
 	 * Creates a handler from the given spec, but does not initialize it.
 	 */
 	protected function instantiateHandlerObject( array $spec ): Handler {
+		if ( isset( $spec['adapter'] ) ) {
+			if ( isset( $spec['class'] ) ) {
+				throw new ModuleConfigurationException(
+					'"adapter" cannot be used together with "class"'
+				);
+			}
+
+			return $this->instantiateAdapter( $spec['adapter'] );
+		}
+
 		/** @var $handler Handler (annotation for PHPStorm) */
 		$handler = $this->objectFactory->createObject(
 			$spec,
@@ -358,12 +466,36 @@ abstract class Module {
 		return $handler;
 	}
 
+	private function instantiateAdapter( array $adapterSpec ): Handler {
+		$require = static function ( string $key ) use ( $adapterSpec ) {
+			if ( !isset( $adapterSpec[ $key ] ) ) {
+				throw new ModuleConfigurationException(
+					"adapter spec is missing '$key'"
+				);
+			}
+
+			return $adapterSpec[ $key ];
+		};
+
+		// SEAM: move this to a factory that can be registered with the Module,
+		// to avoid a conceptual dependency between Rest API and Action API.
+
+		switch ( $require( 'type' ) ) {
+			case 'action':
+				return new GenericActionHandler( $require( 'action' ), $adapterSpec );
+			default:
+				throw new ModuleConfigurationException(
+					"unknown adapter type '{$adapterSpec['type']}'"
+				);
+		}
+	}
+
 	/**
 	 * Execute a fully-constructed handler
 	 * @throws HttpException
 	 */
 	protected function executeHandler( Handler $handler ): ResponseInterface {
-		ProfilingContext::singleton()->init( MW_ENTRY_POINT, $handler->getPath() );
+		ProfilingContext::singleton()->init( MW_ENTRY_POINT, $handler->getRoutePath() );
 		// Check for basic authorization, to avoid leaking data from private wikis
 		$authResult = $this->basicAuth->authorize( $handler->getRequest(), $handler );
 		if ( $authResult ) {
@@ -388,6 +520,9 @@ abstract class Module {
 			$response = $this->responseFactory->createFromReturnValue( $response );
 		}
 
+		// Deprecation header per RFC 9745
+		$handler->applyDeprecationHeader( $response );
+
 		// Set Last-Modified and ETag headers in the response if available
 		$handler->applyConditionalResponseHeaders( $response );
 
@@ -396,10 +531,6 @@ abstract class Module {
 		return $response;
 	}
 
-	/**
-	 * @param CorsUtils $cors
-	 * @return self
-	 */
 	public function setCors( CorsUtils $cors ): self {
 		$this->cors = $cors;
 
@@ -464,39 +595,82 @@ abstract class Module {
 	}
 
 	/**
+	 * Return an array with data to be included as the root-level OpenAPI
+	 * "externalDocs" object describing this module's external documentation.
+	 *
+	 * @see https://spec.openapis.org/oas/v3.0.0#external-documentation-object
+	 * @since 1.47
+	 * @return array
+	 */
+	public function getOpenApiExternalDocs(): array {
+		return [];
+	}
+
+	/**
+	 * Return an array with data to be included in an OpenAPI "tags" object
+	 * describing this module's tags.
+	 *
+	 * Each tag should be an associative array with 'name' and
+	 * 'description' keys. Example:
+	 *   [ [ 'name' => 'pages', 'description' => 'Page operations' ] ]
+	 *
+	 * @see https://spec.openapis.org/oas/v3.0.0#tag-object
+	 * @since 1.47
+	 * @return array[]
+	 */
+	public function getOpenApiTags(): array {
+		return [];
+	}
+
+	/**
+	 * Return the timestamp at which this was or will be deprecated, or null if none.
+	 *
+	 * @see Handler::getDeprecatedDate()
+	 * @since 1.47
+	 */
+	public function getDeprecatedDate(): ?int {
+		return $this->getOpenApiInfo()['deprecationSettings']['since'] ?? null;
+	}
+
+	/**
 	 * Returns fields to be included when describing this module in the
 	 * discovery document.
 	 *
-	 * Supported keys are described in /docs/discovery-1.0.json#/definitions/Module
+	 * Supported keys are described in /docs/discovery-1.1.json#/definitions/Module
 	 *
-	 * @see /docs/discovery-1.0.json
-	 * @see /docs/mwapi-1.0.json
+	 * @see /docs/discovery-1.1.json
+	 * @see /docs/mwapi-1.2.json
 	 * @see DiscoveryHandler
 	 */
 	public function getModuleDescription(): array {
-		// TODO: Include the designated audience (T366567).
 		// Note that each module object is designated for only one audience,
 		// even if the spec allows multiple.
 		$moduleId = $this->getPathPrefix();
+		$moduleInfo = $this->getOpenApiInfo();
 
-		// Fields from OAS Info to include.
-		// Note that mwapi-1.0 is based on OAS 3.0, so it doesn't support the
+		// Fields from openApiSpec info to include.
+		// Note that mwapi-1.2 and earlier are based on OAS 3.0, so they don't support the
 		// "summary" property introduced in 3.1.
-		$infoFields = [ 'version', 'title', 'description' ];
+		// NOTE: If you add fields here, you must update both the discovery spec
+		// (docs/rest/discovery-1.1.json) and the module definition spec (docs/rest/mwapi-1.2.json).
+		// Adding fields requires a minor version bump of both specs, and their references
+		// must be synchronized.
+		$infoFields = [ 'version', 'title', 'description', 'deprecationSettings' ];
+
+		if ( isset( $moduleInfo['oadSpecPath'] ) ) {
+			$spec = $this->getRouter()->getRouteUrl( '/' . $moduleId . $moduleInfo['oadSpecPath'] );
+		} else {
+			$spec = $this->getRouter()->getRouteUrl(
+				'/specs/v0/module/{module}', // hard-coding this here isn't very pretty
+				[ 'module' => $moduleId == '' ? '-' : $moduleId ]
+			);
+		}
 
 		return [
 			'moduleId' => $moduleId,
-			'info' => array_intersect_key(
-				$this->getOpenApiInfo(),
-				array_flip( $infoFields )
-			),
-			'base' => $this->getRouter()->getRouteUrl(
-				'/' . $moduleId
-			),
-			'spec' => $this->getRouter()->getRouteUrl(
-				'/specs/v0/module/{module}', // hard-coding this here isn't very pretty
-				[ 'module' => $moduleId == '' ? '-' : $moduleId ]
-			)
+			'info' => array_intersect_key( $moduleInfo, array_flip( $infoFields ) ),
+			'base' => $this->getRouter()->getRouteUrl( '/' . $moduleId ),
+			'spec' => $spec
 		];
 	}
 }

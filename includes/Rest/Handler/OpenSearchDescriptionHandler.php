@@ -3,19 +3,7 @@
 /**
  * Copyright (C) 2011-2020 Wikimedia Foundation and others.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * @license GPL-2.0-or-later
  */
 
 namespace MediaWiki\Rest\Handler;
@@ -27,6 +15,7 @@ use MediaWiki\MainConfigNames;
 use MediaWiki\MainConfigSchema;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\Response;
+use MediaWiki\Rest\ResponseHeaders;
 use MediaWiki\Rest\StringStream;
 use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Utils\UrlUtils;
@@ -48,31 +37,31 @@ use Wikimedia\Message\MessageValue;
  */
 class OpenSearchDescriptionHandler extends Handler {
 
-	private UrlUtils $urlUtils;
-
 	/** @see MainConfigSchema::Favicon */
-	private string $favicon;
+	private readonly string $favicon;
 
 	/** @see MainConfigSchema::OpenSearchTemplates */
-	private array $templates;
+	private readonly array $templates;
 
-	public function __construct( Config $config, UrlUtils $urlUtils ) {
+	public function __construct(
+		Config $config,
+		private readonly UrlUtils $urlUtils,
+	) {
 		$this->favicon = $config->get( MainConfigNames::Favicon );
 		$this->templates = $config->get( MainConfigNames::OpenSearchTemplates );
-		$this->urlUtils = $urlUtils;
 	}
 
 	public function execute(): Response {
 		$ctype = $this->getContentType();
 
 		$response = $this->getResponseFactory()->create();
-		$response->setHeader( 'Content-type', $ctype );
+		$response->setHeader( ResponseHeaders::CONTENT_TYPE, $ctype );
 
 		// Set an Expires header so that CDN can cache it for a short time
 		// Short enough so that the sysadmin barely notices when $wgSitename is changed
 		$expiryTime = 600; # 10 minutes
-		$response->setHeader( 'Expires', gmdate( 'D, d M Y H:i:s', time() + $expiryTime ) . ' GMT' );
-		$response->setHeader( 'Cache-control', 'max-age=600' );
+		$response->setHeader( ResponseHeaders::EXPIRES, gmdate( 'D, d M Y H:i:s', time() + $expiryTime ) . ' GMT' );
+		$response->setHeader( ResponseHeaders::CACHE_CONTROL, 'max-age=600' );
 
 		$body = new StringStream();
 
@@ -189,17 +178,37 @@ class OpenSearchDescriptionHandler extends Handler {
 		$spec = parent::generateResponseSpec( $method );
 
 		$spec['200']['content']['application/opensearchdescription+xml']['schema']['type'] = 'string';
+		$spec['200']['content']['application/opensearchdescription+xml']['example'] =
+			'<?xml version="1.0" encoding="UTF-8"?>'
+			. '<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">'
+			. '<Description>Example</Description></OpenSearchDescription>';
 
 		return $spec;
 	}
 
+	/** @inheritDoc */
 	public function getParamSettings() {
 		return [
 			'ctype' => [
 				self::PARAM_SOURCE => 'query',
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-opensearch-ctype' ),
+				Handler::PARAM_EXAMPLE => 'application/xml',
 			]
 		];
 	}
 
+	/** @inheritDoc */
+	public function getResponseHeaderSettings(): array {
+		return array_merge(
+			parent::getResponseHeaderSettings(),
+			[
+				ResponseHeaders::CONTENT_TYPE => ResponseHeaders::RESPONSE_HEADER_DEFINITIONS[
+					ResponseHeaders::CONTENT_TYPE
+				],
+				ResponseHeaders::EXPIRES => ResponseHeaders::RESPONSE_HEADER_DEFINITIONS[
+					ResponseHeaders::EXPIRES
+				]
+			]
+		);
+	}
 }

@@ -5,8 +5,9 @@ module.exports = ( function () {
 	 * an object like {@link mw.Rest}, but automatically handles everything required to communicate
 	 * with another MediaWiki wiki via cross-origin requests (CORS).
 	 *
-	 * The foreign wiki must be configured to accept requests from the current wiki. See
-	 * <https://www.mediawiki.org/wiki/Manual:$wgCrossSiteAJAXdomains> for details.
+	 * The foreign wiki must be configured to accept requests from the current wiki.
+	 * For details, see
+	 * [$wgRestAllowCrossOriginCookieAuth](https://www.mediawiki.org/wiki/Manual:$wgRestAllowCrossOriginCookieAuth).
 	 * ```
 	 * const api = new mw.ForeignRest( 'https://commons.wikimedia.org/w/rest.php' );
 	 * api.get( '/page/Main_Page/html' )
@@ -32,18 +33,22 @@ module.exports = ( function () {
 	 * @constructor
 	 * @description Create an instance of `mw.ForeignRest`.
 	 * @param {string} url URL pointing to another wiki's `rest.php` endpoint.
-	 * @param {mw.ForeignApi} foreignActionApi
 	 * @param {Object} [options] See {@link mw.Rest}.
 	 * @param {boolean} [options.anonymous=false] Perform all requests anonymously. Use this option if
 	 *     the target wiki may otherwise not accept cross-origin requests, or if you don't need to
 	 *     perform write actions or read restricted information and want to avoid the overhead.
+	 * @param {Object} [optionsCompat] No longer used, kept for compatibility.
 	 *
 	 * @author Petr Pchelko
 	 */
-	function CoreForeignRest( url, foreignActionApi, options ) {
+	function CoreForeignRest( url, options, optionsCompat ) {
+		// For backwards compatibility, we support passing options in the 3rd parameter
+		if ( options instanceof mw.Api ) {
+			options = optionsCompat;
+		}
+
 		this.apiUrl = url;
 		this.anonymous = options && options.anonymous;
-		this.foreignActionApi = foreignActionApi;
 
 		options = $.extend( /* deep= */ true,
 			{

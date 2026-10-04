@@ -56,7 +56,9 @@ node_modules/
 /resources/lib/.foreign
 /tests/phpunit/phpunit.phar
 .phpunit.result.cache
+phpunit*result.cache
 /tests/phpunit/.phpunit.result.cache
+/tests/phpunit/gen/ParserTest_*.php
 phpunit.xml
 /tests/selenium/log
 .eslintcache
@@ -93,3 +95,4 @@ Thumbs.db
 # Docker
 docker-compose.override.yml
 .env
+.devcontainer/*

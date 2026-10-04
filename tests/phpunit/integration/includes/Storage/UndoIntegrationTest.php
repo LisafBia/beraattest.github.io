@@ -2,35 +2,41 @@
 
 namespace MediaWiki\Tests\Storage;
 
-use Article;
-use McrUndoAction;
+use MediaWiki\Actions\McrUndoAction;
 use MediaWiki\Content\WikitextContent;
 use MediaWiki\Context\DerivativeContext;
 use MediaWiki\Context\IContextSource;
 use MediaWiki\Context\RequestContext;
 use MediaWiki\EditPage\EditPage;
 use MediaWiki\Output\OutputPage;
+use MediaWiki\Page\Article;
+use MediaWiki\Page\Event\PageLatestRevisionChangedEvent;
+use MediaWiki\Page\WikiPage;
 use MediaWiki\Request\FauxRequest;
+use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\RevisionStoreRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Storage\EditResult;
+use MediaWiki\Tests\ExpectCallbackTrait;
+use MediaWiki\Tests\User\TempUser\TempUserTestTrait;
 use MediaWiki\Title\Title;
 use MediaWiki\User\User;
 use MediaWikiIntegrationTestCase;
-use WikiPage;
 
 /**
  * Integration tests for undos.
  * TODO: This should also test edits with multiple slots.
  *
- * @covers \McrUndoAction
- * @covers \WikiPage
+ * @covers \MediaWiki\Actions\McrUndoAction
+ * @covers \MediaWiki\Page\WikiPage
  * @covers \MediaWiki\EditPage\EditPage
  *
  * @group Database
  * @group medium
  */
 class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
+	use ExpectCallbackTrait;
+	use TempUserTestTrait;
 
 	private const PAGE_NAME = 'McrUndoTestPage';
 
@@ -61,7 +67,10 @@ class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
 		$revisionLookup = $services->getRevisionLookup();
 		$readOnlyMode = $services->getReadOnlyMode();
 		$commentFormatter = $services->getCommentFormatter();
+		$linkRenderer = $services->getLinkRenderer();
 		$config = $services->getMainConfig();
+		$tempUserCreator = $services->getTempUserCreator();
+		$authManager = $services->getAuthManager();
 		return new class(
 			$article,
 			$context,
@@ -69,7 +78,10 @@ class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
 			$revisionLookup,
 			$revisionRenderer,
 			$commentFormatter,
-			$config
+			$linkRenderer,
+			$config,
+			$tempUserCreator,
+			$authManager
 		) extends McrUndoAction {
 			public function show() {
 				// Instead of trying to actually display anything, just initialize the class.
@@ -95,15 +107,60 @@ class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
 		return $revisionIds;
 	}
 
-	/**
-	 * @param string $newContent
-	 * @param array $revisionIds
-	 * @param bool $isExactRevert
-	 * @param int|string $oldestRevertedRevIndex
-	 * @param int|string $newestRevertedRevIndex
-	 * @param int|string $originalRevIndex
-	 */
-	private function setPageSaveCompleteHook(
+	private function assertEditResult(
+		EditResult $editResult,
+		bool $isExactRevert,
+		array $revisionIds,
+		$oldestRevertedRevIndex,
+		$newestRevertedRevIndex,
+		$originalRevIndex,
+		RevisionRecord $revisionRecord,
+		string $newContent
+	) {
+		$this->assertTrue(
+			$editResult->isRevert(),
+			'EditResult::isRevert()'
+		);
+		$this->assertSame(
+			EditResult::REVERT_UNDO,
+			$editResult->getRevertMethod(),
+			'EditResult::getRevertMethod()'
+		);
+		$this->assertArrayEquals( [ 'mw-undo' ],
+			$editResult->getRevertTags(),
+			false,
+			false,
+			'EditResult::getRevertTags()' );
+		$this->assertSame(
+			$isExactRevert,
+			$editResult->isExactRevert(),
+			'EditResult::isExactRevert()'
+		);
+		$this->assertSame(
+			$revisionIds[ $oldestRevertedRevIndex ],
+			$editResult->getOldestRevertedRevisionId(),
+			'EditResult::getOldestRevertedRevisionId()'
+		);
+		$this->assertSame(
+			$revisionIds[ $newestRevertedRevIndex ],
+			$editResult->getNewestRevertedRevisionId(),
+			'EditResult::getNewestRevertedRevisionId()'
+		);
+		$this->assertSame(
+			$revisionIds[ $originalRevIndex ],
+			$editResult->getOriginalRevisionId(),
+			'EditResult::getOriginalRevisionId()'
+		);
+		$mainContent = $revisionRecord->getContent( SlotRecord::MAIN );
+		/** @var WikitextContent $mainContent */
+		$this->assertSame(
+			$newContent,
+			$mainContent->getText(),
+			'RevisionRecord::getContent()'
+		);
+	}
+
+	private function expectPageSaveCompleteHook(
 		string $newContent,
 		array $revisionIds,
 		bool $isExactRevert,
@@ -112,8 +169,8 @@ class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
 		$originalRevIndex
 	) {
 		// set up a temporary hook with asserts
-		$this->setTemporaryHook(
-			'PageSaveComplete',
+		$this->expectHook(
+			'PageSaveComplete', 1,
 			function (
 				WikiPage $wikiPage,
 				User $user,
@@ -129,47 +186,57 @@ class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
 				$newestRevertedRevIndex,
 				$originalRevIndex
 			) {
-				$this->assertTrue(
-					$editResult->isRevert(),
-					'EditResult::isRevert()'
-				);
-				$this->assertSame(
-					EditResult::REVERT_UNDO,
-					$editResult->getRevertMethod(),
-					'EditResult::getRevertMethod()'
-				);
-				$this->assertArrayEquals( [ 'mw-undo' ],
-					$editResult->getRevertTags(),
-					false,
-					false,
-					'EditResult::getRevertTags()'
-				);
-				$this->assertSame(
+				$this->assertEditResult(
+					$editResult,
 					$isExactRevert,
-					$editResult->isExactRevert(),
-					'EditResult::isExactRevert()'
+					$revisionIds,
+					$oldestRevertedRevIndex,
+					$newestRevertedRevIndex,
+					$originalRevIndex,
+					$revisionRecord,
+					$newContent
 				);
-				$this->assertSame(
-					$revisionIds[$oldestRevertedRevIndex],
-					$editResult->getOldestRevertedRevisionId(),
-					'EditResult::getOldestRevertedRevisionId()'
+			}
+		);
+	}
+
+	private function expectPageLatestChangedEvent(
+		string $newContent,
+		array $revisionIds,
+		bool $isExactRevert,
+		$oldestRevertedRevIndex,
+		$newestRevertedRevIndex,
+		$originalRevIndex
+	) {
+		// set up a temporary hook with asserts
+		$this->expectDomainEvent(
+			PageLatestRevisionChangedEvent::TYPE, 1,
+			function ( PageLatestRevisionChangedEvent $event ) use (
+				$newContent,
+				$revisionIds,
+				$isExactRevert,
+				$oldestRevertedRevIndex,
+				$newestRevertedRevIndex,
+				$originalRevIndex
+			) {
+				$this->assertTrue( $event->isRevert(), 'isRevert()' );
+				$this->assertTrue(
+					$event->hasCause( PageLatestRevisionChangedEvent::CAUSE_UNDO ),
+					'CAUSE_UNDO'
 				);
-				$this->assertSame(
-					$revisionIds[$newestRevertedRevIndex],
-					$editResult->getNewestRevertedRevisionId(),
-					'EditResult::getNewestRevertedRevisionId()'
-				);
-				$this->assertSame(
-					$revisionIds[$originalRevIndex],
-					$editResult->getOriginalRevisionId(),
-					'EditResult::getOriginalRevisionId()'
-				);
-				$mainContent = $revisionRecord->getContent( SlotRecord::MAIN );
-				/** @var WikitextContent $mainContent */
-				$this->assertSame(
-					$newContent,
-					$mainContent->getText(),
-					'RevisionRecord::getContent()'
+
+				$editResult = $event->getEditResult();
+				$this->assertNotNull( $editResult, 'getEditResult' );
+
+				$this->assertEditResult(
+					$editResult,
+					$isExactRevert,
+					$revisionIds,
+					$oldestRevertedRevIndex,
+					$newestRevertedRevIndex,
+					$originalRevIndex,
+					$event->getLatestRevisionAfter(),
+					$newContent
 				);
 			}
 		);
@@ -314,7 +381,15 @@ class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
 		$mcrUndoAction->show();
 
 		// Set the hook and submit the request
-		$this->setPageSaveCompleteHook(
+		$this->expectPageSaveCompleteHook(
+			$newContent,
+			$revisionIds,
+			$isExactRevert,
+			$oldestRevertedRevIndex,
+			$newestRevertedRevIndex,
+			$originalRevIndex
+		);
+		$this->expectPageLatestChangedEvent(
 			$newContent,
 			$revisionIds,
 			$isExactRevert,
@@ -354,7 +429,15 @@ class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
 		$revisionIds = $this->setUpPageForTesting( $revisions );
 
 		// Set the hook with asserts
-		$this->setPageSaveCompleteHook(
+		$this->expectPageSaveCompleteHook(
+			$newContent,
+			$revisionIds,
+			$isExactRevert,
+			$oldestRevertedRevIndex,
+			$newestRevertedRevIndex,
+			$originalRevIndex
+		);
+		$this->expectPageLatestChangedEvent(
 			$newContent,
 			$revisionIds,
 			$isExactRevert,
@@ -409,7 +492,15 @@ class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
 		$article = Article::newFromTitle( Title::newFromText( self::PAGE_NAME ), $context );
 
 		// Set the hook with asserts
-		$this->setPageSaveCompleteHook(
+		$this->expectPageSaveCompleteHook(
+			$newContent,
+			$revisionIds,
+			$isExactRevert,
+			$oldestRevertedRevIndex,
+			$newestRevertedRevIndex,
+			$originalRevIndex
+		);
+		$this->expectPageLatestChangedEvent(
 			$newContent,
 			$revisionIds,
 			$isExactRevert,
@@ -435,9 +526,10 @@ class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
 			],
 			true
 		);
+		$context->setRequest( $request );
 
 		$editPage = new EditPage( $article );
-		$editPage->importFormData( $request );
+		$editPage->importFormData();
 		$editPage->attemptSave( $result );
 	}
 
@@ -488,9 +580,10 @@ class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
 			],
 			true
 		);
+		$context->setRequest( $request );
 
 		$editPage = new EditPage( $article );
-		$editPage->importFormData( $request );
+		$editPage->importFormData();
 		$editPage->attemptSave( $result );
 	}
 
@@ -544,9 +637,65 @@ class UndoIntegrationTest extends MediaWikiIntegrationTestCase {
 			],
 			true
 		);
+		$context->setRequest( $request );
 
 		$editPage = new EditPage( $article );
-		$editPage->importFormData( $request );
+		$editPage->importFormData();
 		$editPage->attemptSave( $result );
+	}
+
+	/**
+	 * Test that McrUndoAction creates a temporary account when temp accounts are enabled
+	 * and the user is anonymous.
+	 */
+	public function testMcrUndoActionWithTempUser() {
+		$this->enableAutoCreateTempUser();
+
+		$revisionIds = $this->setUpPageForTesting( [ '1', '2' ] );
+
+		$context = new DerivativeContext( RequestContext::getMain() );
+		$context->setUser( $this->getServiceContainer()->getUserFactory()->newAnonymous() );
+		$article = Article::newFromTitle( Title::newFromText( self::PAGE_NAME ), $context );
+
+		$request = new FauxRequest( [
+			'undoafter' => $revisionIds[0],
+			'undo' => $revisionIds[1],
+			'wpSave' => '',
+		] );
+		$context->setRequest( $request );
+		$context->setTitle( $article->getTitle() );
+
+		$outputPage = $this->createMock( OutputPage::class );
+		$context->setOutput( $outputPage );
+
+		$services = $this->getServiceContainer();
+		$mcrUndoAction = new class(
+			$article,
+			$context,
+			$services->getReadOnlyMode(),
+			$services->getRevisionLookup(),
+			$services->getRevisionRenderer(),
+			$services->getCommentFormatter(),
+			$services->getLinkRenderer(),
+			$services->getMainConfig(),
+			$services->getTempUserCreator(),
+			$services->getAuthManager()
+		) extends McrUndoAction {
+			public function show() {
+				$this->checkCanExecute( $this->getUser() );
+			}
+		};
+
+		$mcrUndoAction->show();
+		$status = $mcrUndoAction->onSubmit( [] );
+
+		$this->assertStatusOK( $status, 'Undo should succeed' );
+
+		$title = Title::newFromText( self::PAGE_NAME );
+		$revisionLookup = $services->getRevisionLookup();
+		$latestRev = $revisionLookup->getRevisionByTitle( $title );
+		$revisionUserIdentity = $latestRev->getUser();
+		$revisionUser = $services->getUserFactory()->newFromUserIdentity( $revisionUserIdentity );
+		$this->assertTrue( $revisionUser->isTemp(), 'Revision should be made by a temp user' );
 	}
 }

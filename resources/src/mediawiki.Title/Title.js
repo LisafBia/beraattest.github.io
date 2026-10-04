@@ -80,13 +80,13 @@ const mwString = require( 'mediawiki.String' ),
 		if ( typeof ns !== 'string' ) {
 			return false;
 		}
+		ns = ns.toLowerCase();
 		// TODO: Should just use the local variable namespaceIds here, but it
 		// breaks test which modify the config
-		const id = mw.config.get( 'wgNamespaceIds' )[ ns.toLowerCase() ];
-		if ( id === undefined ) {
+		if ( !Object.hasOwnProperty.call( mw.config.get( 'wgNamespaceIds' ), ns ) ) {
 			return false;
 		}
-		return id;
+		return mw.config.get( 'wgNamespaceIds' )[ ns ];
 	},
 
 	/**
@@ -96,7 +96,8 @@ const mwString = require( 'mediawiki.String' ),
 	 * @return {boolean}
 	 */
 	isKnownNamespace = function ( namespace ) {
-		return namespace === NS_MAIN || mw.config.get( 'wgFormattedNamespaces' )[ namespace ] !== undefined;
+		return namespace === NS_MAIN ||
+			Object.hasOwnProperty.call( mw.config.get( 'wgFormattedNamespaces' ), namespace );
 	},
 
 	/**
@@ -116,7 +117,7 @@ const mwString = require( 'mediawiki.String' ),
 
 	rSplit = /^(.+?)_*:_*(.*)$/,
 
-	// See MediaWikiTitleCodec.php#getTitleInvalidRegex
+	// See TitleParser.php#getTitleInvalidRegex
 
 	rInvalid = new RegExp(
 		'[^' + mw.config.get( 'wgLegalTitleChars' ) + ']' +
@@ -127,11 +128,11 @@ const mwString = require( 'mediawiki.String' ),
 		'|&[\\dA-Za-z\u0080-\uFFFF]+;'
 	),
 
-	// From MediaWikiTitleCodec::splitTitleString() in PHP
+	// From TitleParser::splitTitleString() in PHP
 	// Note that this is not equivalent to /\s/, e.g. underscore is included, tab is not included.
 	rWhitespace = /[ _\u00A0\u1680\u180E\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]+/g,
 
-	// From MediaWikiTitleCodec::splitTitleString() in PHP
+	// From TitleParser::splitTitleString() in PHP
 	rUnicodeBidi = /[\u200E\u200F\u202A-\u202E]+/g,
 
 	/**
@@ -217,6 +218,7 @@ const mwString = require( 'mediawiki.String' ),
 		let namespace = defaultNamespace === undefined ? NS_MAIN : defaultNamespace;
 
 		title = title
+			.normalize( 'NFC' )
 			// Strip Unicode bidi override characters
 			.replace( rUnicodeBidi, '' )
 			// Normalise whitespace to underscores and remove duplicates
@@ -224,7 +226,7 @@ const mwString = require( 'mediawiki.String' ),
 			// Trim underscores
 			.replace( rUnderscoreTrim, '' );
 
-		if ( title.indexOf( '\uFFFD' ) !== -1 ) {
+		if ( title.includes( '\uFFFD' ) ) {
 			// Contained illegal UTF-8 sequences or forbidden Unicode chars.
 			// Commonly occurs when the text was obtained using the `URL` API, and the 'title' parameter
 			// was using a legacy 8-bit encoding, for example:
@@ -293,21 +295,21 @@ const mwString = require( 'mediawiki.String' ),
 
 		// Disallow titles that browsers or servers might resolve as directory navigation
 		if (
-			title.indexOf( '.' ) !== -1 && (
+			title.includes( '.' ) && (
 				title === '.' || title === '..' ||
-				title.indexOf( './' ) === 0 ||
-				title.indexOf( '../' ) === 0 ||
-				title.indexOf( '/./' ) !== -1 ||
-				title.indexOf( '/../' ) !== -1 ||
-				title.slice( -2 ) === '/.' ||
-				title.slice( -3 ) === '/..'
+				title.startsWith( './' ) ||
+				title.startsWith( '../' ) ||
+				title.includes( '/./' ) ||
+				title.includes( '/../' ) ||
+				title.endsWith( '/.' ) ||
+				title.endsWith( '/..' )
 			)
 		) {
 			return false;
 		}
 
 		// Disallow magic tilde sequence
-		if ( title.indexOf( '~~~' ) !== -1 ) {
+		if ( title.includes( '~~~' ) ) {
 			return false;
 		}
 
@@ -656,7 +658,7 @@ Title.isTalkNamespace = function ( namespaceId ) {
  */
 Title.wantSignaturesNamespace = function ( namespaceId ) {
 	return Title.isTalkNamespace( namespaceId ) ||
-		mw.config.get( 'wgExtraSignatureNamespaces' ).indexOf( namespaceId ) !== -1;
+		mw.config.get( 'wgExtraSignatureNamespaces' ).includes( namespaceId );
 };
 
 /**
@@ -885,7 +887,7 @@ Title.prototype = /** @lends mw.Title.prototype */ {
 	 */
 	getMain: function () {
 		if (
-			mw.config.get( 'wgCaseSensitiveNamespaces' ).indexOf( this.namespace ) !== -1 ||
+			mw.config.get( 'wgCaseSensitiveNamespaces' ).includes( this.namespace ) ||
 			!this.title.length
 		) {
 			return this.title;

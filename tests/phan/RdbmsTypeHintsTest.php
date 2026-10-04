@@ -1,6 +1,7 @@
 <?php
 
-// phpcs:disable
+// phpcs:disable MediaWiki.Commenting.MissingCovers
+// phpcs:disable Squiz.Scope.MethodScope
 
 /*
  * Some RDBMS interfaces have methods with rather complicated Phan annotations. This test ensures
@@ -19,7 +20,7 @@ class RdbmsTypeHintsTest {
 
 		$expr = $db->expr( 'a', '=', 1 );
 		// Return value of ->and() etc. must be used
-		// @phan-suppress-next-line PhanPluginUseReturnValueKnown
+		// @phan-suppress-next-line PhanPluginUseReturnValueKnown, PhanNoDiscardReturnValueIgnored
 		$expr->and( 'a', '=', 1 );
 
 		// Typo in the operator

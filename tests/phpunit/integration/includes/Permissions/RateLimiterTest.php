@@ -2,8 +2,6 @@
 
 namespace MediaWiki\Tests\Integration\Permissions;
 
-use Liuggio\StatsdClient\Entity\StatsdData;
-use Liuggio\StatsdClient\Entity\StatsdDataInterface;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Permissions\RateLimiter;
@@ -14,7 +12,7 @@ use MediaWiki\User\UserIdentityValue;
 use MediaWikiIntegrationTestCase;
 use PHPUnit\Framework\MockObject\MockObject;
 use Wikimedia\ObjectCache\HashBagOStuff;
-use Wikimedia\Stats\BufferingStatsdDataFactory;
+use Wikimedia\Stats\StatsFactory;
 use Wikimedia\TestingAccessWrapper;
 use Wikimedia\WRStats\BagOStuffStatsStore;
 use Wikimedia\WRStats\WRStatsFactory;
@@ -77,11 +75,10 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		$cacheAccess = TestingAccessWrapper::newFromObject( $cache );
 		$cacheAccess->keyspace = 'xwiki';
 
-		$statsFactory = new WRStatsFactory( new BagOStuffStatsStore( $cache ) );
-
-		$stats = new BufferingStatsdDataFactory( 'test.' );
-		$limiter = $this->newRateLimiter( $limits, [], $statsFactory );
-		$limiter->setStats( $stats );
+		$wrStatsFactory = new WRStatsFactory( new BagOStuffStatsStore( $cache ) );
+		$statsHelper = StatsFactory::newUnitTestingHelper();
+		$limiter = $this->newRateLimiter( $limits, [], $wrStatsFactory );
+		$limiter->setStats( $statsHelper->getStatsFactory() );
 
 		// Set up some fake users
 		$anon1 = $this->newFakeAnon( '1.2.3.4' );
@@ -104,6 +101,7 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		// Test limits on wiki X
 		$this->assertFalse( $limiter->limit( $anon1, 'read' ), 'First anon read' );
 		$this->assertFalse( $limiter->limit( $anon2, 'read' ), 'Second anon read (should ignore any limits)' );
+		$this->assertFalse( $limiter->limit( $anon1, '' ), 'Empty action (T388175)' );
 
 		$this->assertFalse( $limiter->limit( $anon1, 'edit' ), 'First anon edit' );
 		$this->assertTrue( $limiter->limit( $anon2, 'edit' ), 'Second anon edit' );
@@ -144,15 +142,20 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		$this->assertFalse( $limiter->limit( $karaY1, 'move' ), 'Move by another user' );
 		$this->assertTrue( $limiter->limit( $karaY1, 'move' ), 'Second move by another user' );
 
-		// Check stats entries for conditions
-		$statsData = $stats->getData();
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.edit.tripped_by.anon', 1, $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.purge.tripped_by.ip', 1, $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.purge.tripped_by.subnet', 1, $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.delete.tripped_by.ip_all', 1, $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.delete.tripped_by.subnet_all', 1, $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.rollback.tripped_by.user', 1, $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.move.tripped_by.user_global', 1, $statsData );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="edit",tripped_by="anon"}' );
+		$this->assertSame( 1, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="purge",tripped_by="ip"}' );
+		$this->assertSame( 1, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="purge",tripped_by="subnet"}' );
+		$this->assertSame( 3, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="delete",tripped_by="ip_all"}' );
+		$this->assertSame( 2, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="delete",tripped_by="subnet_all"}' );
+		$this->assertSame( 3, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="rollback",tripped_by="user"}' );
+		$this->assertSame( 1, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="move",tripped_by="user_global"}' );
+		$this->assertSame( 5, $actual );
 	}
 
 	public function testPingLimiterWithStaleCache() {
@@ -229,24 +232,20 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 			],
 		];
 
-		$stats = new BufferingStatsdDataFactory( 'test.' );
+		$statsHelper = StatsFactory::newUnitTestingHelper();
+		$statsFactory = $statsHelper->getStatsFactory();
 
 		$user = $this->newFakeUser( 'Frank', '1.2.3.4', 111 );
 		$limiter = $this->newRateLimiter( $limits, [] );
-		$limiter->setStats( $stats );
+		$limiter->setStats( $statsFactory );
 
 		// Hook leaves $result false
-		$this->setTemporaryHook(
-			'PingLimiter',
-			static function ( &$user, $action, &$result, $incrBy ) {
-				return false;
-			}
-		);
+		$this->setTemporaryHook( 'PingLimiter', static fn () => false );
 		$this->assertFalse(
 			$limiter->limit( $user, 'edit' ),
 			'Hooks that just return false leave $result false'
 		);
-		$this->removeTemporaryHook( 'PingLimiter' );
+		$this->clearHook( 'PingLimiter' );
 
 		// Hook sets $result to true
 		$this->setTemporaryHook(
@@ -264,7 +263,7 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 			$limiter->limit( $user, 'read' ),
 			'The "read" permission will bypass the hook'
 		);
-		$this->removeTemporaryHook( 'PingLimiter' );
+		$this->clearHook( 'PingLimiter' );
 
 		// Unknown action
 		$this->assertFalse(
@@ -272,12 +271,10 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 			'Actions with no rate limit set do not trip the rate limiter'
 		);
 
-		$statsData = $stats->getData();
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.edit.result.passed_by_hook', 1, $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.edit.result.tripped_by_hook', 1, $statsData );
-
-		$this->assertStatsNotHasCount( 'test.RateLimiter.limit.edit.result.passed', $statsData );
-		$this->assertStatsNotHasCount( 'test.RateLimiter.limit.edit.result.tripped', $statsData );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="passed_by_hook"}' );
+		$this->assertSame( 1, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="tripped_by_hook"}' );
+		$this->assertSame( 1, $actual );
 	}
 
 	public function testIsLimitableAction() {
@@ -408,18 +405,20 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		$newbie2 = $this->newFakeUser( 'User2', '127.0.0.1', 2, true );
 		$newbie3 = $this->newFakeUser( 'User3', '127.0.0.1', 3, true );
 
-		$stats = new BufferingStatsdDataFactory( 'test.' );
+		$statsHelper = StatsFactory::newUnitTestingHelper();
 		$limiter = $this->newRateLimiter( $limits, [] );
-		$limiter->setStats( $stats );
+		$limiter->setStats( $statsHelper->getStatsFactory() );
 
 		$this->assertFalse( $limiter->limit( $newbie1, 'edit' ) );
 		$this->assertFalse( $limiter->limit( $newbie2, 'edit' ) );
 		$this->assertTrue( $limiter->limit( $newbie3, 'edit' ) );
 
-		$statsData = $stats->getData();
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.edit.result.passed', 1, $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.edit.result.tripped', 1, $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.edit.tripped_by.ip', 1, $statsData );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="passed"}' );
+		$this->assertSame( 2, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="tripped"}' );
+		$this->assertSame( 1, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="edit",tripped_by="ip"}' );
+		$this->assertSame( 1, $actual );
 	}
 
 	/**
@@ -467,9 +466,9 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 			[ RateLimitSubject::EXEMPT => true ]
 		);
 
-		$stats = new BufferingStatsdDataFactory( 'test.' );
+		$statsHelper = StatsFactory::newUnitTestingHelper();
 		$limiter = $this->newRateLimiter( $limits, [] );
-		$limiter->setStats( $stats );
+		$limiter->setStats( $statsHelper->getStatsFactory() );
 
 		$this->assertFalse( $limiter->limit( $user, 'edit' ) );
 		$this->assertFalse( $limiter->limit( $user, 'delete' ) );
@@ -477,10 +476,42 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		$this->assertFalse( $limiter->limit( $user, 'edit' ), 'bypass should be granted' );
 		$this->assertTrue( $limiter->limit( $user, 'delete' ), 'bypass should be denied' );
 
-		$statsData = $stats->getData();
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.edit.result.exempt', 1, $statsData );
-		$this->assertStatsNotHasCount( 'test.RateLimiter.limit.delete.result.exempt', $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.delete.result.tripped', 1, $statsData );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="exempt"}' );
+		$this->assertSame( 2, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="delete",result="passed"}' );
+		$this->assertSame( 1, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="delete",result="tripped"}' );
+		$this->assertSame( 1, $actual );
+	}
+
+	/**
+	 * Test that setting the increment to 0 causes the RateLimiter to operate in
+	 * peek mode, checking a rate limit without setting it.
+	 *
+	 * Regression test for T381033.
+	 */
+	public function testPeek() {
+		$limits = [
+			'edit' => [
+				'user' => [ 1, 60 ],
+			],
+		];
+
+		$user = new RateLimitSubject( new UserIdentityValue( 7, 'Garth' ), '127.0.0.1', [] );
+
+		$limiter = $this->newRateLimiter( $limits, [] );
+
+		// initial peek should pass
+		$this->assertFalse( $limiter->limit( $user, 'edit', 0 ) );
+
+		// check that repeated peeking doesn't trigger the limit
+		$this->assertFalse( $limiter->limit( $user, 'edit', 0 ) );
+
+		// first increment should pass but trigger the limit
+		$this->assertFalse( $limiter->limit( $user, 'edit', 1 ) );
+
+		// peek should fail now
+		$this->assertTrue( $limiter->limit( $user, 'edit', 0 ) );
 	}
 
 	/**
@@ -498,52 +529,19 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		$user = $this->getTestUser( [ 'autoconfirmed' ] )->getUser();
 		$user = new RateLimitSubject( $user, '127.0.0.1', [] );
 
-		$stats = new BufferingStatsdDataFactory( 'test.' );
+		$statsHelper = StatsFactory::newUnitTestingHelper();
 		$limiter = $this->newRateLimiter( $limits, [] );
-		$limiter->setStats( $stats );
+		$limiter->setStats( $statsHelper->getStatsFactory() );
 
 		$this->assertFalse( $limiter->limit( $user, 'edit' ) );
 		$this->assertFalse( $limiter->limit( $user, 'edit' ), 'limit for autoconfirmed used' );
 		$this->assertTrue( $limiter->limit( $user, 'edit' ), 'limit for autoconfirmed exceeded' );
 
-		$statsData = $stats->getData();
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.edit.result.passed', 1, $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.edit.result.tripped', 1, $statsData );
-		$this->assertStatsHasCount( 'test.RateLimiter.limit.edit.tripped_by.autoconfirmed', 1, $statsData );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="passed"}' );
+		$this->assertSame( 2, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="tripped"}' );
+		$this->assertSame( 1, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="edit",tripped_by="autoconfirmed"}' );
+		$this->assertSame( 1, $actual );
 	}
-
-	/**
-	 * @param string $key
-	 * @param ?int $value
-	 * @param StatsdData[] $statsData
-	 */
-	private function assertStatsHasCount( string $key, ?int $value, array $statsData ) {
-		$metric = StatsdDataInterface::STATSD_METRIC_COUNT;
-
-		foreach ( $statsData as $data ) {
-			if ( $data->getMetric() === $metric && $data->getValue() === $value && $data->getKey() == $key ) {
-				$this->addToAssertionCount( 1 );
-				return;
-			}
-		}
-
-		$this->fail( "Missing metric data entry: $key/$metric/$value" );
-	}
-
-	/**
-	 * @param string $key
-	 * @param StatsdData[] $statsData
-	 */
-	private function assertStatsNotHasCount( string $key, array $statsData ) {
-		$metric = StatsdDataInterface::STATSD_METRIC_COUNT;
-
-		foreach ( $statsData as $data ) {
-			if ( $data->getMetric() === $metric && $data->getKey() == $key ) {
-				$this->fail( "Metric data entry was not expected to be present: $key/$metric" );
-			}
-		}
-
-		$this->addToAssertionCount( 1 );
-	}
-
 }

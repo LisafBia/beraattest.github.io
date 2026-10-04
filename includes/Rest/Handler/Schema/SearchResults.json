@@ -1,12 +1,12 @@
 {
-	"description": "Search results",
+	"x-i18n-description": "rest-schema-desc-search-results",
 	"required": [
 		"pages"
 	],
 	"properties": {
 		"pages": {
 			"type": "array",
-			"description": "List of search result pages",
+			"x-i18n-description": "rest-property-desc-search-pages",
 			"items": {
 				"type": "object",
 				"required": [
@@ -15,64 +15,83 @@
 					"title",
 					"excerpt",
 					"matched_title",
+					"anchor",
 					"description",
 					"thumbnail"
 				],
 				"properties": {
 					"id": {
 						"type": "integer",
-						"description": "Page identifier"
+						"x-i18n-description": "rest-property-desc-page-id",
+						"example": 1133784
 					},
 					"key": {
 						"type": "string",
-						"description": "Page title in URL-friendly format"
+						"x-i18n-description": "rest-property-desc-page-key",
+						"example": "Mobile_game"
 					},
 					"title": {
 						"type": "string",
-						"description": "Page title in reading-friendly format"
+						"x-i18n-description": "rest-property-desc-page-title",
+						"example": "Mobile game"
 					},
 					"excerpt": {
 						"type": "string",
-						"description": "Excerpt of the page content matching the search query"
+						"nullable": true,
+						"x-i18n-description": "rest-property-desc-search-excerpt",
+						"example": "PDA to handheld <span class=\"searchmatch\">game</span> console, portable media player or graphing <span class=\"searchmatch\">calculator</span>, with and without network availability. The earliest known <span class=\"searchmatch\">game</span> on a mobile phone"
 					},
 					"matched_title": {
 						"type": "string",
 						"nullable": true,
-						"description": "The title of a page redirection from, if applicable, or null"
+						"x-i18n-description": "rest-property-desc-search-matched-title",
+						"example": "Calculator game"
+					},
+					"anchor": {
+						"type": "string",
+						"nullable": true,
+						"x-i18n-description": "rest-property-desc-search-anchor",
+						"example": "Calculator games"
 					},
 					"description": {
 						"type": "string",
 						"nullable": true,
-						"description": "Short summary of the page topic or null if no summary exists."
+						"x-i18n-description": "rest-property-desc-search-description",
+						"example": "Video game played on a mobile device"
 					},
 					"thumbnail": {
 						"type": "object",
 						"nullable": true,
-						"description": "Information about the thumbnail image for the page, or null if no thumbnail exists.",
+						"x-i18n-description": "rest-property-desc-search-thumbnail",
 						"properties": {
 							"mimetype": {
 								"type": "string",
-								"description": "The file type"
+								"x-i18n-description": "rest-param-desc-media-mediatype",
+								"example": "image/jpeg"
 							},
 							"width": {
 								"type": "integer",
 								"nullable": true,
-								"description": "Maximum recommended image width in pixels or null if not available"
+								"x-i18n-description": "rest-param-desc-media-width",
+								"example": 60
 							},
 							"height": {
 								"type": "integer",
 								"nullable": true,
-								"description": "Maximum recommended image height in pixels or null if not available"
+								"x-i18n-description": "rest-param-desc-media-height",
+								"example": 45
 							},
 							"duration": {
 								"type": "number",
 								"nullable": true,
-								"description": "The length of the video, audio, or multimedia file or null for other media types"
+								"x-i18n-description": "rest-param-desc-media-duration",
+								"example": null
 							},
 							"url": {
 								"type": "string",
 								"format": "uri",
-								"description": "URL to download the file"
+								"x-i18n-description": "rest-param-desc-media-url",
+								"example": "//upload.wikimedia.org/wikipedia/commons/thumb/1/17/Playing_with_smartphone.jpg/60px-Playing_with_smartphone.jpg"
 							}
 						},
 						"required": [ "mimetype", "width", "height", "duration", "url" ]

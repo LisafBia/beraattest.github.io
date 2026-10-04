@@ -2,21 +2,7 @@
 /**
  * Holds list of deprecated hooks and methods for retrieval
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -35,25 +21,31 @@ class DeprecatedHooks {
 	 * @phpcs-require-sorted-array
 	 */
 	private $deprecatedHooks = [
-		'AddNewAccount' => [ 'deprecatedVersion' => '1.27' ],
+		'APIHelpModifyOutput' => [ 'deprecatedVersion' => '1.47' ],
 		'ArticleDelete' => [ 'deprecatedVersion' => '1.37', 'silent' => true ],
 		'ArticleDeleteComplete' => [ 'deprecatedVersion' => '1.37', 'silent' => true ],
 		'ArticleUndelete' => [ 'deprecatedVersion' => '1.40', 'silent' => true ],
+		'AutopromoteCondition' => [ 'deprecatedVersion' => '1.46' ],
+		'CategoryViewer::generateLink' => [ 'deprecatedVersion' => '1.47' ],
+		'EditPageBeforeConflictDiff' => [ 'deprecatedVersion' => '1.47' ],
 		'EditPageBeforeEditToolbar' => [ 'deprecatedVersion' => '1.36' ],
 		'EmailUser' => [ 'deprecatedVersion' => '1.41', 'silent' => true ],
 		'EmailUserPermissionsErrors' => [ 'deprecatedVersion' => '1.41' ],
 		'InterwikiLoadPrefix' => [ 'deprecatedVersion' => '1.36' ],
 		'LocalFile::getHistory' => [ 'deprecatedVersion' => '1.37' ],
-		'MagicWordwgVariableIDs' => [ 'deprecatedVersion' => '1.35', 'silent' => true ],
+		'MaintenanceRefreshLinksInit' => [ 'deprecatedVersion' => '1.47' ],
+		'MarkPatrolledComplete' => [ 'deprecatedVersion' => '1.47' ],
 		'MessageCache::get' => [ 'deprecatedVersion' => '1.41' ],
-		'PageContentSave' => [ 'deprecatedVersion' => '1.35', 'silent' => true ],
-		'PrefixSearchBackend' => [ 'deprecatedVersion' => '1.27' ],
+		'ParserOptionsRegister' => [ 'deprecatedVersion' => '1.47', 'silent' => true ],
 		'ProtectionForm::buildForm' => [ 'deprecatedVersion' => '1.36', 'silent' => true ],
+		'RecentChangesPurgeRows' => [ 'deprecatedVersion' => '1.45', 'silent' => true ],
 		'RollbackComplete' => [ 'deprecatedVersion' => '1.36', 'silent' => true ],
 		'SearchDataForIndex' => [ 'deprecatedVersion' => '1.40', 'silent' => true ],
-		'SkinCopyrightFooter' => [ 'deprecatedVersion' => '1.43', 'silent' => true ],
+		'SpecialCreateAccountBenefits' => [ 'deprecatedVersion' => '1.47' ],
+		'TitleIsAlwaysKnown' => [ 'deprecatedVersion' => '1.47', 'silent' => true ],
 		'userCan' => [ 'deprecatedVersion' => '1.37' ],
 		'UserCanSendEmail' => [ 'deprecatedVersion' => '1.41', 'silent' => true ],
+		'WatchedItemQueryServiceExtensionsHook' => [ 'deprecatedVersion' => '1.46' ],
 		'WikiPageDeletionUpdates' => [ 'deprecatedVersion' => '1.32', 'silent' => true ],
 	];
 

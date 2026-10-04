@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
@@ -26,6 +12,7 @@ use MediaWiki\Revision\RevisionStore;
 use MediaWiki\Revision\RevisionStoreRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Storage\BlobStore;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -50,6 +37,9 @@ class FindBadBlobs extends Maintenance {
 		$this->addOption( 'scan-from', 'Start scanning revisions at the given date. '
 			. 'Format: Anything supported by MediaWiki, e.g. YYYYMMDDHHMMSS or YYYY-MM-DDTHH:MM:SS',
 			false, true );
+		$this->addOption( 'scan-to', 'End of scan date range. '
+			. 'Format: Anything supported by MediaWiki, e.g. YYYYMMDDHHMMSS or YYYY-MM-DDTHH:MM:SS',
+			false, true );
 		$this->addOption( 'revisions', 'A list of revision IDs to process, separated by comma or '
 			. 'colon or whitespace. Revisions belonging to deleted pages will work. '
 			. 'If set to "-" IDs are read from stdin, one per line.', false, true );
@@ -70,7 +60,22 @@ class FindBadBlobs extends Maintenance {
 				. ', please provide time and date down to the second.' );
 		}
 
-		$ts = wfTimestamp( TS_MW, $tsOpt );
+		$ts = wfTimestamp( TS::MW, $tsOpt );
+		if ( !$ts ) {
+			$this->fatalError( 'Bad timestamp: ' . $tsOpt );
+		}
+
+		return $ts;
+	}
+
+	private function getEndTimestamp(): string {
+		$tsOpt = $this->getOption( 'scan-to' );
+		if ( strlen( $tsOpt ) < 14 ) {
+			$this->fatalError( 'Bad timestamp: ' . $tsOpt
+				. ', please provide time and date down to the second.' );
+		}
+
+		$ts = wfTimestamp( TS::MW, $tsOpt );
 		if ( !$ts ) {
 			$this->fatalError( 'Bad timestamp: ' . $tsOpt );
 		}
@@ -104,8 +109,8 @@ class FindBadBlobs extends Maintenance {
 		$this->blobStore = $services->getBlobStore();
 
 		if ( $this->hasOption( 'revisions' ) ) {
-			if ( $this->hasOption( 'scan-from' ) ) {
-				$this->fatalError( 'Cannot use --revisions together with --scan-from' );
+			if ( $this->hasOption( 'scan-from' ) || $this->hasOption( 'scan-to' ) ) {
+				$this->fatalError( 'Cannot use --revisions together with --scan-from or --scan-to' );
 			}
 
 			$ids = $this->getRevisionIds();
@@ -117,11 +122,11 @@ class FindBadBlobs extends Maintenance {
 					. 'use --revisions to specify revisions to mark.' );
 			}
 
-			$fromTimestamp = $this->getStartTimestamp();
-			$total = $this->getOption( 'limit', 1000 );
+			if ( $this->hasOption( 'scan-to' ) && $this->hasOption( 'limit' ) ) {
+				$this->fatalError( 'Cannot use --limit with --scan-to' );
+			}
 
-			$count = $this->scanRevisionsByTimestamp( $fromTimestamp, $total );
-
+			$count = $this->scanRevisionsByTimestamp();
 			$this->output( "The range of archive rows scanned is based on the range of revision IDs "
 				. "scanned in the revision table.\n" );
 		} else {
@@ -146,12 +151,22 @@ class FindBadBlobs extends Maintenance {
 	}
 
 	/**
-	 * @param string $fromTimestamp
-	 * @param int $total
-	 *
 	 * @return int
 	 */
-	private function scanRevisionsByTimestamp( $fromTimestamp, $total ) {
+	private function scanRevisionsByTimestamp() {
+		$fromTimestamp = $this->getStartTimestamp();
+		if ( $this->getOption( 'scan-to' ) ) {
+			$toTimestamp = $this->getEndTimestamp();
+			$total = INF;
+			$msg = "Scanning revisions table, "
+				. "starting at rev_timestamp $fromTimestamp until $toTimestamp\n";
+		} else {
+			$toTimestamp = null;
+			$total = $this->getOption( 'limit', 1000 );
+			$msg = "Scanning revisions table, "
+				. "$total rows starting at rev_timestamp $fromTimestamp\n";
+		}
+
 		$count = 0;
 		$lastRevId = 0;
 		$firstRevId = 0;
@@ -159,12 +174,11 @@ class FindBadBlobs extends Maintenance {
 		$revisionRowsScanned = 0;
 		$archiveRowsScanned = 0;
 
-		$this->output( "Scanning revisions table, "
-			. "$total rows starting at rev_timestamp $fromTimestamp\n" );
+		$this->output( $msg );
 
 		while ( $revisionRowsScanned < $total ) {
 			$batchSize = min( $total - $revisionRowsScanned, $this->getBatchSize() );
-			$revisions = $this->loadRevisionsByTimestamp( $lastRevId, $lastTimestamp, $batchSize );
+			$revisions = $this->loadRevisionsByTimestamp( $lastRevId, $lastTimestamp, $batchSize, $toTimestamp );
 			if ( !$revisions ) {
 				break;
 			}
@@ -226,21 +240,27 @@ class FindBadBlobs extends Maintenance {
 	 * @param int $afterId
 	 * @param string $fromTimestamp
 	 * @param int $batchSize
+	 * @param ?string $toTimestamp
 	 *
 	 * @return RevisionStoreRecord[]
 	 */
-	private function loadRevisionsByTimestamp( int $afterId, string $fromTimestamp, $batchSize ) {
+	private function loadRevisionsByTimestamp( int $afterId, string $fromTimestamp, $batchSize, $toTimestamp ) {
 		$db = $this->getReplicaDB();
-		$queryBuilder = $this->revisionStore->newSelectQueryBuilder( $db );
-		$rows = $queryBuilder->joinComment()
+		$queryBuilder = $this->revisionStore->newSelectQueryBuilder( $db )
+			->joinComment()
 			->where( $db->buildComparison( '>', [
 				'rev_timestamp' => $fromTimestamp,
 				'rev_id' => $afterId,
 			] ) )
 			->useIndex( [ 'revision' => 'rev_timestamp' ] )
 			->orderBy( [ 'rev_timestamp', 'rev_id' ] )
-			->limit( $batchSize )
-			->caller( __METHOD__ )->fetchResultSet();
+			->limit( $batchSize );
+
+		if ( $toTimestamp ) {
+			$queryBuilder->where( $db->expr( 'rev_timestamp', '<', $toTimestamp ) );
+		}
+
+		$rows = $queryBuilder->caller( __METHOD__ )->fetchResultSet();
 		$result = $this->revisionStore->newRevisionsFromBatch( $rows, [ 'slots' => true ] );
 		$this->handleStatus( $result );
 
@@ -398,9 +418,14 @@ class FindBadBlobs extends Maintenance {
 		$address = $slot->getAddress();
 
 		try {
-			$this->blobStore->getBlob( $address );
-			// nothing to do
-			return 0;
+			$blob = $this->blobStore->getBlob( $address );
+			if ( mb_check_encoding( $blob ) ) {
+				// nothing to do
+				return 0;
+			} else {
+				$type = 'invalid-utf-8';
+				$error = 'Invalid UTF-8';
+			}
 		} catch ( Exception $ex ) {
 			$error = $ex->getMessage();
 			$type = get_class( $ex );

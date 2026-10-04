@@ -2,8 +2,10 @@
 
 namespace MediaWiki\Tests\Integration\Permissions;
 
-use Action;
+use MediaWiki\Actions\Action;
 use MediaWiki\Api\ApiMessage;
+use MediaWiki\Auth\AuthManager;
+use MediaWiki\Block\AnonIpBlockTarget;
 use MediaWiki\Block\BlockActionInfo;
 use MediaWiki\Block\CompositeBlock;
 use MediaWiki\Block\DatabaseBlock;
@@ -11,25 +13,33 @@ use MediaWiki\Block\Restriction\ActionRestriction;
 use MediaWiki\Block\Restriction\NamespaceRestriction;
 use MediaWiki\Block\Restriction\PageRestriction;
 use MediaWiki\Block\SystemBlock;
-use MediaWiki\Cache\CacheKeyHelper;
+use MediaWiki\Context\DerivativeContext;
 use MediaWiki\Context\RequestContext;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Message\Message;
+use MediaWiki\Page\CacheKeyHelper;
 use MediaWiki\Permissions\PermissionManager;
 use MediaWiki\Permissions\PermissionStatus;
 use MediaWiki\Request\FauxRequest;
+use MediaWiki\Request\WebRequest;
+use MediaWiki\Session\Session;
 use MediaWiki\Session\SessionId;
 use MediaWiki\Tests\Session\TestUtils;
 use MediaWiki\Tests\Unit\MockBlockTrait;
 use MediaWiki\Tests\User\TempUser\TempUserTestTrait;
 use MediaWiki\Title\Title;
 use MediaWiki\User\User;
+use MediaWiki\User\UserGroupMembership;
+use MediaWiki\User\UserIdentity;
 use MediaWiki\User\UserIdentityValue;
 use MediaWikiLangTestCase;
+use StatusValue;
 use stdClass;
 use TestAllServiceOptionsUsed;
+use Wikimedia\Message\ListType;
 use Wikimedia\ScopedCallback;
 use Wikimedia\TestingAccessWrapper;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * For the pure unit tests, see \MediaWiki\Tests\Unit\Permissions\PermissionManagerTest.
@@ -58,6 +68,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 		$localOffset = date( 'Z' ) / 60;
 
 		$this->overrideConfigValues( [
+			MainConfigNames::BlockDisablesLogin => false,
 			MainConfigNames::Localtimezone => $localZone,
 			MainConfigNames::LocalTZoffset => $localOffset,
 			MainConfigNames::ImplicitRights => [
@@ -86,6 +97,10 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 				'undelete',
 				'deletedhistory',
 				'deletedtext',
+			],
+			MainConfigNames::RestrictedGroups => [],
+			MainConfigNames::ReauthenticateForActions => [
+				'editsitejs' => 'editsitejscss',
 			]
 		] );
 
@@ -110,11 +125,13 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 				'viewsuppressed' => true,
 			],
 			'interface-admin' => [
+				'editalluserpages' => true,
 				'editinterface' => true,
 				'editsitejs' => true,
 				'edituserjs' => true,
 			],
 			'sysop' => [
+				'editalluserpages' => true,
 				'editinterface' => true,
 				'delete' => true,
 				'undelete' => true,
@@ -210,45 +227,45 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 	public static function provideSpecialsAndNSPermissions() {
 		yield [
 			'namespace' => NS_SPECIAL,
-			'user permissions' => [],
-			'namespace protection' => [],
-			'expected permission errors' => [ [ 'badaccess-group0' ], [ 'ns-specialprotected' ] ],
-			'user can' => false,
+			'userPerms' => [],
+			'namespaceProtection' => [],
+			'expectedPermErrors' => [ [ 'badaccess-group0' ], [ 'ns-specialprotected' ] ],
+			'expectedUserCan' => false,
 		];
 		yield [
 			'namespace' => NS_MAIN,
-			'user permissions' => [ 'bogus' ],
-			'namespace protection' => [],
-			'expected permission errors' => [],
-			'user can' => true,
+			'userPerms' => [ 'bogus' ],
+			'namespaceProtection' => [],
+			'expectedPermErrors' => [],
+			'expectedUserCan' => true,
 		];
 		yield [
 			'namespace' => NS_MAIN,
-			'user permissions' => [],
-			'namespace protection' => [],
-			'expected permission errors' => [ [ 'badaccess-group0' ] ],
-			'user can' => false,
+			'userPerms' => [],
+			'namespaceProtection' => [],
+			'expectedPermErrors' => [ [ 'badaccess-group0' ] ],
+			'expectedUserCan' => false,
 		];
 		yield [
 			'namespace' => NS_USER,
-			'user permissions' => [],
-			'namespace protection' => [ NS_USER => [ 'bogus' ] ],
-			'expected permission errors' => [ [ 'badaccess-group0' ], [ 'namespaceprotected', 'User', 'bogus' ] ],
-			'user can' => false,
+			'userPerms' => [],
+			'namespaceProtection' => [ NS_USER => [ 'bogus' ] ],
+			'expectedPermErrors' => [ [ 'badaccess-group0' ], [ 'namespaceprotected', 'User', 'bogus' ] ],
+			'expectedUserCan' => false,
 		];
 		yield [
 			'namespace' => NS_MEDIAWIKI,
-			'user permissions' => [ 'bogus' ],
-			'namespace protection' => [],
-			'expected permission errors' => [ [ 'protectedinterface', 'bogus' ] ],
-			'user can' => false,
+			'userPerms' => [ 'bogus' ],
+			'namespaceProtection' => [],
+			'expectedPermErrors' => [ [ 'protectedinterface', 'bogus' ] ],
+			'expectedUserCan' => false,
 		];
 		yield [
 			'namespace' => NS_MAIN,
-			'user permissions' => [ 'bogus' ],
-			'namespace protection' => [],
-			'expected permission errors' => [],
-			'user can' => true,
+			'userPerms' => [ 'bogus' ],
+			'namespaceProtection' => [],
+			'expectedPermErrors' => [],
+			'expectedUserCan' => true,
 		];
 	}
 
@@ -263,9 +280,15 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 				[
 					Title::makeTitle( NS_MAIN, "Bogus" ),
 					Title::makeTitle( NS_MAIN, "UnBogus" )
-				], [
+				],
+				[
 					"bogus" => [ 'bogus', "sysop", "protect", "" ],
-				]
+				],
+				[
+					Title::makeTitle( NS_MAIN, "Bogus" ),
+					Title::makeTitle( NS_MAIN, "UnBogus" )
+				],
+				[]
 			],
 		] ];
 
@@ -284,6 +307,51 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 		);
 	}
 
+	public function testCascadingSourcesRestrictionsForFile() {
+		$this->setTitle( NS_FILE, 'Test.jpg' );
+		$this->overrideUserPermissions( $this->user, [ 'edit', 'move', 'upload', 'movefile', 'createpage' ] );
+
+		$rs = $this->getServiceContainer()->getRestrictionStore();
+		$wrapper = TestingAccessWrapper::newFromObject( $rs );
+		$wrapper->cache = [ CacheKeyHelper::getKeyForPage( $this->title ) => [
+				'cascade_sources' => [
+					[
+						Title::makeTitle( NS_MAIN, 'FileTemplate' ),
+						Title::makeTitle( NS_MAIN, 'FileUser' )
+					],
+					[
+						'edit' => [ 'sysop' ],
+					],
+					[
+						Title::makeTitle( NS_MAIN, 'FileTemplate' )
+					],
+					[
+						Title::makeTitle( NS_MAIN, 'FileUser' )
+					]
+				],
+			] ];
+
+		$permissionManager = $this->getServiceContainer()->getPermissionManager();
+
+		$this->assertFalse( $permissionManager->userCan( 'upload', $this->user, $this->title ) );
+		$this->assertEquals( [
+			[ 'cascadeprotected', 2, "* [[:FileTemplate]]\n* [[:FileUser]]\n", 'upload' ] ],
+			$permissionManager->getPermissionErrors( 'upload', $this->user, $this->title )
+		);
+
+		$this->assertFalse( $permissionManager->userCan( 'move', $this->user, $this->title ) );
+		$this->assertEquals( [
+			[ 'cascadeprotected', 2, "* [[:FileTemplate]]\n* [[:FileUser]]\n", 'move' ] ],
+			$permissionManager->getPermissionErrors( 'move', $this->user, $this->title )
+		);
+
+		$this->assertFalse( $permissionManager->userCan( 'edit', $this->user, $this->title ) );
+		$this->assertEquals( [
+			[ 'cascadeprotected', 2, "* [[:FileTemplate]]\n* [[:FileUser]]\n", 'edit' ] ],
+			$permissionManager->getPermissionErrors( 'edit', $this->user, $this->title )
+		);
+	}
+
 	/**
 	 * @dataProvider provideActionPermissions
 	 */
@@ -295,6 +363,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 		$expectedPermErrors,
 		$expectedUserCan
 	) {
+		$this->overrideConfigValue( MainConfigNames::LanguageCode, 'qqx' );
 		$this->setTitle( $namespace, "Test page" );
 
 		$this->overrideUserPermissions( $this->user, $userPerms );
@@ -336,91 +405,181 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 		// $title->mInterwiki, for the few cases those are needed
 		yield [
 			'namespace' => NS_MAIN,
-			'title overrides' => [],
+			'titleOverrides' => [],
 			'action' => 'create',
-			'user permissions' => [ 'createpage' ],
-			'expected permission errors' => [ [ 'titleprotected', 'Useruser', 'test' ] ],
-			'user can' => false,
+			'userPerms' => [ 'createpage' ],
+			'expectedPermErrors' => [ [ 'titleprotected', 'Useruser', 'test' ] ],
+			'expectedUserCan' => false,
 		];
 		yield [
 			'namespace' => NS_MAIN,
-			'title overrides' => [ 'protectedPermission' => 'editprotected' ],
+			'titleOverrides' => [ 'protectedPermission' => 'editprotected' ],
 			'action' => 'create',
-			'user permissions' => [ 'createpage', 'protect' ],
-			'expected permission errors' => [ [ 'titleprotected', 'Useruser', 'test' ] ],
-			'user can' => false,
+			'userPerms' => [ 'createpage', 'protect' ],
+			'expectedPermErrors' => [ [ 'titleprotected', 'Useruser', 'test' ] ],
+			'expectedUserCan' => false,
 		];
 		yield [
 			'namespace' => NS_MAIN,
-			'title overrides' => [ 'protectedPermission' => 'editprotected' ],
+			'titleOverrides' => [ 'protectedPermission' => 'editprotected' ],
 			'action' => 'create',
-			'user permissions' => [ 'createpage', 'editprotected' ],
-			'expected permission errors' => [],
-			'user can' => true,
+			'userPerms' => [ 'createpage', 'editprotected' ],
+			'expectedPermErrors' => [],
+			'expectedUserCan' => true,
 		];
 		yield [
 			'namespace' => NS_MEDIA,
-			'title overrides' => [],
+			'titleOverrides' => [],
 			'action' => 'move',
-			'user permissions' => [ 'move' ],
-			'expected permission errors' => [ [ 'immobile-source-namespace', 'Media' ] ],
-			'user can' => false,
+			'userPerms' => [ 'move' ],
+			'expectedPermErrors' => [ [ 'immobile-source-namespace', 'Media' ] ],
+			'expectedUserCan' => false,
 		];
 		yield [
 			'namespace' => NS_HELP,
-			'title overrides' => [],
+			'titleOverrides' => [],
 			'action' => 'move',
-			'user permissions' => [ 'move' ],
-			'expected permission errors' => [],
-			'user can' => true,
+			'userPerms' => [ 'move' ],
+			'expectedPermErrors' => [],
+			'expectedUserCan' => true,
 		];
 		yield [
 			'namespace' => NS_HELP,
-			'title overrides' => [ 'interwiki' => 'no' ],
+			'titleOverrides' => [ 'interwiki' => 'no' ],
 			'action' => 'move',
-			'user permissions' => [ 'move' ],
-			'expected permission errors' => [ [ 'immobile-source-page' ] ],
-			'user can' => false,
+			'userPerms' => [ 'move' ],
+			'expectedPermErrors' => [ [ 'immobile-source-page' ] ],
+			'expectedUserCan' => false,
 		];
 		yield [
 			'namespace' => NS_MEDIA,
-			'title overrides' => [],
+			'titleOverrides' => [],
 			'action' => 'move-target',
-			'user permissions' => [ 'move' ],
-			'expected permission errors' => [ [ 'immobile-target-namespace', 'Media' ] ],
-			'user can' => false,
+			'userPerms' => [ 'move' ],
+			'expectedPermErrors' => [ [ 'immobile-target-namespace', 'Media' ] ],
+			'expectedUserCan' => false,
 		];
 		yield [
 			'namespace' => NS_HELP,
-			'title overrides' => [],
+			'titleOverrides' => [],
 			'action' => 'move-target',
-			'user permissions' => [ 'move' ],
-			'expected permission errors' => [],
-			'user can' => true,
+			'userPerms' => [ 'move' ],
+			'expectedPermErrors' => [],
+			'expectedUserCan' => true,
 		];
 		yield [
 			'namespace' => NS_HELP,
-			'title overrides' => [ 'interwiki' => 'no' ],
+			'titleOverrides' => [ 'interwiki' => 'no' ],
 			'action' => 'move-target',
-			'user permissions' => [ 'move' ],
-			'expected permission errors' => [ [ 'immobile-target-page' ] ],
-			'user can' => false,
+			'userPerms' => [ 'move' ],
+			'expectedPermErrors' => [ [ 'immobile-target-page' ] ],
+			'expectedUserCan' => false,
 		];
 		yield [
 			'namespace' => NS_MAIN,
-			'title overrides' => [],
+			'titleOverrides' => [],
 			'action' => 'edit',
-			'user permissions' => [ 'createpage', 'edit' ],
-			'expected permission errors' => [ [ 'titleprotected', 'Useruser', 'test' ] ],
-			'user can' => false,
+			'userPerms' => [ 'createpage', 'edit' ],
+			'expectedPermErrors' => [ [ 'titleprotected', 'Useruser', 'test' ] ],
+			'expectedUserCan' => false,
 		];
 		yield [
 			'namespace' => NS_MAIN,
-			'title overrides' => [],
+			'titleOverrides' => [],
 			'action' => 'edit',
-			'user permissions' => [ 'edit' ],
-			'expected permission errors' => [ [ 'nocreate-loggedin' ] ],
-			'user can' => false,
+			'userPerms' => [ 'edit' ],
+			'expectedPermErrors' => [
+				[ 'nocreate-loggedin' ],
+				[ 'badaccess-group0' ],
+				[ 'titleprotected', 'Useruser', 'test' ]
+			],
+			'expectedUserCan' => false,
+		];
+	}
+
+	/**
+	 * @dataProvider provideUserPageEditPermissions
+	 */
+	public function testUserPageEditPermissions(
+		int $namespace,
+		string $pageTitle,
+		string $action,
+		array $userPerms,
+		array $expectedPermErrors,
+		bool $expectedUserCan
+	): void {
+		$this->overrideConfigValue( MainConfigNames::RestrictUserPageEditing, true );
+		$this->setTitle( $namespace, $pageTitle );
+
+		$this->overrideUserPermissions( $this->user, $userPerms );
+
+		$permissionManager = $this->getServiceContainer()->getPermissionManager();
+
+		$permErrors = $permissionManager->getPermissionErrors( $action, $this->user, $this->title );
+
+		$this->assertSame(
+			$expectedPermErrors,
+			array_map( static fn ( $error ) => $error[0], $permErrors )
+		);
+		$this->assertSame(
+			$expectedUserCan,
+			$permissionManager->userCan( $action, $this->user, $this->title )
+		);
+	}
+
+	public static function provideUserPageEditPermissions() {
+		yield 'Own user page edit allowed' => [
+			NS_USER,
+			'Useruser/subpage',
+			'edit',
+			[ 'edit', 'createpage' ],
+			[],
+			true,
+		];
+
+		yield 'Other user page edit denied' => [
+			NS_USER,
+			'Altuseruser/subpage',
+			'edit',
+			[ 'edit', 'createpage' ],
+			[ 'badaccess-groups' ],
+			false,
+		];
+
+		yield 'Other user page edit with editalluserpages allowed' => [
+			NS_USER,
+			'Altuseruser/subpage',
+			'edit',
+			[ 'edit', 'createpage', 'editalluserpages' ],
+			[],
+			true,
+		];
+
+		yield 'Other user page move denied' => [
+			NS_USER,
+			'Altuseruser/subpage',
+			'move',
+			[ 'move' ],
+			[ 'badaccess-groups' ],
+			false,
+		];
+
+		yield 'Other user page move target denied' => [
+			NS_USER,
+			'Altuseruser/subpage',
+			'move-target',
+			[ 'move' ],
+			[ 'badaccess-groups' ],
+			false,
+		];
+
+		yield 'Non-user page edit allowed' => [
+			NS_MAIN,
+			'Test page',
+			'edit',
+			[ 'edit', 'createpage' ],
+			[],
+			true,
 		];
 	}
 
@@ -469,7 +628,6 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 	public function testCheckUserBlockActions( $block, $restriction, $expected ) {
 		$this->overrideConfigValues( [
 			MainConfigNames::EmailConfirmToEdit => false,
-			MainConfigNames::EnablePartialActionBlocks => true,
 		] );
 
 		if ( $restriction ) {
@@ -547,7 +705,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 	 */
 	public function testGetApplicableBlockForSpecialPage() {
 		$block = new DatabaseBlock( [
-			'address' => '127.0.8.1',
+			'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 			'by' => new UserIdentityValue( 100, 'TestUser' ),
 			'auto' => true,
 		] );
@@ -581,7 +739,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 	 */
 	public function testGetApplicableBlockForImplicitRight() {
 		$block = new DatabaseBlock( [
-			'address' => '127.0.8.1',
+			'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 			'by' => new UserIdentityValue( 100, 'TestUser' ),
 			'auto' => true,
 		] );
@@ -607,7 +765,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 		return [
 			'Sitewide autoblock' => [
 				new DatabaseBlock( [
-					'address' => '127.0.8.1',
+					'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 					'by' => new UserIdentityValue( 100, 'TestUser' ),
 					'auto' => true,
 				] ),
@@ -623,7 +781,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 			],
 			'Sitewide block' => [
 				new DatabaseBlock( [
-					'address' => '127.0.8.1',
+					'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 					'by' => new UserIdentityValue( 100, 'TestUser' ),
 				] ),
 				false,
@@ -638,7 +796,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 			],
 			'Partial block without restriction against this page' => [
 				new DatabaseBlock( [
-					'address' => '127.0.8.1',
+					'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 					'by' => new UserIdentityValue( 100, 'TestUser' ),
 					'sitewide' => false,
 				] ),
@@ -654,7 +812,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 			],
 			'Partial block with restriction against this page' => [
 				new DatabaseBlock( [
-					'address' => '127.0.8.1',
+					'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 					'by' => new UserIdentityValue( 100, 'TestUser' ),
 					'sitewide' => false,
 				] ),
@@ -670,7 +828,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 			],
 			'Partial block with action restriction against uploading' => [
 				( new DatabaseBlock( [
-					'address' => '127.0.8.1',
+					'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 					'by' => UserIdentityValue::newRegistered( 100, 'Test' ),
 					'sitewide' => false,
 				] ) )->setRestrictions( [
@@ -688,7 +846,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 			],
 			'System block' => [
 				new SystemBlock( [
-					'address' => '127.0.8.1',
+					'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 					'by' => 100,
 					'systemBlock' => 'test',
 				] ),
@@ -721,11 +879,8 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 	 * A test of the filter() calls in getApplicableBlock()
 	 */
 	public function testGetApplicableBlockCompositeFilter() {
-		$this->overrideConfigValues( [
-			MainConfigNames::EnablePartialActionBlocks => true,
-		] );
 		$blockOptions = [
-			'address' => '127.0.8.1',
+			'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 			'by' => UserIdentityValue::newRegistered( 100, 'Test' ),
 			'sitewide' => false,
 		];
@@ -802,7 +957,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 			MainConfigNames::EmailConfirmToEdit, false
 		);
 		$block = new $blockType( array_merge( [
-			'address' => '127.0.8.1',
+			'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 			'by' => $this->user,
 			'reason' => 'Test reason',
 			'timestamp' => '20000101000000',
@@ -934,7 +1089,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 		] );
 
 		$user = $this->createUserWithBlock( new DatabaseBlock( [
-			'address' => '127.0.8.1',
+			'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 			'by' => $this->user,
 		] ) );
 		$this->assertCount( 1, $this->getServiceContainer()->getPermissionManager()
@@ -952,16 +1107,15 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 
 		// Block the user
 		$blocker = $this->getTestSysop()->getUser();
-		$block = new DatabaseBlock( [
+		$blockStore = $this->getServiceContainer()->getDatabaseBlockStore();
+		$block = $blockStore->insertBlockWithParams( [
+			'targetUser' => $user,
 			'hideName' => true,
 			'allowUsertalk' => false,
 			'reason' => 'Because',
+			'by' => $blocker,
 		] );
-		$block->setTarget( $user );
-		$block->setBlocker( $blocker );
-		$blockStore = $this->getServiceContainer()->getDatabaseBlockStore();
-		$res = $blockStore->insertBlock( $block );
-		$this->assertTrue( (bool)$res['id'], 'Failed to insert block' );
+		$this->assertNotNull( $block, 'Failed to insert block' );
 
 		// Clear cache and confirm it loaded the block properly
 		$user->clearInstanceCache();
@@ -1013,17 +1167,17 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 			$restrictions[] = new NamespaceRestriction( 0, $ns );
 		}
 
-		$block = new DatabaseBlock( [
-			'expiry' => wfTimestamp( TS_MW, wfTimestamp() + ( 40 * 60 * 60 ) ),
+		$blockStore = $this->getServiceContainer()->getDatabaseBlockStore();
+		$block = $blockStore->newUnsaved( [
+			'targetUser' => $user,
+			'expiry' => wfTimestamp( TS::MW, wfTimestamp() + ( 40 * 60 * 60 ) ),
 			'allowUsertalk' => $options['allowUsertalk'] ?? false,
 			'sitewide' => !$restrictions,
 		] );
-		$block->setTarget( $user );
 		$block->setBlocker( $this->getTestSysop()->getUser() );
 		if ( $restrictions ) {
 			$block->setRestrictions( $restrictions );
 		}
-		$blockStore = $this->getServiceContainer()->getDatabaseBlockStore();
 		$blockStore->insertBlock( $block );
 
 		$this->assertSame( $expect, $this->getServiceContainer()->getPermissionManager()
@@ -1128,7 +1282,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 		$this->assertContains( 'writetest', $rights );
 		$this->assertNotContains( 'nukeworld', $rights );
 
-		// Add a hook manipluating the rights
+		// Add a hook manipulating the rights
 		$this->setTemporaryHook( 'UserGetRights', static function ( $user, &$rights ) {
 			$rights[] = 'nukeworld';
 			$rights = array_diff( $rights, [ 'writetest' ] );
@@ -1167,44 +1321,148 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 		$this->assertNotContains( 'nukeworld', $rights );
 	}
 
-	public function testUserHasRight() {
+	/** @dataProvider provideUserHasRight */
+	public function testUserHasRight( string $group, string $right, bool $expected ) {
 		$permissionManager = $this->getServiceContainer()->getPermissionManager();
 
 		$result = $permissionManager->userHasRight(
-			$this->getTestUser( 'unittesters' )->getUser(),
-			'test'
+			$this->getTestUser( $group )->getUser(),
+			$right
 		);
-		$this->assertTrue( $result, 'right was granted to group, so should be allowed' );
+		$this->assertSame( $expected, $result );
+	}
 
-		$result = $permissionManager->userHasRight(
-			$this->getTestUser( 'unittesters' )->getUser(),
-			'limitabletest'
-		);
-		$this->assertTrue( $result, 'not granted, but listed as implicit' );
+	public static function provideUserHasRight() {
+		yield 'right was granted to group, so should be allowed' => [
+			'unittesters', 'test', true
+		];
+		yield 'not granted, but listed as implicit' => [
+			'unittesters', 'limitabletest', true
+		];
+		yield 'not granted, but has a limit, so should be allowed' => [
+			'unittesters', 'mailpassword', true
+		];
+		yield 'not granted, has a limit but is listed as available, so should not be allowed' => [
+			'unittesters', 'rollback', false
+		];
+		yield 'not granted, should not be allowed' => [
+			'formertesters', 'runtest', false
+		];
+		yield 'empty action should always be granted' => [
+			'formertesters', '', true
+		];
+	}
 
-		$result = $permissionManager->userHasRight(
-			$this->getTestUser( 'unittesters' )->getUser(),
-			'mailpassword'
-		);
-		$this->assertTrue( $result, 'not granted, but has a limit, so should be allowed' );
+	/** @dataProvider provideGetUserRightStatus */
+	public function testGetUserRightStatus(
+		string $group,
+		string $right,
+		bool $detailedPermissionErrors,
+		StatusValue $expectedStatus
+	) {
+		$permissionManager = $this->getServiceContainer()->getPermissionManager();
+		$this->overrideConfigValue( MainConfigNames::LanguageCode, 'qqx' );
 
-		$result = $permissionManager->userHasRight(
-			$this->getTestUser( 'unittesters' )->getUser(),
-			'rollback'
+		$result = $permissionManager->getUserRightStatus(
+			$this->getTestUser( $group )->getUser(),
+			$right,
+			PermissionManager::RIGOR_SECURE,
+			$detailedPermissionErrors
 		);
-		$this->assertFalse( $result, 'not granted, has a limit but is listed as available, so should not be allowed' );
+		$this->assertStatusMessagesExactly( $expectedStatus, $result );
+	}
 
-		$result = $permissionManager->userHasRight(
-			$this->getTestUser( 'formertesters' )->getUser(),
-			'runtest'
-		);
-		$this->assertFalse( $result, 'not granted, should not be allowed' );
+	public static function provideGetUserRightStatus() {
+		yield 'right was granted to group, so should be allowed' => [
+			'unittesters', 'test', true, StatusValue::newGood()
+		];
+		yield 'not granted, but listed as implicit' => [
+			'unittesters', 'limitabletest', true, StatusValue::newGood()
+		];
+		yield 'not granted, but has a limit, so should be allowed' => [
+			'unittesters', 'mailpassword', true, StatusValue::newGood()
+		];
+		yield 'not granted, has a limit but is listed as available, so should not be allowed' => [
+			'unittesters', 'rollback', true, StatusValue::newFatal( 'badaccess-groups', Message::listParam( [
+				'[[(grouppage-sysop)|(group-sysop)]]'
+			], ListType::COMMA ), 1 )
+		];
+		yield 'not granted, should not be allowed' => [
+			'formertesters', 'runtest', true, StatusValue::newFatal( 'badaccess-groups', Message::listParam( [
+				'[[(grouppage-unittesters)|(group-unittesters)]]'
+			], ListType::COMMA ), 1 )
+		];
+		yield 'detailed permission error not given when not requested' => [
+			'formertesters', 'runtest', false, StatusValue::newFatal( 'badaccess-group0' )
+		];
+		yield 'empty action should always be granted' => [
+			'formertesters', '', true, StatusValue::newGood()
+		];
+	}
 
-		$result = $permissionManager->userHasRight(
-			$this->getTestUser( 'formertesters' )->getUser(),
-			''
-		);
-		$this->assertTrue( $result, 'empty action should always be granted' );
+	public function testReauthenticateForAction() {
+		$permissionManager = $this->getServiceContainer()->getPermissionManager();
+		$user = $this->getTestUser( 'interface-admin' )->getUser();
+		$siteJsPage = Title::makeTitle( NS_MEDIAWIKI, 'Foo.js' );
+		$operationStatus = AuthManager::SEC_REAUTH;
+		$expectingDone = false;
+		$mockAuthManager = $this->createMock( AuthManager::class );
+		$mockAuthManager->method( 'securitySensitiveOperationStatus' )
+			->willReturnCallback( static function () use ( &$operationStatus ) {
+				return $operationStatus;
+			} );
+		$mockAuthManager->method( 'securitySensitiveOperationDone' )
+			->willReturnCallback( function ( $operation ) use ( &$expectingDone ) {
+				$this->assertTrue( $expectingDone, 'securitySensitiveOperationDone should not be called when rigor is not RIGOR_SECURE or status is not SEC_OK' );
+				$this->assertSame( 'editsitejscss', $operation );
+			} );
+		// Set up the mock so that $authManager->getRequest()->getSession()->getUser() returns $user
+		$mockSession = $this->createMock( Session::class );
+		$mockSession->method( 'getUser' )->willReturn( $user );
+		$mockRequest = $this->createMock( WebRequest::class );
+		$mockRequest->method( 'getSession' )->willReturn( $mockSession );
+		$mockAuthManager->method( 'getRequest' )->willReturn( $mockRequest );
+		$this->setService( 'AuthManager', $mockAuthManager );
+
+		$result = $permissionManager->getPermissionStatus( 'edit', $user, $siteJsPage, PermissionManager::RIGOR_SECURE );
+		$this->assertStatusNotOK( $result, 'RIGOR_SECURE check sets status to not OK' );
+		$messages = $result->getMessages();
+		$this->assertCount( 2, $messages, 'Status has both sitejsprotected and reauth messages' );
+		$this->assertSame( 'sitejsprotected', $messages[0]->getKey() );
+		$reauthMessage = $messages[1];
+		$this->assertInstanceOf( ApiMessage::class, $reauthMessage );
+		$this->assertSame( 'badaccess-reauthenticate', $reauthMessage->getKey() );
+		$this->assertSame( 'reauthenticate', $reauthMessage->getApiCode() );
+		$this->assertSame( [ 'operation' => 'editsitejscss' ], $reauthMessage->getApiData() );
+		$this->assertSame( 'editsitejscss', $result->getReauthOperation(), 'RIGOR_SECURE check sets reauth operation is set' );
+
+		$result = $permissionManager->getPermissionStatus( 'edit', $user, $siteJsPage, PermissionManager::RIGOR_FULL );
+		$this->assertStatusGood( $result, 'RIGOR_FULL check is OK despite reauth requirement' );
+		$this->assertSame( 'editsitejscss', $result->getReauthOperation(), 'RIGOR_FULL check sets reauth operation is set' );
+
+		$result = $permissionManager->getPermissionStatus( 'edit', $user, $siteJsPage, PermissionManager::RIGOR_QUICK );
+		$this->assertStatusGood( $result, 'RIGOR_QUICK check is OK despite reauth requirement' );
+		$this->assertSame( 'editsitejscss', $result->getReauthOperation(), 'RIGOR_QUICK check sets reauth operation is set' );
+
+		// Test that operations are allowed when the user has reauthenticated
+		$operationStatus = AuthManager::SEC_OK;
+		// Verify that securitySensitiveOperationDone() is only called in this case, and not in other cases
+		$expectingDone = true;
+		$mockAuthManager->expects( $this->once() )
+			->method( 'securitySensitiveOperationDone' )
+			->with( 'editsitejscss' );
+		$result = $permissionManager->getPermissionStatus( 'edit', $user, $siteJsPage, PermissionManager::RIGOR_SECURE );
+		$expectingDone = false;
+		$this->assertStatusGood( $result, 'RIGOR_SECURE check is OK when user has reauthenticated' );
+		$this->assertNull( $result->getReauthOperation(), 'RIGOR_SECURE check sets reauth operation is set' );
+
+		$result = $permissionManager->getPermissionStatus( 'edit', $user, $siteJsPage, PermissionManager::RIGOR_FULL );
+		$this->assertStatusGood( $result, 'RIGOR_FULL check is OK when user has reauthenticated' );
+		$this->assertNull( $result->getReauthOperation(), 'RIGOR_FULL check sets reauth operation is set' );
+
+		$result = $permissionManager->getPermissionStatus( 'edit', $user, $siteJsPage, PermissionManager::RIGOR_QUICK );
+		$this->assertStatusGood( $result, 'RIGOR_QUICK check is OK when user has reauthenticated' );
+		$this->assertNull( $result->getReauthOperation(), 'RIGOR_QUICK check sets reauth operation is set' );
 	}
 
 	public function testIsEveryoneAllowed() {
@@ -1367,14 +1625,14 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 		$permManager = $this->getServiceContainer()->getPermissionManager();
 		$userJs = Title::makeTitle( NS_USER, 'Example/common.js' );
 
-		$this->assertTrue( $permManager->userCan( 'delete', $admin, $userJs ) );
-		$this->assertTrue( $permManager->userCan( 'delete', $interfaceAdmin, $userJs ) );
-		$this->assertTrue( $permManager->userCan( 'deletedhistory', $admin, $userJs ) );
-		$this->assertTrue( $permManager->userCan( 'deletedhistory', $interfaceAdmin, $userJs ) );
-		$this->assertTrue( $permManager->userCan( 'deletedtext', $admin, $userJs ) );
-		$this->assertTrue( $permManager->userCan( 'deletedtext', $interfaceAdmin, $userJs ) );
-		$this->assertFalse( $permManager->userCan( 'undelete', $admin, $userJs ) );
-		$this->assertTrue( $permManager->userCan( 'undelete', $interfaceAdmin, $userJs ) );
+		$this->assertTrue( $permManager->userCan( 'delete', $admin, $userJs ), 'admin can delete user JS' );
+		$this->assertTrue( $permManager->userCan( 'delete', $interfaceAdmin, $userJs ), 'interface admin can delete user JS' );
+		$this->assertTrue( $permManager->userCan( 'deletedhistory', $admin, $userJs ), 'admin can view deleted history of user JS' );
+		$this->assertTrue( $permManager->userCan( 'deletedhistory', $interfaceAdmin, $userJs ), 'interface admin can view deleted history of user JS' );
+		$this->assertTrue( $permManager->userCan( 'deletedtext', $admin, $userJs ), 'admin can view deleted text of user JS' );
+		$this->assertTrue( $permManager->userCan( 'deletedtext', $interfaceAdmin, $userJs ), 'interface admin can view deleted history of user JS' );
+		$this->assertFalse( $permManager->userCan( 'undelete', $admin, $userJs ), 'admin cannot undelete user JS' );
+		$this->assertTrue( $permManager->userCan( 'undelete', $interfaceAdmin, $userJs ), 'interface admin can undelete user JS' );
 	}
 
 	/**
@@ -1419,8 +1677,8 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 
 	public static function provideDeletedViewerRights() {
 		yield [
-			'usergroup' => '*',
-			'user permissions' => [
+			'userGroup' => '*',
+			'userPerms' => [
 				'delete',
 				'deletedhistory',
 				'deletedtext',
@@ -1428,25 +1686,25 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 				'undelete',
 				'viewsuppressed'
 			],
-			'user can' => false
+			'expectedUserCan' => false
 		];
 		yield [
-			'usergroup' => 'deleted-viewer',
-			'user permissions' => [
+			'userGroup' => 'deleted-viewer',
+			'userPerms' => [
 				'delete',
 				'suppressrevision',
 				'undelete'
 			],
-			'user can' => false
+			'expectedUserCan' => false
 		];
 		yield [
-			'usergroup' => 'deleted-viewer',
-			'user permissions' => [
+			'userGroup' => 'deleted-viewer',
+			'userPerms' => [
 				'deletedhistory',
 				'deletedtext',
 				'viewsuppressed'
 			],
-			'user can' => true
+			'expectedUserCan' => true
 		];
 	}
 
@@ -1462,7 +1720,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 			->getMock();
 		$user->method( 'getBlock' )
 			->willReturn( new DatabaseBlock( [
-				'address' => '127.0.8.1',
+				'target' => new AnonIpBlockTarget( '127.0.8.1' ),
 				'by' => $this->user,
 			] ) );
 		$errors = $pm->getPermissionErrors( 'test', $user, $page );
@@ -1566,11 +1824,8 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 		string $userType,
 		string $action,
 		array $rights,
-		string $expectedError
+		StatusValue $expectedStatus
 	) {
-		// Convert string single error to the array of errors PermissionManager uses
-		$expectedErrors = ( $expectedError === '' ? [] : [ [ $expectedError ] ] );
-
 		$userIsAnon = $userType === 'anon';
 		$userIsTemp = $userType === 'temp';
 		$userIsNamed = $userType === 'user';
@@ -1611,7 +1866,7 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 			$short,
 			$title
 		);
-		$this->assertEquals( $expectedErrors, $result->toLegacyErrorArray() );
+		$this->assertStatusMessagesExactly( $expectedStatus, $result );
 	}
 
 	public static function provideTestCheckQuickPermissions() {
@@ -1619,69 +1874,169 @@ class PermissionManagerTest extends MediaWikiLangTestCase {
 
 		// Four different possible errors when trying to create
 		yield 'Anon createtalk fail' => [
-			NS_TALK, 'Example', 'anon', 'create', [], 'nocreatetext'
+			NS_TALK, 'Example', 'anon', 'create', [], StatusValue::newFatal( 'nocreatetext' )
 		];
 		yield 'Anon createpage fail' => [
-			NS_MAIN, 'Example', 'anon', 'create', [], 'nocreatetext'
+			NS_MAIN, 'Example', 'anon', 'create', [], StatusValue::newFatal( 'nocreatetext' )
 		];
 		yield 'User createtalk fail' => [
-			NS_TALK, 'Example', 'user', 'create', [], 'nocreate-loggedin'
+			NS_TALK, 'Example', 'user', 'create', [], StatusValue::newFatal( 'nocreate-loggedin' )
 		];
 		yield 'User createpage fail' => [
-			NS_MAIN, 'Example', 'user', 'create', [], 'nocreate-loggedin'
+			NS_MAIN, 'Example', 'user', 'create', [], StatusValue::newFatal( 'nocreate-loggedin' )
 		];
 		yield 'Temp user createpage fail' => [
-			NS_MAIN, 'Example', 'temp', 'create', [], 'nocreatetext'
+			NS_MAIN, 'Example', 'temp', 'create', [], StatusValue::newFatal( 'nocreatetext' )
 		];
 
 		yield 'Createpage pass' => [
-			NS_MAIN, 'Example', 'anon', 'create', [ 'createpage' ], ''
+			NS_MAIN, 'Example', 'anon', 'create', [ 'createpage' ], StatusValue::newGood()
 		];
 
 		// Three different namespace specific move failures, even if user has `move` rights
 		yield 'Move root user page fail' => [
-			NS_USER, 'Example', 'anon', 'move', [ 'move' ], 'cant-move-user-page'
+			NS_USER, 'Example', 'anon', 'move', [ 'move' ], StatusValue::newFatal( 'cant-move-user-page' )
 		];
 		yield 'Move file fail' => [
-			NS_FILE, 'Example', 'anon', 'move', [ 'move' ], 'movenotallowedfile'
+			NS_FILE, 'Example', 'anon', 'move', [ 'move' ], StatusValue::newFatal( 'movenotallowedfile' )
 		];
 		yield 'Move category fail' => [
-			NS_CATEGORY, 'Example', 'anon', 'move', [ 'move' ], 'cant-move-category-page'
+			NS_CATEGORY, 'Example', 'anon', 'move', [ 'move' ], StatusValue::newFatal( 'cant-move-category-page' )
 		];
 
 		// No move rights at all. Different failures depending on who is allowed to move.
 		// Test method sets group permissions to [ 'autoconfirmed' => [ 'move' => true ] ]
 		yield 'Anon move fail, autoconfirmed can move' => [
-			NS_TALK, 'Example', 'anon', 'move', [], 'movenologintext'
+			NS_TALK, 'Example', 'anon', 'move', [], StatusValue::newFatal( 'movenologintext' )
 		];
 		yield 'User move fail, autoconfirmed can move' => [
-			NS_TALK, 'Example', 'user', 'move', [], 'movenotallowed'
+			NS_TALK, 'Example', 'user', 'move', [], StatusValue::newFatal( 'movenotallowed' )
 		];
 		yield 'Temp user move fail, autoconfirmed can move' => [
-			NS_TALK, 'Example', 'temp', 'move', [], 'movenologintext'
+			NS_TALK, 'Example', 'temp', 'move', [], StatusValue::newFatal( 'movenologintext' )
 		];
-		yield 'Move pass' => [ NS_MAIN, 'Example', 'anon', 'move', [ 'move' ], '' ];
+		yield 'Move pass' => [
+			NS_MAIN, 'Example', 'anon', 'move', [ 'move' ], StatusValue::newGood()
+		];
 
 		// Three different possible failures for move target
 		yield 'Move-target no rights' => [
-			NS_MAIN, 'Example', 'user', 'move-target', [], 'movenotallowed'
+			NS_MAIN, 'Example', 'user', 'move-target', [], StatusValue::newFatal( 'movenotallowed' )
 		];
 		yield 'Move-target to user root' => [
-			NS_USER, 'Example', 'user', 'move-target', [ 'move' ], 'cant-move-to-user-page'
+			NS_USER, 'Example', 'user', 'move-target', [ 'move' ], StatusValue::newFatal( 'cant-move-to-user-page' )
 		];
 		yield 'Move-target to category' => [
-			NS_CATEGORY, 'Example', 'user', 'move-target', [ 'move' ], 'cant-move-to-category-page'
+			NS_CATEGORY, 'Example', 'user', 'move-target', [ 'move' ], StatusValue::newFatal( 'cant-move-to-category-page' )
 		];
 		yield 'Move-target pass' => [
-			NS_MAIN, 'Example', 'user', 'move-target', [ 'move' ], ''
+			NS_MAIN, 'Example', 'user', 'move-target', [ 'move' ], StatusValue::newGood()
 		];
 
 		// Other actions without special handling
 		yield 'Missing rights for edit' => [
-			NS_MAIN, 'Example', 'user', 'edit', [], 'badaccess-group0'
+			NS_MAIN, 'Example', 'user', 'edit', [], StatusValue::newFatal( 'badaccess-group0' )
 		];
 		yield 'Having rights for edit' => [
-			NS_MAIN, 'Example', 'user', 'edit', [ 'edit', ], ''
+			NS_MAIN, 'Example', 'user', 'edit', [ 'edit', ], StatusValue::newGood()
 		];
+	}
+
+	public function testShouldLimitPermissionsForBlockedUserWhenBlockDisablesLogin(): void {
+		$this->overrideConfigValues( [
+			MainConfigNames::BlockDisablesLogin => true,
+			MainConfigNames::GroupPermissions => [
+				'*' => [ 'edit' => true ],
+				'user' => [ 'edit' => true, 'move' => true ],
+				'sysop' => [ 'block' => true ],
+			],
+		] );
+
+		$testUser = $this->getTestUser()->getUserIdentity();
+		$this->blockUser( $testUser );
+
+		$permissions = $this->getServiceContainer()->getPermissionManager()->getUserPermissions( $testUser );
+
+		$this->assertSame( [ 'edit' ], $permissions );
+	}
+
+	public function testShouldLimitPermissionsForBlockedUserShouldAllowPermissionChecksInGetUserBlock(): void {
+		$this->overrideConfigValues( [
+			MainConfigNames::BlockDisablesLogin => true,
+			MainConfigNames::GroupPermissions => [
+				'*' => [ 'edit' => true ],
+				'user' => [ 'edit' => true, 'move' => true ],
+				'sysop' => [ 'block' => true ],
+			],
+		] );
+
+		$testUser = $this->getTestUser()->getUserIdentity();
+		$hookRan = false;
+
+		$this->setTemporaryHook(
+			'GetUserBlock',
+			function ( UserIdentity $user ) use ( $testUser, &$hookRan ): void {
+				if ( $user->equals( $testUser ) ) {
+					// Trigger an arbitrary permissions check to verify that they do not cause an infinite loop
+					// when BlockDisablesLogin = true (T384197).
+					$this->getServiceContainer()->getPermissionManager()
+						->userHasRight( $user, 'test' );
+
+					$hookRan = true;
+				}
+			}
+		);
+
+		$testUser = $this->getTestUser()->getUserIdentity();
+		$this->blockUser( $testUser );
+
+		$permissions = $this->getServiceContainer()->getPermissionManager()->getUserPermissions( $testUser );
+
+		$this->assertSame( [ 'edit' ], $permissions );
+		$this->assertTrue( $hookRan );
+	}
+
+	public function testFatalStatusWithDisabledGroups() {
+		$groupPermissions = $this->getConfVar( MainConfigNames::GroupPermissions );
+		$groupPermissions['sysop']['loremipsum'] = true;
+		$groupPermissions['interface-admin']['loremipsum'] = true;
+		$this->overrideConfigValues( [
+			MainConfigNames::GroupPermissions => $groupPermissions,
+			MainConfigNames::RestrictedGroups => [
+				'sysop' => [
+					'memberConditions' => [ APCOND_EDITCOUNT, 1000 ],
+				],
+			]
+		] );
+
+		$user = $this->getTestUser( [ 'sysop' ] )->getUser();
+		$context = new DerivativeContext( RequestContext::getMain() );
+		$context->setLanguage( 'qqx' );
+		$context->setUser( $user );
+		$status = $this->getServiceContainer()->getPermissionManager()
+			->newFatalPermissionDeniedStatus( 'loremipsum', $context );
+
+		$this->assertStatusMessage( 'badaccess-groups-disabled', $status );
+		$messageText = Message::newFromSpecifier( $status->getMessages()[0] )->inLanguage( 'qqx' )->text();
+		$linkSysop = UserGroupMembership::getLinkWiki( 'sysop', $context );
+		$linkIntAdmin = UserGroupMembership::getLinkWiki( 'interface-admin', $context );
+		$this->assertSame(
+			"(badaccess-groups-disabled: $linkSysop(comma-separator)$linkIntAdmin, 2, (group-sysop), 1)",
+			$messageText
+		);
+	}
+
+	/**
+	 * Convenience function to block a given user.
+	 * @param UserIdentity $user
+	 * @return void
+	 */
+	private function blockUser( UserIdentity $user ): void {
+		$status = $this->getServiceContainer()
+			->getBlockUserFactory()
+			->newBlockUser( $user, $this->getTestSysop()->getAuthority(), 'infinity' )
+			->placeBlock();
+
+		$this->assertStatusGood( $status );
 	}
 }

@@ -41,7 +41,7 @@ class ParamValidatorTest extends TestCase {
 		try {
 			$validator->addTypeDef( 'baz', [] );
 			$this->fail( 'Expected exception not thrown' );
-		} catch ( InvalidArgumentException $ex ) {
+		} catch ( InvalidArgumentException ) {
 		}
 		$validator->overrideTypeDef( 'bar', null );
 		$validator->overrideTypeDef( 'baz', [] );
@@ -111,8 +111,6 @@ class ParamValidatorTest extends TestCase {
 		$this->assertSame( $def2, $validator->getTypeDef( 'bar' ) );
 	}
 
-	/**
-	 */
 	public function testGetTypeDef_error() {
 		$validator = new ParamValidator(
 			new SimpleCallbacks( [] ),
@@ -120,8 +118,7 @@ class ParamValidatorTest extends TestCase {
 			[ 'typeDefs' => [ 'foo' => [ 'class' => stdClass::class ] ] ]
 		);
 		$this->expectException( UnexpectedValueException::class );
-		$this->expectExceptionMessage(
-			"Expected instance of Wikimedia\ParamValidator\TypeDef, got stdClass" );
+		$this->expectExceptionMessage( "Expected instance of Wikimedia\ParamValidator\TypeDef, got stdClass" );
 		$validator->getTypeDef( 'foo' );
 	}
 
@@ -187,11 +184,7 @@ class ParamValidatorTest extends TestCase {
 			}
 		);
 		$mock2 = $mb->getMockForAbstractClass();
-		$mock2->method( 'checkSettings' )->willReturnCallback(
-			static function ( string $name, $settings, array $options, array $ret ) {
-				return $ret;
-			}
-		);
+		$mock2->method( 'checkSettings' )->willReturnArgument( 3 );
 
 		$validator = new ParamValidator(
 			$callbacks,
@@ -212,7 +205,8 @@ class ParamValidatorTest extends TestCase {
 			ParamValidator::PARAM_ISMULTI_LIMIT1, ParamValidator::PARAM_ISMULTI_LIMIT2,
 			ParamValidator::PARAM_ALL, ParamValidator::PARAM_ALLOW_DUPLICATES
 		];
-		$multiEnumKeys = [ ...$multiKeys, TypeDef\EnumDef::PARAM_DEPRECATED_VALUES ];
+		$multiEnumKeys = [ ...$multiKeys,
+			TypeDef\EnumDef::PARAM_DEPRECATED_VALUES, TypeDef\EnumDef::PARAM_INTERNAL_VALUES ];
 
 		return [
 			'Basic test' => [
@@ -317,7 +311,8 @@ class ParamValidatorTest extends TestCase {
 					'issues' => [
 						ParamValidator::PARAM_DEFAULT => 'Value for PARAM_DEFAULT does not validate (code badvalue)',
 					],
-					'allowedKeys' => [ ...$normalKeys, TypeDef\EnumDef::PARAM_DEPRECATED_VALUES ],
+					'allowedKeys' => [ ...$normalKeys, TypeDef\EnumDef::PARAM_DEPRECATED_VALUES,
+							TypeDef\EnumDef::PARAM_INTERNAL_VALUES ],
 					'messages' => [],
 				],
 			],

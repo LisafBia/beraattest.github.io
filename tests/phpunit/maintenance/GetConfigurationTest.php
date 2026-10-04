@@ -3,9 +3,9 @@
 namespace MediaWiki\Tests\Maintenance;
 
 use GetConfiguration;
+use MediaWiki\JobQueue\Jobs\NullJob;
 use MediaWiki\Json\FormatJson;
 use MediaWiki\MainConfigNames;
-use NullJob;
 
 /**
  * @covers \GetConfiguration
@@ -27,19 +27,19 @@ class GetConfigurationTest extends MaintenanceBaseTestCase {
 		foreach ( $options as $name => $value ) {
 			$this->maintenance->setOption( $name, $value );
 		}
+		$this->expectOutputRegex( $expectedOutputRegex );
 		$this->expectCallToFatalError();
 		// ::maybeShowHelp uses ->mName which is null unless we call this.
 		$this->maintenance->setName( 'getConfiguration.php' );
 		$this->maintenance->validateParamsAndArgs();
 		$this->maintenance->execute();
-		$this->expectOutputRegex( $expectedOutputRegex );
 	}
 
 	public static function provideExecuteForFatalError() {
 		return [
 			'Config could not be encoded as JSON' => [
 				[ 'format' => 'json' ], '/Failed to serialize the requested settings/',
-				MainConfigNames::AutoCreateTempUser, [ 'enabled' => true, 'expiryAfterDays' => INF ]
+				MainConfigNames::AutoCreateTempUser, [ 'enabled' => true, 'expireAfterDays' => INF ]
 			],
 			'Undefined format' => [ [ 'format' => 'invalid-format' ], '/--format set to an unrecognized format/' ],
 			'Using both iregex and regex' => [
@@ -56,12 +56,12 @@ class GetConfigurationTest extends MaintenanceBaseTestCase {
 			],
 			'Config that is referenced by --settings has non-array and non-scalar items' => [
 				[ 'settings' => 'wgAutoCreateTempUser' ],
-				'/Variable wgAutoCreateTempUser includes non-array, non-scalar, items/',
+				'/Variable \'wgAutoCreateTempUser\' includes non-array, non-scalar, items/',
 				MainConfigNames::AutoCreateTempUser, [ 'enabled' => true, 'invalid' => new NullJob( [] ) ]
 			],
 			'Config referenced by --settings is an object' => [
 				[ 'settings' => 'wgTestConfig' ],
-				'/Variable wgTestConfig includes non-array, non-scalar, items/',
+				'/Variable \'wgTestConfig\' includes non-array, non-scalar, items/',
 				'TestConfig', new NullJob( [] ),
 			],
 		];

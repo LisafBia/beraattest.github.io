@@ -136,7 +136,7 @@
 	"underline-always": "Кезээде",
 	"tog-showhiddencats": "Чажыт аңгылалдарны көргүзер",
 	"tog-showrollbackconfirmation": "Дедирлээшкин шөлүүн базарга, бадыткал негээр",
-	"tog-forcesafemode": "[[mw:Manual:Safemode|Айыыл чок режимни]] үргүлчү турар кылдыр кыпсыр",
+	"tog-forcesafemode": "[[mw:Special:MyLanguage/Manual:Safemode|Айыыл чок режимни]] үргүлчү турар кылдыр кыпсыр",
 	"prefs-help-forcesafemode": "Викиде скриптилерни база ажыглакчы CSS-ти өжүрер.",
 	"prefs-editing": "Эдилге",
 	"prefs-description-editing": "Эдилгелерни канчаар киирип, хайгаарап база көрүп турарыңарны өйлеп алыңар.",
@@ -219,6 +219,7 @@
 	"search-thumbnail-extra-namespaces-label": "Special:Search-те ажылчын столга тааржыр янзызында хензиг чуруктарны көргүзер",
 	"search-thumbnail-extra-namespaces-message": "$1 {{PLURAL:$2|аттар делгеминге|аттар делгемнеринге}} хензиг чуруктарны түңнелдер арынынга {{#special:search}} көргүзер",
 	"prefs-advancedsearchoptions": "Калбак өйлээшкиннер",
+	"prefs-misc": "Өске өйлээшкиннер",
 	"prefs-reset-intro": "Бо арын силерниң өйлээшкиннериңерни стандарт кылдыр катап дүжүрүп болур.\nБо кылдыныгдан ойталап болбазын барымдаалаңар.",
 	"prefs-reset-confirm": "Ийе, мен өйлээшкиннерим дужүр октаар деп тур мен.",
 	"restoreprefs": "Шупту эге өйлээшкиннерин катап тургузар"

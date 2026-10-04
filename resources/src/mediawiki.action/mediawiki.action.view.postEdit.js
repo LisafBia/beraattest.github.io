@@ -40,6 +40,25 @@
 	const config = require( './config.json' );
 	const storageKey = 'mw-PostEdit' + mw.config.get( 'wgPageName' );
 
+	/**
+	 * Flatten a message from the 'postEdit' hook into plain text.
+	 *
+	 * Listeners may pass 'data.message' as a string, a jQuery object or an array of nodes,
+	 * but the popover title only renders a string.
+	 *
+	 * @param {string|jQuery|Array|Node} message
+	 * @return {string}
+	 */
+	function getPlainText( message ) {
+		if ( typeof message === 'string' ) {
+			return message;
+		}
+		if ( Array.isArray( message ) ) {
+			return message.map( getPlainText ).join( '' );
+		}
+		return $( message ).text();
+	}
+
 	function showConfirmation( data ) {
 		data = data || {};
 
@@ -49,24 +68,49 @@
 				'postedit-confirmation-saved',
 			data.user || mw.user,
 			mw.config.get( 'wgRevisionId' )
-		).parseDom();
+		);
+		// Only set when 'label' is an mw.Message; listeners may pass a plain string, jQuery
+		// object or array of nodes as 'data.message' instead.
+		const { key } = label;
 
-		data.message = new OO.ui.MessageWidget( {
-			type: 'success',
-			inline: true,
-			label: label
-		} ).$element[ 0 ];
+		// Show a bottom sheet popover with benefits for temp users
+		if ( data.tempUserCreated ) {
+			// mediawiki.action.view.postEdit is loaded two times on temporary account auto-creation, avoid
+			// displaying the confirmation until the temp account is attached (user menu is present in nav).
+			if ( !mw.user.isTemp() ) {
+				return;
+			}
+			mw.tempUserCreated.showCondensedPopup( {
+				classes: [ 'postedit-tempusercreated' ],
+				// The following messages can be used here:
+				// * postedit-confirmation-published-title
+				// * postedit-confirmation-saved-title
+				// * postedit-confirmation-created-title
+				// * postedit-confirmation-restored-title
+				title: key ? mw.msg( key + '-title' ) : getPlainText( label ),
+				content: [
+					mw.message( 'postedit-temp-created-createaccount-benefits' ).text(),
+					mw.message( 'postedit-temp-created-createaccount-benefit-1' ).text(),
+					mw.message( 'postedit-temp-created-createaccount-benefit-2' ).text(),
+					mw.message( 'postedit-temp-created-createaccount-benefit-3' ).text()
+				],
+				primaryActionLabel: mw.message( 'createaccount' ).text(),
+				primaryActionUrl: mw.util.getUrl( 'Special:CreateAccount' )
+			} );
+		} else {
+			data.message = new OO.ui.MessageWidget( {
+				type: 'success',
+				inline: true,
+				label: key ? label.parseDom() : label
+			} ).$element[ 0 ];
 
-		mw.notify( data.message, {
-			classes: [ 'postedit' ]
-		} );
+			mw.notify( data.message, {
+				classes: [ 'postedit' ]
+			} );
+		}
 
 		// Deprecated - use the 'postEdit' hook, and an additional pause if required
 		mw.hook( 'postEdit.afterRemoval' ).fire();
-
-		if ( data.tempUserCreated ) {
-			mw.tempUserCreated.showPopup();
-		}
 	}
 
 	function init() {
@@ -140,7 +184,7 @@
 					'postedit-confirmation-' + action,
 					mw.user,
 					mw.config.get( 'wgRevisionId' )
-				).parseDom(),
+				),
 				tempUserCreated: tempUserCreated
 			} );
 		},

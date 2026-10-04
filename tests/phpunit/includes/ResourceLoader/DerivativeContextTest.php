@@ -23,7 +23,6 @@ class DerivativeContextTest extends MediaWikiIntegrationTestCase {
 				'modules' => 'test.default',
 				'only' => 'scripts',
 				'skin' => 'fallback',
-				'target' => 'test',
 		] );
 		return new Context(
 			new ResourceLoader( ResourceLoaderTestCase::getMinimalConfig() ),
@@ -146,9 +145,7 @@ class DerivativeContextTest extends MediaWikiIntegrationTestCase {
 		$derived = new DerivativeContext( self::makeContext() );
 		$this->assertNull( $derived->getContentOverrideCallback(), 'default' );
 
-		$override = static function ( Title $t ) {
-			return null;
-		};
+		$override = static fn ( Title $t ) => null;
 		$derived->setContentOverrideCallback( $override );
 		$this->assertSame( $override, $derived->getContentOverrideCallback(), 'changed' );
 

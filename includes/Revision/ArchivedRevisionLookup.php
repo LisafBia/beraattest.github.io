@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -22,9 +8,13 @@ namespace MediaWiki\Revision;
 
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageIdentity;
+use MediaWiki\Permissions\Authority;
+use MediaWiki\Permissions\SimpleAuthority;
+use MediaWiki\User\UserIdentityValue;
 use Wikimedia\Rdbms\IConnectionProvider;
 use Wikimedia\Rdbms\IResultWrapper;
 use Wikimedia\Rdbms\SelectQueryBuilder;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * @since 1.38
@@ -37,10 +27,6 @@ class ArchivedRevisionLookup {
 	/** @var RevisionStore */
 	private $revisionStore;
 
-	/**
-	 * @param IConnectionProvider $dbProvider
-	 * @param RevisionStore $revisionStore
-	 */
 	public function __construct(
 		IConnectionProvider $dbProvider,
 		RevisionStore $revisionStore
@@ -53,12 +39,20 @@ class ArchivedRevisionLookup {
 	 * List the revisions of the given page. Returns result wrapper with
 	 * various archive table fields.
 	 *
+	 * @since 1.47
+	 *
 	 * @param PageIdentity $page
+	 * @param Authority $performer Viewer, for restricted-tag access checks
 	 * @param array $extraConds Extra conditions to be added to the query
 	 * @param ?int $limit The limit to be applied to the query, or null for no limit
 	 * @return IResultWrapper
 	 */
-	public function listRevisions( PageIdentity $page, array $extraConds = [], ?int $limit = null ) {
+	public function listArchivedRevisions(
+		PageIdentity $page,
+		Authority $performer,
+		array $extraConds = [],
+		?int $limit = null
+	): IResultWrapper {
 		$queryBuilder = $this->revisionStore->newArchiveSelectQueryBuilder( $this->dbProvider->getReplicaDatabase() )
 			->joinComment()
 			->where( $extraConds )
@@ -72,9 +66,36 @@ class ArchivedRevisionLookup {
 			$queryBuilder->limit( $limit );
 		}
 
-		MediaWikiServices::getInstance()->getChangeTagsStore()->modifyDisplayQueryBuilder( $queryBuilder, 'archive' );
+		MediaWikiServices::getInstance()->getChangeTagsStore()
+			->addTagsToDisplayQuery( $queryBuilder, 'archive', $performer );
 
 		return $queryBuilder->caller( __METHOD__ )->fetchResultSet();
+	}
+
+	/**
+	 * List the revisions of the given page. Returns result wrapper with
+	 * various archive table fields.
+	 *
+	 * @deprecated since 1.47, use listArchivedRevisions() instead, passing an Authority
+	 *
+	 * @param PageIdentity $page
+	 * @param array $extraConds Extra conditions to be added to the query
+	 * @param ?int $limit The limit to be applied to the query, or null for no limit
+	 * @param Authority|null $performer Viewer, for restricted-tag access checks. Null hides all
+	 *   restricted tags.
+	 * @return IResultWrapper
+	 */
+	public function listRevisions(
+		PageIdentity $page,
+		array $extraConds = [],
+		?int $limit = null,
+		?Authority $performer = null
+	): IResultWrapper {
+		wfDeprecated( __METHOD__, '1.47' );
+
+		$viewer = $performer ?? new SimpleAuthority( UserIdentityValue::newAnonymous( '127.0.0.1' ), [] );
+
+		return $this->listArchivedRevisions( $page, $viewer, $extraConds, $limit );
 	}
 
 	/**
@@ -159,7 +180,7 @@ class ArchivedRevisionLookup {
 			] )
 			->orderBy( 'ar_timestamp DESC' )
 			->caller( __METHOD__ )->fetchRow();
-		$prevDeleted = $row ? wfTimestamp( TS_MW, $row->ar_timestamp ) : false;
+		$prevDeleted = $row ? wfTimestamp( TS::MW, $row->ar_timestamp ) : false;
 		$prevDeletedId = $row ? intval( $row->ar_rev_id ) : null;
 
 		$row = $dbr->newSelectQueryBuilder()
@@ -173,7 +194,7 @@ class ArchivedRevisionLookup {
 			] )
 			->orderBy( 'rev_timestamp DESC' )
 			->caller( __METHOD__ )->fetchRow();
-		$prevLive = $row ? wfTimestamp( TS_MW, $row->rev_timestamp ) : false;
+		$prevLive = $row ? wfTimestamp( TS::MW, $row->rev_timestamp ) : false;
 		$prevLiveId = $row ? intval( $row->rev_id ) : null;
 
 		if ( $prevLive && $prevLive > $prevDeleted ) {

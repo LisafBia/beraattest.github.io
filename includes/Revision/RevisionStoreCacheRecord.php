@@ -2,21 +2,7 @@
 /**
  * A RevisionStoreRecord loaded from the cache.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -47,6 +33,7 @@ class RevisionStoreCacheRecord extends RevisionStoreRecord {
 	 *
 	 * @param callable $callback Callback for loading data.
 	 *        Signature: function ( int $revId ): [ int $rev_deleted, UserIdentity $user ]
+	 *        This function will only be called once.
 	 * @param PageIdentity $page The page this RevisionRecord is associated with.
 	 * @param UserIdentity $user
 	 * @param CommentStoreComment $comment
@@ -80,15 +67,8 @@ class RevisionStoreCacheRecord extends RevisionStoreRecord {
 		return parent::getVisibility();
 	}
 
-	/**
-	 * Overridden to ensure that we return a fresh value and not a cached one.
-	 *
-	 * @param int $audience
-	 * @param Authority|null $performer
-	 *
-	 * @return UserIdentity The identity of the revision author, null if access is forbidden.
-	 */
-	public function getUser( $audience = self::FOR_PUBLIC, ?Authority $performer = null ) {
+	/** @inheritDoc */
+	public function getUser( int $audience = self::FOR_PUBLIC, ?Authority $performer = null ) {
 		if ( $this->mCallback ) {
 			$this->loadFreshRow();
 		}
@@ -96,12 +76,20 @@ class RevisionStoreCacheRecord extends RevisionStoreRecord {
 	}
 
 	/**
-	 * Load a fresh row from the database to ensure we return updated information
+	 * Load a fresh row from the database to ensure we return updated information.
+	 * Once loading a fresh row is attempted on this RevisionStoreCacheRecord instance,
+	 * it will not be attempted again. Subsequent calls to methods on this instance
+	 * will not go back to the database for a 'fresh row'.
+	 *
+	 * If a RevisionAccessException is thrown and is caught in the caller, it is possible
+	 * to continue using this RevisionStoreCacheRecord instance to access RevisionRecord
+	 * data, but there is no guarantee that the data will be 'fresh'.
+	 * See: https://phabricator.wikimedia.org/T400380#11207694
 	 *
 	 * @throws RevisionAccessException if the row could not be loaded
 	 */
 	private function loadFreshRow() {
-		[ $freshRevDeleted, $freshUser ] = call_user_func( $this->mCallback, $this->mId );
+		[ $freshRevDeleted, $freshUser ] = ( $this->mCallback )( $this->mId );
 
 		// Set to null to ensure we do not make unnecessary queries for subsequent getter calls,
 		// and to allow the closure to be freed.

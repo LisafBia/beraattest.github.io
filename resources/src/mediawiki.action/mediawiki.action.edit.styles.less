@@ -13,11 +13,6 @@
 	unicode-bidi: embed;
 }
 
-/* Prevent editing textarea from jumping when toolbar is loaded */
-#toolbar {
-	height: 22px;
-}
-
 /* Stop floats from intruding into edit area in previews */
 #editform,
 #toolbar,
@@ -67,6 +62,21 @@
 
 	.editCheckboxes .oo-ui-fieldLayout {
 		margin-right: 1em;
+	}
+
+	.mw-editpage-watchlistLabels {
+		margin-bottom: 1em;
+
+		.mw-widgets-tagMultiselectWidget-nojs {
+			.oo-ui-checkboxMultiselectInputWidget .oo-ui-fieldLayout-align-inline {
+				display: inline-block;
+				margin-right: @spacing-75;
+			}
+
+			.oo-ui-checkboxMultiselectInputWidget .oo-ui-fieldLayout {
+				padding: 0;
+			}
+		}
 	}
 
 	.editHelp {

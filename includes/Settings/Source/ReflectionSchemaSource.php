@@ -40,7 +40,7 @@ class ReflectionSchemaSource implements Stringable, SettingsSource {
 
 	/**
 	 * Name of a PHP class
-	 * @var string
+	 * @var class-string
 	 */
 	private $class;
 
@@ -50,7 +50,7 @@ class ReflectionSchemaSource implements Stringable, SettingsSource {
 	private $includeDoc;
 
 	/**
-	 * @param string $class
+	 * @param class-string $class
 	 * @param bool $includeDoc
 	 */
 	public function __construct( string $class, bool $includeDoc = false ) {
@@ -158,21 +158,23 @@ class ReflectionSchemaSource implements Stringable, SettingsSource {
 
 	/**
 	 * Returns this file source as a string.
-	 *
-	 * @return string
 	 */
 	public function __toString(): string {
 		return 'class ' . $this->class;
 	}
 
-	private function normalizeComment( string $doc ) {
+	private function normalizeComment( string $doc ): string {
 		$doc = preg_replace( '/^\s*\/\*+\s*|\s*\*+\/\s*$/', '', $doc );
 		$doc = preg_replace( '/^\s*\**$/m', " ", $doc );
 		$doc = preg_replace( '/^\s*\**[ \t]?/m', '', $doc );
 		return $doc;
 	}
 
-	private function normalizeDynamicDefault( string $name, $spec ) {
+	/**
+	 * @param string $name
+	 * @param true|string|array $spec
+	 */
+	private function normalizeDynamicDefault( string $name, $spec ): array {
 		if ( $spec === true ) {
 			$spec = [ 'callback' => [ $this->class, "getDefault{$name}" ] ];
 		}
@@ -185,7 +187,6 @@ class ReflectionSchemaSource implements Stringable, SettingsSource {
 			$spec['callback'] = [ $this->class, "getDefault{$name}" ];
 		}
 
-		// @phan-suppress-next-line PhanTypePossiblyInvalidDimOffset per fallback above.
 		if ( $spec['callback'] instanceof Closure ) {
 			throw new SettingsBuilderException(
 				"dynamicDefaults callback for $name must be JSON serializable. " .

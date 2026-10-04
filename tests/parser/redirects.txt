@@ -212,9 +212,9 @@ parsoid=html2wt
 Foo
 !! end
 
-## WikiContent::getRedirectTargetAndText() strips the redirect from text so,
+## WikitextContentHandler::extractRedirectTargetAndText() strips the redirect from text so,
 ## in practice, the legacy parse never sees it from the source.  Hence, the
-## the differnce in output.
+## the difference in output.
 !! test
 Redirect followed by block on the same line
 !! options
@@ -227,9 +227,9 @@ parsoid=wt2html
 <link rel="mw:PageProp/redirect" href="./Main_Page"/><!-- haha --><h2 id="hi">hi</h2>
 !! end
 
-## WikiContent::getRedirectTargetAndText() strips the redirect from text so,
+## WikitextContentHandler::extractRedirectTargetAndText() strips the redirect from text so,
 ## in practice, the legacy parse never sees it from the source.  Hence, the
-## the differnce in output.
+## the difference in output.
 !! test
 Redirect followed by horizontal rule on the same line
 !! options
@@ -300,4 +300,14 @@ Broken redirect shouldn't crash parsoid (T332242)
 !! html/parsoid+standalone
 <!-- Not a valid redirect nor a valid parser function -->
 <p><span typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"#REDIRECT [[]]","function":"REDIRECT [[]]"},"params":{},"i":0}}]}'>Parser function implementation for pf_REDIRECT [[]] missing in Parsoid.</span></p>
+!! end
+
+!! test
+Redirect wikitext become ol list items when they come from a template
+!! wikitext
+{{1x|#REDIRECT [[Foo]]}}
+!! html/parsoid
+<ol about="#mwt1" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"#REDIRECT [[Foo]]"}},"i":0}}]}'><li>REDIRECT <a rel="mw:WikiLink" href="./Foo?action=edit&amp;redlink=1" title="Foo" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Foo"]}}'>Foo</a></li></ol>
+!! html/php
+<ol><li>REDIRECT <a href="/index.php?title=Foo&amp;action=edit&amp;redlink=1" class="new" title="Foo (page does not exist)">Foo</a></li></ol>
 !! end

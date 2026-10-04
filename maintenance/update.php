@@ -5,21 +5,7 @@
  *
  * This is used when the database schema is modified and we need to apply patches.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @todo document
  * @ingroup Maintenance
@@ -35,11 +21,14 @@ use MediaWiki\Context\RequestContext;
 use MediaWiki\Installer\DatabaseInstaller;
 use MediaWiki\Installer\DatabaseUpdater;
 use MediaWiki\Installer\Installer;
+use MediaWiki\Language\LCStoreNull;
+use MediaWiki\Language\LocalisationCache;
 use MediaWiki\Maintenance\LoggedUpdateMaintenance;
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Settings\SettingsBuilder;
 use MediaWiki\WikiMap\WikiMap;
 use Wikimedia\Rdbms\DatabaseSqlite;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 /**
  * Maintenance script to run database schema updates.
@@ -71,20 +60,26 @@ class UpdateMediaWiki extends Maintenance {
 			'skip-config-validation',
 			'Skips checking whether the existing configuration is valid'
 		);
+		$this->addOption(
+			'log-applied',
+			'Output a message for each update that has already been applied before'
+		);
 	}
 
+	/** @inheritDoc */
 	public function getDbType() {
 		return Maintenance::DB_ADMIN;
 	}
 
 	public function setup() {
 		global $wgMessagesDirs;
-		// T206765: We need to load the installer i18n files as some of errors come installer/updater code
+		// T206765: We need to load the installer i18n files as some errors come from installer/updater code
 		// T310378: We have to ensure we do this before execute()
-		$wgMessagesDirs['MediaWikiInstaller'] = dirname( __DIR__ ) . '/includes/installer/i18n';
+		$wgMessagesDirs['MediaWikiInstaller'] = dirname( __DIR__ ) . '/includes/Installer/i18n';
 	}
 
 	public function execute() {
+		// phpcs:ignore MediaWiki.Usage.DeprecatedGlobalVariables.Deprecated$wgLang
 		global $wgLang, $wgAllowSchemaUpdates;
 
 		if ( !$wgAllowSchemaUpdates
@@ -131,7 +126,7 @@ class UpdateMediaWiki extends Maintenance {
 
 		// Check external dependencies are up to date
 		if ( !$this->hasOption( 'skip-external-dependencies' ) && !getenv( 'MW_SKIP_EXTERNAL_DEPENDENCIES' ) ) {
-			$composerLockUpToDate = $this->runChild( CheckComposerLockUpToDate::class );
+			$composerLockUpToDate = $this->createChild( CheckComposerLockUpToDate::class );
 			$composerLockUpToDate->execute();
 		} else {
 			$this->output(
@@ -167,7 +162,7 @@ class UpdateMediaWiki extends Maintenance {
 			$this->countDown( 5 );
 		}
 
-		$time1 = microtime( true );
+		$time1 = ConvertibleTimestamp::hrtime();
 
 		$shared = $this->hasOption( 'doshared' );
 
@@ -183,26 +178,31 @@ class UpdateMediaWiki extends Maintenance {
 		}
 
 		$updater = DatabaseUpdater::newForDB( $db, $shared, $this );
+		$updater->logApplied = $this->hasOption( 'log-applied' );
 
-		// Avoid upgrading from versions older than 1.35
-		// Using an implicit marker (rev_actor was introduced in 1.34)
+		// Avoid upgrading from versions older than 1.39
+		// Using an implicit marker (user_autocreate_serial was introduced in 1.39)
 		// TODO: Use an explicit marker
 		// See T259771
-		if ( !$updater->fieldExists( 'revision', 'rev_actor' ) ) {
+		if ( !$updater->tableExists( 'user_autocreate_serial' ) ) {
 			$this->fatalError(
-				"Can not upgrade from versions older than 1.35, please upgrade to that version or later first."
+				"Can not upgrade from versions older than 1.39, please upgrade to that version or later first."
 			);
 		}
 
 		$updater->doUpdates( $updates );
 
 		foreach ( $updater->getPostDatabaseUpdateMaintenance() as $maint ) {
-			$child = $this->runChild( $maint );
+			$child = $this->createChild( $maint );
 
-			// LoggedUpdateMaintenance is checking the updatelog itself
 			$isLoggedUpdate = $child instanceof LoggedUpdateMaintenance;
 
 			if ( !$isLoggedUpdate && $updater->updateRowExists( $maint ) ) {
+				$updater->outputApplied( "...Update '{$maint}' already logged as completed.\n" );
+				continue;
+			}
+			if ( $child instanceof LoggedUpdateMaintenance && $child->isAlreadyCompleted() ) {
+				$updater->outputApplied( "..." . $child->updateSkippedMessage() . "\n" );
 				continue;
 			}
 
@@ -211,14 +211,15 @@ class UpdateMediaWiki extends Maintenance {
 				$updater->insertUpdateRow( $maint );
 			}
 		}
+		$updater->outputAppliedSummary();
 
 		$updater->setFileAccess();
 
 		$updater->purgeCache();
 
-		$time2 = microtime( true );
+		$time2 = ConvertibleTimestamp::hrtime();
 
-		$timeDiff = $lang->formatTimePeriod( $time2 - $time1 );
+		$timeDiff = $lang->formatTimePeriod( ( $time2 - $time1 ) / 1e9 );
 		$this->output( "\nDone in $timeDiff.\n" );
 	}
 
@@ -261,7 +262,7 @@ class UpdateMediaWiki extends Maintenance {
 		parent::validateParamsAndArgs();
 	}
 
-	private function formatWarnings( array $warnings ) {
+	private function formatWarnings( array $warnings ): string {
 		$text = '';
 		foreach ( $warnings as $warning ) {
 			$warning = wordwrap( $warning, 75, "\n  " );

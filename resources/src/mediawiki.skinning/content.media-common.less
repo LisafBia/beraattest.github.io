@@ -48,7 +48,7 @@ figure[ typeof~='mw:File/Frameless' ] {
 		float: none;
 	}
 
-	/* Hide the caption for frameless and plain floated images */
+	// Hide the caption for frameless and plain floated images
 	> figcaption {
 		display: none;
 	}
@@ -138,12 +138,11 @@ figure[ typeof~='mw:File/Frame' ] {
 			margin: 3px;
 		}
 
-		/**
-		 * Broken media get a span instead.
-		 */
+		// Broken media get a span instead.
 		.mw-broken-media {
 			display: inline-block;
 			line-height: 1.6em;
+			/* stylelint-disable-next-line declaration-property-value-keyword-no-deprecated */
 			word-break: break-word;  // Same as in the figcaption
 			/* This is hardcoded in Linker::makeThumbLink2 for broken media */
 			width: 180px;
@@ -155,6 +154,9 @@ figure[ typeof~='mw:File/Frame' ] {
 	> figcaption {
 		display: table-caption;
 		caption-side: bottom;
+		// Needed because we use table-caption. We want the image caption to have the same background as
+		// the image frame, without having to set it separately in dark mode overrides.
+		background-color: inherit;
 		line-height: @line-height-thumbcaption;
 
 		/**
@@ -177,6 +179,7 @@ figure[ typeof~='mw:File/Frame' ] {
 		 * when calculating min-content intrinsic sizes."
 		 * From https://developer.mozilla.org/en-US/docs/Web/CSS/overflow-wrap
 		 */
+		/* stylelint-disable-next-line declaration-property-value-keyword-no-deprecated */
 		word-break: break-word;
 		text-align: start;
 

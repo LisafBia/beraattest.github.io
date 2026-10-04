@@ -3,20 +3,18 @@
 namespace MediaWiki\Tests\Integration\CommentFormatter;
 
 use LinkCacheTestTrait;
-use MediaWiki\Cache\LinkBatchFactory;
 use MediaWiki\CommentFormatter\CommentFormatter;
 use MediaWiki\CommentFormatter\CommentParser;
 use MediaWiki\CommentFormatter\CommentParserFactory;
 use MediaWiki\CommentStore\CommentStoreComment;
 use MediaWiki\Config\SiteConfiguration;
 use MediaWiki\Context\RequestContext;
-use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\FileRepo\RepoGroup;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Revision\MutableRevisionRecord;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Tests\Unit\DummyServicesTrait;
 use MediaWiki\Title\Title;
-use RepoGroup;
 
 /**
  * @group Database
@@ -36,7 +34,7 @@ class CommentParserTest extends \MediaWikiIntegrationTestCase {
 		return $repoGroup;
 	}
 
-	private function getParser() {
+	private function getParser(): CommentParser {
 		$services = $this->getServiceContainer();
 		return new CommentParser(
 			$services->getLinkRenderer(),
@@ -47,15 +45,14 @@ class CommentParserTest extends \MediaWikiIntegrationTestCase {
 			$services->getContentLanguage(),
 			$services->getTitleParser(),
 			$services->getNamespaceInfo(),
-			$services->getHookContainer()
+			$services->getHookContainer(),
+			$services->getLinkAlwaysKnownLookup(),
 		);
 	}
 
 	private function getFormatter() {
 		$parserFactory = $this->createNoOpMock( CommentParserFactory::class, [ 'create' ] );
-		$parserFactory->method( 'create' )->willReturnCallback( function () {
-			return $this->getParser();
-		} );
+		$parserFactory->method( 'create' )->willReturnCallback( $this->getParser( ... ) );
 		return new CommentFormatter( $parserFactory );
 	}
 
@@ -121,16 +118,16 @@ class CommentParserTest extends \MediaWikiIntegrationTestCase {
 				"/* autocomment */",
 			],
 			[
-				'<span class="autocomment"><a href="/wiki/Special:BlankPage#linkie.3F" title="Special:BlankPage">→<bdi dir="ltr">&#91;[linkie?]]</bdi></a></span>',
+				'<span class="autocomment"><a href="/wiki/Special:BlankPage#linkie.3F" title="Special:BlankPage">→<bdi dir="ltr">&#91;&#91;linkie?&#93;&#93;</bdi></a></span>',
 				"/* [[linkie?]] */",
 			],
 			[
-				'<span class="autocomment">: </span> // Edit via via',
+				'<span class="autocomment"><a href="/wiki/Special:BlankPage" title="Special:BlankPage">→<bdi dir="ltr">(top)</bdi></a>: </span> // Edit via via',
 				// Regression test for T222857
 				"/*  */ // Edit via via",
 			],
 			[
-				'<span class="autocomment">: </span> foobar',
+				'<span class="autocomment"><a href="/wiki/Special:BlankPage" title="Special:BlankPage">→<bdi dir="ltr">(top)</bdi></a>: </span> foobar',
 				// Regression test for T222857
 				"/**/ foobar",
 			],
@@ -173,8 +170,13 @@ class CommentParserTest extends \MediaWikiIntegrationTestCase {
 				null
 			],
 			[
-				'',
+				'<span class="autocomment"><a href="#">→<bdi dir="ltr">(top)</bdi></a></span>',
 				"/* */",
+				false, true
+			],
+			[
+				'<span class="autocomment"><a href="#top">→<bdi dir="ltr">top</bdi></a></span>',
+				"/* top */",
 				false, true
 			],
 			[
@@ -183,22 +185,22 @@ class CommentParserTest extends \MediaWikiIntegrationTestCase {
 				null
 			],
 			[
-				'<span class="autocomment">[[</span>',
+				'<span class="autocomment">&#91;&#91;</span>',
 				"/* [[ */",
 				false, true
 			],
 			[
-				'<span class="autocomment">[[</span>',
+				'<span class="autocomment">&#91;&#91;</span>',
 				"/* [[ */",
 				null
 			],
 			[
-				"foo <span class=\"autocomment\"><a href=\"#.23\">→<bdi dir=\"ltr\">&#91;[#_\t_]]</bdi></a></span>",
+				"foo <span class=\"autocomment\"><a href=\"#.23\">→<bdi dir=\"ltr\">&#91;&#91;#_\t_&#93;&#93;</bdi></a></span>",
 				"foo /* [[#_\t_]] */",
 				false, true
 			],
 			[
-				"foo <span class=\"autocomment\"><a href=\"#_.09\">#_\t_</a></span>",
+				"foo <span class=\"autocomment\">&#91;&#91;#_\t_&#93;&#93;</span>",
 				"foo /* [[#_\t_]] */",
 				null
 			],
@@ -248,6 +250,28 @@ class CommentParserTest extends \MediaWikiIntegrationTestCase {
 			[
 				'abc [[|]] def',
 				"abc [[|]] def",
+			],
+			// Links to '#' behave differently than autocomments /* */ linking to the top section (T423642),
+			// and differently from the same links in page wikitext (T19006)
+			[
+				'<a href="/wiki/">#</a> <a href="/wiki/">x</a>',
+				"[[#]] [[#|x]]",
+				false, true,
+			],
+			[
+				'<a href="/wiki/">#</a> <a href="/wiki/">x</a>',
+				"[[#]] [[#|x]]",
+				null, true,
+			],
+			[
+				'<a href="/wiki/Special:BlankPage" title="Special:BlankPage">#</a> <a href="/wiki/Special:BlankPage" title="Special:BlankPage">x</a>',
+				"[[#]] [[#|x]]",
+				false, false,
+			],
+			[
+				'<a href="/wiki/">#</a> <a href="/wiki/">x</a>',
+				"[[#]] [[#|x]]",
+				null, false,
 			],
 			[
 				'abc <a href="/w/index.php?title=Link&amp;action=edit&amp;redlink=1" class="new" title="Link (page does not exist)">link</a> def',
@@ -496,26 +520,17 @@ class CommentParserTest extends \MediaWikiIntegrationTestCase {
 		// to execute a query. This is a CommentParser responsibility since
 		// LinkBatch does not provide a transparent read-through cache.
 		// TODO: Generic $this->assertQueryCount() would do the job.
-		$dbProvider = $services->getConnectionProvider();
-		$linkBatchFactory = new LinkBatchFactory(
-			$services->getLinkCache(),
-			$services->getTitleFormatter(),
-			$services->getContentLanguage(),
-			$services->getGenderCache(),
-			$dbProvider,
-			$services->getLinksMigration(),
-			LoggerFactory::getInstance( 'LinkBatch' )
-		);
 		$parser = new CommentParser(
 			$services->getLinkRenderer(),
-			$linkBatchFactory,
+			$services->getLinkBatchFactory(),
 			$linkCache,
 			$this->getRepoGroup(),
 			$services->getContentLanguage(),
 			$services->getContentLanguage(),
 			$services->getTitleParser(),
 			$services->getNamespaceInfo(),
-			$services->getHookContainer()
+			$services->getHookContainer(),
+			$services->getLinkAlwaysKnownLookup(),
 		);
 		$result = $parser->finalize( [
 			$parser->preprocess( "[[$present]]" ),
@@ -536,7 +551,6 @@ class CommentParserTest extends \MediaWikiIntegrationTestCase {
 			$parser->preprocess( "[[interwiki:$present]] [[$present]]" )
 		);
 		$this->assertSame(
-			// phpcs:ignore Generic.Files.LineLength
 			"<a href=\"https://interwiki/$present\" class=\"extiw\" title=\"interwiki:$present\">interwiki:$present</a> <a href=\"/wiki/$present\" title=\"$present\">$present</a>",
 			$result
 		);

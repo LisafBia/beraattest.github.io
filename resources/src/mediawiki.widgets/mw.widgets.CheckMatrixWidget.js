@@ -21,9 +21,7 @@
 	 * @param {Object} [config.tooltipsHtml] Optional object mapping row labels to tooltips
 	 *  (as HTML). Takes precedence over text tooltips.
 	 */
-	mw.widgets.CheckMatrixWidget = function MWWCheckMatrixWidget( config ) {
-		config = config || {};
-
+	mw.widgets.CheckMatrixWidget = function MWWCheckMatrixWidget( config = {} ) {
 		// Parent constructor
 		mw.widgets.CheckMatrixWidget.super.call( this, config );
 		this.checkboxes = {};
@@ -110,12 +108,12 @@
 	mw.widgets.CheckMatrixWidget.prototype.isTagSelected = function ( tagName ) {
 		return (
 			// If tag is not forced off
-			this.forcedOff.indexOf( tagName ) === -1 &&
+			!this.forcedOff.includes( tagName ) &&
 			(
 				// If tag is in values
-				this.values.indexOf( tagName ) > -1 ||
+				this.values.includes( tagName ) ||
 				// If tag is forced on
-				this.forcedOn.indexOf( tagName ) > -1
+				this.forcedOn.includes( tagName )
 			)
 		);
 	};
@@ -131,8 +129,8 @@
 			// If the entire widget is disabled
 			this.isDisabled() ||
 			// If tag is forced off or forced on
-			this.forcedOff.indexOf( tagName ) > -1 ||
-			this.forcedOn.indexOf( tagName ) > -1
+			this.forcedOff.includes( tagName ) ||
+			this.forcedOn.includes( tagName )
 		);
 	};
 	/**

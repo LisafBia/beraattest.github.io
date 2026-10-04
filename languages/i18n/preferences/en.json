@@ -1,8 +1,6 @@
 {
 	"@metadata": {
-		"authors": [
-			"EpicPupper"
-		]
+		"authors": []
 	},
 	"preferences": "Preferences",
 	"preferences-summary": "",
@@ -24,6 +22,8 @@
 	"prefs-memberingroups": "{{GENDER:$2|Member}} of {{PLURAL:$1|group|groups}}:",
 	"prefs-memberingroups-type": "$1",
 	"group-membership-link-with-expiry": "$1 (until $2)",
+	"prefs-memberingroupsdisabled": "{{GENDER:$2|Disabled}} {{PLURAL:$1|group|groups}}:",
+	"prefs-memberingroupsdisabled-help": "{{GENDER:$2|You}} no longer meet [[$3|conditions]] for being member of {{PLURAL:$1|this group|these groups}} and therefore you cannot use rights granted by {{PLURAL:$1|it|them}}.",
 	"prefs-edits": "Number of edits:",
 	"prefs-registration": "Registration time:",
 	"prefs-registration-date-time": "$1",
@@ -45,6 +45,7 @@
 	"prefs-user-downloaddata-info": "My account data from this project",
 	"prefs-user-restoreprefs-label": "Reset settings:",
 	"prefs-user-restoreprefs-info": "Restore all default preferences (in all sections)",
+	"prefs-accountsecurity": "Account security",
 	"prefs-i18n": "Internationalisation",
 	"yourlanguage": "Language:",
 	"yourgender": "How do you prefer to be described?",
@@ -87,6 +88,7 @@
 	"emailauthenticated": "Your email address was confirmed on $2 at $3.",
 	"allowemail": "Allow other users to email me",
 	"email-allow-new-users-label": "Allow emails from brand-new users",
+	"prefs-help-email-allow-new-users": "Enabling this option will allow users who are not [[{{MediaWiki:grouppage-autoconfirmed}}|autoconfirmed]] to send you emails.",
 	"tog-ccmeonemails": "Send me copies of emails I send to other users",
 	"email-mutelist-label": "Prohibit these users from emailing me:",
 	"tog-enotifwatchlistpages": "Email me when a page or a file on my watchlist is changed",
@@ -129,6 +131,10 @@
 	"prefs-files": "Files",
 	"imagemaxsize": "Image size limit on file description pages:",
 	"thumbsize": "Thumbnail size:",
+	"thumbsize-small": "Small",
+	"thumbsize-regular": "Regular",
+	"thumbsize-large": "Large",
+	"thumbsize-help": "Some users may prefer thumbnails which are smaller or larger than normal. Regular size is $1 pixels.",
 	"prefs-diffs": "Diffs",
 	"tog-diffonly": "Don't show page content below diffs",
 	"tog-norollbackdiff": "Don't show diff after performing a rollback",
@@ -139,7 +145,7 @@
 	"underline-always": "Always",
 	"tog-showhiddencats": "Show hidden categories",
 	"tog-showrollbackconfirmation": "Show a confirmation prompt when clicking on a rollback link",
-	"tog-forcesafemode": "Always enable [[mw:Manual:Safemode|safe mode]]",
+	"tog-forcesafemode": "Always enable [[mw:Special:MyLanguage/Manual:Safemode|safe mode]]",
 	"prefs-help-forcesafemode": "Disable on-wiki scripts and stylesheets.",
 	"prefs-editing": "Editing",
 	"prefs-description-editing": "Customize how you make, track, and review edits.",
@@ -183,6 +189,8 @@
 	"prefs-description-watchlist": "Manage and personalize the list of pages you track.",
 	"prefs-editwatchlist": "Edit watchlist",
 	"prefs-editwatchlist-label": "Edit entries on your watchlist:",
+	"prefs-editwatchlistlabels-label": "Edit watchlist labels:",
+	"prefs-managewatchlistlabels": "View and manage your watchlist labels",
 	"prefs-editwatchlist-edit": "View and remove titles on your watchlist",
 	"prefs-editwatchlist-raw": "Edit raw watchlist",
 	"prefs-editwatchlist-clear": "Clear your watchlist",
@@ -197,6 +205,8 @@
 	"rcfilters-watchlist-preference-label": "Use non-JavaScript interface",
 	"rcfilters-watchlist-preference-help": "Loads [[{{#special:Watchlist}}|watchlist]] without filters search or highlighting functionality.",
 	"prefs-changeswatchlist": "Changes shown",
+	"tog-watchstar-expiry": "Default time period in watchlist for manually added pages:",
+	"tog-watch-expiry": "Default time period:",
 	"tog-watchlisthideminor": "Hide minor edits from the watchlist",
 	"tog-watchlisthidebots": "Hide bot edits from the watchlist",
 	"tog-watchlisthideown": "Hide my edits from the watchlist",
@@ -224,6 +234,7 @@
 	"search-thumbnail-extra-namespaces-label": "Show thumbnails in Special:Search on Desktop",
 	"search-thumbnail-extra-namespaces-message": "Displays thumbnails for $1 {{PLURAL:$2|namespace|namespaces}} results on the {{#special:search}} page",
 	"prefs-advancedsearchoptions": "Advanced options",
+	"prefs-misc": "Misc",
 	"prefs-reset-intro": "You can use this page to reset your preferences to the site defaults.\nThis cannot be undone.",
 	"prefs-reset-confirm": "Yes, I want to reset my preferences.",
 	"restoreprefs": "Restore all default settings"

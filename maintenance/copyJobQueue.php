@@ -2,25 +2,12 @@
 /**
  * Copy all jobs from one job queue system to another.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
+use MediaWiki\JobQueue\JobQueue;
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\WikiMap\WikiMap;
 
@@ -76,7 +63,7 @@ class CopyJobQueue extends Maintenance {
 		}
 	}
 
-	protected function copyJobs( JobQueue $src, JobQueue $dst, $jobs ) {
+	protected function copyJobs( JobQueue $src, JobQueue $dst, iterable $jobs ): array {
 		$total = 0;
 		$totalOK = 0;
 		$batch = [];

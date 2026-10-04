@@ -1,16 +1,20 @@
 <?php
+declare( strict_types = 1 );
 
 namespace MediaWiki\OutputTransform;
 
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Parser\ParserOptions;
 use MediaWiki\Parser\ParserOutput;
 use MediaWiki\Parser\Parsoid\PageBundleParserOutputConverter;
 use MediaWiki\Tests\OutputTransform\DummyDOMTransformStage;
+use MediaWiki\Title\TitleValue;
 use MediaWikiCoversValidator;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
-use Wikimedia\Parsoid\Core\PageBundle;
+use Wikimedia\Parsoid\Core\HtmlPageBundle;
+use Wikimedia\Parsoid\Mocks\MockSiteConfig;
 
 class ContentDOMTransformStageTest extends TestCase {
 	use MediaWikiCoversValidator;
@@ -18,7 +22,8 @@ class ContentDOMTransformStageTest extends TestCase {
 	public function createStage(): ContentDOMTransformStage {
 		return new DummyDOMTransformStage(
 			new ServiceOptions( [] ),
-			new NullLogger()
+			new NullLogger(),
+			true
 		);
 	}
 
@@ -29,18 +34,23 @@ class ContentDOMTransformStageTest extends TestCase {
 	 */
 	public function testTransform() {
 		$html = "<div>some output</div>";
-		$po = new ParserOutput( $html );
-		PageBundleParserOutputConverter::applyPageBundleDataToParserOutput( new PageBundle( $html ), $po );
+		$po = PageBundleParserOutputConverter::parserOutputFromPageBundle(
+			new HtmlPageBundle( html: $html ),
+			isParsoidContent: true,
+			title: new TitleValue( NS_MAIN, 'Test_Page' ),
+			siteConfig: new MockSiteConfig( [] ),
+		);
 		$transform = $this->createStage();
-		$options = [ 'isParsoidContent' => true ];
-		$po = $transform->transform( $po, null, $options );
+		$popts = ParserOptions::newFromAnon();
+		$options = [];
+		$this->assertTrue( $po->getContentHolder()->isParsoidContent() );
+		$po = $transform->transform( $po, $popts, $options );
 		$json = MediaWikiServices::getInstance()->getJsonCodec()->serialize( $po );
-		self::assertStringContainsString( "parsoid-page-bundle", $json );
+		self::assertStringContainsString( "pageBundle", $json );
 	}
 
 	/**
-	 * @covers \MediaWiki\OutputTransform\ContentDOMTransformStage::parsoidTransform
-	 * @covers \MediaWiki\OutputTransform\ContentDOMTransformStage::legacyTransform
+	 * @covers \MediaWiki\OutputTransform\ContentDOMTransformStage::transform
 	 */
 	public function testTransformOption() {
 		$html = "<div>some output</div>";
@@ -48,18 +58,24 @@ class ContentDOMTransformStageTest extends TestCase {
 		$transform = $this->createStage();
 
 		// Legacy, should roundtrip the input
-		$options = [ 'isParsoidContent' => false ];
-		$po = $transform->transform( $po, null, $options );
+		$popts = ParserOptions::newFromAnon();
+		$options = [];
+		$this->assertFalse( $po->getContentHolder()->isParsoidContent() );
+		$po = $transform->transform( $po, $popts, $options );
 		$text = $po->getContentHolderText();
 		$this->assertEquals( $html, $text );
 
-		// Parsoid, input is sullied with rich attributes
-		$options = [ 'isParsoidContent' => true ];
-		$po = $transform->transform( $po, null, $options );
+		// Parsoid, also roundtrips the input since document creation marks it as new
+		$po = PageBundleParserOutputConverter::parserOutputFromPageBundle(
+			new HtmlPageBundle( html: $html ),
+			isParsoidContent: true,
+			title: new TitleValue( NS_MAIN, 'Test_Page' ),
+			siteConfig: new MockSiteConfig( [] ),
+		);
+		$this->assertTrue( $po->getContentHolder()->isParsoidContent() );
+		$po = $transform->transform( $po, $popts, $options );
 		$text = $po->getContentHolderText();
-		$this->assertNotEquals( $html, $text );
-		// Without PageBundle data, attributes are inlined
-		self::assertStringContainsString( "data-parsoid", $text );
+		$this->assertEquals( $html, $text );
 	}
 
 }

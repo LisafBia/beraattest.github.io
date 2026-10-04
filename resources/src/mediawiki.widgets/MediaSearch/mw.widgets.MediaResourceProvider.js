@@ -18,9 +18,7 @@
 	 * @param {Object} [config] Configuration options
 	 * @param {string} [config.scriptDirUrl] The url of the API script
 	 */
-	mw.widgets.MediaResourceProvider = function MwWidgetsMediaResourceProvider( apiurl, config ) {
-		config = config || {};
-
+	mw.widgets.MediaResourceProvider = function MwWidgetsMediaResourceProvider( apiurl, config = {} ) {
 		// Parent constructor
 		mw.widgets.MediaResourceProvider.super.call( this, apiurl, config );
 
@@ -243,7 +241,7 @@
 	 */
 	mw.widgets.MediaResourceProvider.prototype.getStandardWidth = function () {
 		return ( this.thumbSizes && this.thumbSizes[ this.thumbSizes.length - 1 ] ) ||
-			( this.imageSizes && this.imageSizes[ 0 ] ) ||
+			( this.imageSizes && this.imageSizes[ 0 ] && this.imageSizes[ 0 ].width ) ||
 			// Fall back on a number
 			300;
 	};

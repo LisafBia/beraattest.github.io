@@ -45,7 +45,7 @@ class LimitBatch {
 		}
 		$this->queueOp(
 			$condName,
-			new LocalEntityKey( array_merge( [ $condName ], $components ) ),
+			new LocalEntityKey( [ $condName, ...$components ] ),
 			$amount
 		);
 		return $this;
@@ -66,13 +66,13 @@ class LimitBatch {
 		}
 		$this->queueOp(
 			$condName,
-			new GlobalEntityKey( array_merge( [ $condName ], $components ) ),
+			new GlobalEntityKey( [ $condName, ...$components ] ),
 			$amount
 		);
 		return $this;
 	}
 
-	private function queueOp( $type, $entity, $amount ) {
+	private function queueOp( string $type, ?EntityKey $entity, ?int $amount ) {
 		$amount ??= $this->defaultAmount;
 		if ( isset( $this->operations[$type] ) ) {
 			throw new WRStatsError( 'Cannot queue multiple actions of the same type, ' .

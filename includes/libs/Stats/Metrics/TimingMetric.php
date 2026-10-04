@@ -1,19 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -23,6 +10,7 @@ namespace Wikimedia\Stats\Metrics;
 
 use Wikimedia\Stats\Exceptions\IllegalOperationException;
 use Wikimedia\Stats\Sample;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 /**
  * Timing Metric Implementation
@@ -43,39 +31,127 @@ class TimingMetric implements MetricInterface {
 	 */
 	private const TYPE_INDICATOR = "ms";
 
-	/** @var float|null */
 	private ?float $startTime = null;
 
 	/**
-	 * Starts a timer.
+	 * Start the timer.
 	 *
-	 * @return void
+	 * Example:
+	 *
+	 * ```php
+	 * $timer = StatsFactory->getTiming( 'example_seconds' )
+	 *     ->setLabel( 'foo', 'bar' )
+	 *     ->start();
+	 * # work to be measured...
+	 * $timer->stop();
+	 * ```
+	 *
+	 * Example with an extra label informed by the work:
+	 *
+	 * ```php
+	 * $timer = StatsFactory->getTiming( 'example_seconds' )
+	 *     ->start();
+	 * # work to be measured...
+	 * $timer
+	 *     ->setLabel( 'status', $status->isOK() ? 'ok' : 'error' )
+	 *     ->stop();
+	 * ```
+	 *
+	 * @return RunningTimer
 	 */
-	public function start(): void {
-		$this->startTime = hrtime( true );
+	public function start() {
+		$this->startTime = ConvertibleTimestamp::hrtime();
+		return new RunningTimer( $this->startTime, $this, $this->baseMetric->getLabels() );
 	}
 
 	/**
-	 * Stops a running timer.
+	 * Stop the running timer.
 	 *
-	 * @return void
+	 * @deprecated since 1.45 Call RunningTimer::stop on the object returned by start() instead.
 	 */
 	public function stop(): void {
 		if ( $this->startTime === null ) {
-			trigger_error( "Stats: stop() called before start() for metric '{$this->getName()}'", E_USER_WARNING );
+			trigger_error( "Stats: ({$this->getName()}) stop() called before start()", E_USER_WARNING );
 			return;
 		}
-		$this->observeNanoseconds( hrtime( true ) - $this->startTime );
+
+		trigger_error( 'Use of shared timer is deprecated. Use the returned start object instead.', E_USER_DEPRECATED );
+		$this->observeNanoseconds( ConvertibleTimestamp::hrtime() - $this->startTime );
 		$this->startTime = null;
 	}
 
 	/**
-	 * Records a previously calculated observation in milliseconds.
+	 * Record a previously calculated observation in nanoseconds.
 	 *
+	 * It is recommended to use TimingMetric::start() and RunningTimer::stop() instead.
+	 *
+	 * Only measure latency yourself if you also need the duration value elsewhere.
+	 *
+	 * Example:
+	 *
+	 * ```php
+	 * $startTime = ConvertibleTimestamp::hrtime( true );
+	 * # work to be measured...
+	 * $durationNano = ConvertibleTimestamp::hrtime( true ) - $startTime;
+	 * $metric->observeNanoseconds( $durationNano );
+	 *
+	 * $durationMs = $durationNano / 1e6;
+	 * $durationSec = $durationNano / 1e9;
+	 * ```
+	 *
+	 * @param float $nanoseconds
+	 * @return void
+	 * @since 1.43
+	 */
+	public function observeNanoseconds( float $nanoseconds ): void {
+		$this->addSample( $nanoseconds * 1e-6 );
+	}
+
+	/**
+	 * Record a previously calculated observation in seconds.
+	 *
+	 * This method is provided to ease recording of externally-generated time values.
+	 * For example, when a service returns a delta in seconds to you, and you are not
+	 * measuring or multiplying this value yourself.
+	 *
+	 * To instrument your own code, it is recommended to use TimingMetric::start()
+	 * and RunningTimer::stop() instead. Or, if measuring by hand, use hrtime()
+	 * with observeNanoseconds() to guarantee a monotonic clock and not a wall-clock.
+	 *
+	 * Do not measure latency with time() or microtime(), per T245464.
+	 *
+	 * NOTE: If you previously used observeSeconds to store non-time values in a histogram,
+	 * such as kilobytes or other unrelated quantities, use StatsFactory::getHistogram
+	 * instead (T348796, T364240, T383208).
+	 *
+	 * @param float $seconds
+	 * @return void
+	 * @since 1.43
+	 */
+	public function observeSeconds( float $seconds ): void {
+		$this->addSample( $seconds * 1000 );
+	}
+
+	/**
+	 * Record a previously calculated observation in milliseconds.
+	 *
+	 * NOTE: You MUST pass values converted to milliseconds.
+	 *
+	 * This method is discouraged in new code, because PHP does not measure
+	 * time in milliseconds. It will be less error-prone if you use start()
+	 * and stop(), or pass values from hrtime() directly to observeNanoseconds()
+	 * without manual multiplication to another unit.
+	 *
+	 * @deprecated since 1.45 Use TimingMetric::start instead, or switch to hrtime() and
+	 * use TimingMetric::observeNanoseconds.
 	 * @param float $milliseconds
 	 * @return void
 	 */
 	public function observe( float $milliseconds ): void {
+		$this->addSample( $milliseconds );
+	}
+
+	private function addSample( float $milliseconds ): void {
 		foreach ( $this->baseMetric->getStatsdNamespaces() as $namespace ) {
 			$this->baseMetric->getStatsdDataFactory()->timing( $namespace, $milliseconds );
 		}
@@ -84,43 +160,8 @@ class TimingMetric implements MetricInterface {
 			$this->baseMetric->addSample( new Sample( $this->baseMetric->getLabelValues(), $milliseconds ) );
 		} catch ( IllegalOperationException $ex ) {
 			// Log the condition and give the caller something that will absorb calls.
-			trigger_error( $ex->getMessage(), E_USER_WARNING );
+			trigger_error( "Stats: ({$this->getName()}): {$ex->getMessage()}", E_USER_WARNING );
 		}
-	}
-
-	/**
-	 * Record a previously calculated observation in seconds.
-	 *
-	 * Common usage:
-	 *  ```php
-	 *  $startTime = microtime( true )
-	 *  # work to be measured...
-	 *  $metric->observeSeconds( microtime( true ) - $startTime )
-	 *  ```
-	 *
-	 * @param float $seconds
-	 * @return void
-	 * @since 1.43
-	 */
-	public function observeSeconds( float $seconds ): void {
-		$this->observe( $seconds * 1000 );
-	}
-
-	/**
-	 * Record a previously calculated observation in nanoseconds.
-	 *
-	 *  Common usage:
-	 *  ```php
-	 *  $startTime = hrtime( true )
-	 *  # work to be measured...
-	 *  $metric->observeNanoseconds( hrtime( true ) - $startTime )
-	 *  ```
-	 * @param float $nanoseconds
-	 * @return void
-	 * @since 1.43
-	 */
-	public function observeNanoseconds( float $nanoseconds ): void {
-		$this->observe( $nanoseconds * 1e-6 );
 	}
 
 	/** @inheritDoc */

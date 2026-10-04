@@ -1,31 +1,16 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @author Roan Kattouw
  */
 
 namespace MediaWiki\ResourceLoader;
 
-use DOMDocument;
-use DOMElement;
-use DOMNode;
 use InvalidArgumentException;
-use Wikimedia\RemexHtml\DOM\DOMBuilder;
+use Wikimedia\Parsoid\DOM\Element;
+use Wikimedia\Parsoid\Utils\DOMCompat;
+use Wikimedia\Parsoid\Utils\DOMUtils;
 use Wikimedia\RemexHtml\HTMLData;
 use Wikimedia\RemexHtml\Serializer\HtmlFormatter;
 use Wikimedia\RemexHtml\Serializer\Serializer;
@@ -34,13 +19,12 @@ use Wikimedia\RemexHtml\Tokenizer\Attributes;
 use Wikimedia\RemexHtml\Tokenizer\Tokenizer;
 use Wikimedia\RemexHtml\TreeBuilder\Dispatcher;
 use Wikimedia\RemexHtml\TreeBuilder\TreeBuilder;
-use Wikimedia\Zest\Zest;
 
 /**
  * Parser for Vue single file components (.vue files). See parse() for usage.
  *
  * @ingroup ResourceLoader
- * @internal For use within FileModule.
+ * @internal
  */
 class VueComponentParser {
 	/**
@@ -62,16 +46,17 @@ class VueComponentParser {
 	 * @throws InvalidArgumentException If the input is invalid
 	 */
 	public function parse( string $html, array $options = [] ): array {
-		$dom = $this->parseHTML( $html );
-		// Remex wraps everything in <html><head>, unwrap that
-		$head = Zest::getElementsByTagName( $dom, 'head' )[ 0 ];
+		// Ensure that <script>,<template>,etc tags go into the <body>, not
+		// the <head>
+		$doc = DOMUtils::parseHTML( "<body>$html" );
+		$body = DOMCompat::getBody( $doc );
 
 		// Find the <script>, <template> and <style> tags. They can appear in any order, but they
 		// must be at the top level, and there can only be one of each.
-		if ( !$head ) {
-			throw new InvalidArgumentException( 'Parsed DOM did not contain a <head> tag' );
+		if ( !$body ) {
+			throw new InvalidArgumentException( 'Parsed DOM did not contain a <body> tag' );
 		}
-		$nodes = $this->findUniqueTags( $head, [ 'script', 'template', 'style' ] );
+		$nodes = $this->findUniqueTags( $body, [ 'script', 'template', 'style' ] );
 
 		// Throw an error if we didn't find a <script> or <template> tag. <style> is optional.
 		foreach ( [ 'script', 'template' ] as $requiredTag ) {
@@ -90,7 +75,7 @@ class VueComponentParser {
 		$template = $this->getTemplateHtml( $html, $options['minifyTemplate'] ?? false );
 
 		return [
-			'script' => trim( $nodes['script']->nodeValue ?? '' ),
+			'script' => trim( $nodes['script']->textContent ),
 			'template' => $template,
 			'style' => $styleData ? $styleData['style'] : null,
 			'styleLang' => $styleData ? $styleData['lang'] : null
@@ -98,31 +83,19 @@ class VueComponentParser {
 	}
 
 	/**
-	 * Parse HTML to DOM using RemexHtml
-	 * @param string $html
-	 * @return DOMDocument
-	 */
-	private function parseHTML( $html ): DOMDocument {
-		$domBuilder = new DOMBuilder( [ 'suppressHtmlNamespace' => true ] );
-		$treeBuilder = new TreeBuilder( $domBuilder, [ 'ignoreErrors' => true ] );
-		$tokenizer = new Tokenizer( new Dispatcher( $treeBuilder ), $html, [ 'ignoreErrors' => true ] );
-		$tokenizer->execute();
-		// @phan-suppress-next-line PhanTypeMismatchReturnSuperType
-		return $domBuilder->getFragment();
-	}
-
-	/**
 	 * Find occurrences of specified tags in a DOM node, expecting at most one occurrence of each.
 	 * This method only looks at the top-level children of $rootNode, it doesn't descend into them.
 	 *
-	 * @param DOMNode $rootNode Node whose children to look at
+	 * @param Element $rootNode Node whose children to look at
 	 * @param string[] $tagNames Tag names to look for (must be all lowercase)
-	 * @return DOMElement[] Associative arrays whose keys are tag names and values are DOM nodes
+	 * @return Element[] Associative arrays whose keys are tag names and values are DOM nodes
 	 */
-	private function findUniqueTags( DOMNode $rootNode, array $tagNames ): array {
+	private function findUniqueTags( Element $rootNode, array $tagNames ): array {
 		$nodes = [];
-		foreach ( $rootNode->childNodes as $node ) {
-			$tagName = strtolower( $node->nodeName );
+		for ( $node = DOMCompat::getFirstElementChild( $rootNode );
+			 $node !== null;
+			 $node = DOMCompat::getNextElementSibling( $node ) ) {
+			$tagName = DOMUtils::nodeName( $node );
 			if ( in_array( $tagName, $tagNames ) ) {
 				if ( isset( $nodes[ $tagName ] ) ) {
 					throw new InvalidArgumentException( "More than one <$tagName> tag found" );
@@ -135,33 +108,34 @@ class VueComponentParser {
 
 	/**
 	 * Verify that a given node only has a given set of attributes, and no others.
-	 * @param DOMNode $node Node to check
-	 * @param array $allowedAttributes Attributes the node is allowed to have
+	 * @param Element $node Node to check
+	 * @param list<string> $allowedAttributes Attributes the node is allowed to have
 	 * @throws InvalidArgumentException If the node has an attribute it's not allowed to have
 	 */
-	private function validateAttributes( DOMNode $node, array $allowedAttributes ): void {
+	private function validateAttributes( Element $node, array $allowedAttributes ): void {
 		if ( $allowedAttributes ) {
-			foreach ( $node->attributes as $attr ) {
-				if ( !in_array( $attr->name, $allowedAttributes ) ) {
-					throw new InvalidArgumentException( "<{$node->nodeName}> may not have the " .
-						"{$attr->name} attribute" );
+			foreach ( DOMCompat::attributes( $node ) as $name => $value ) {
+				if ( !in_array( $name, $allowedAttributes ) ) {
+					$nodeName = DOMUtils::nodeName( $node );
+					throw new InvalidArgumentException( "<{$nodeName}> may not have the " .
+						"{$name} attribute" );
 				}
 			}
-		} elseif ( $node->attributes->length > 0 ) {
-			throw new InvalidArgumentException( "<{$node->nodeName}> may not have any attributes" );
+		} elseif ( count( DOMCompat::attributes( $node ) ) > 0 ) {
+			$nodeName = DOMUtils::nodeName( $node );
+			throw new InvalidArgumentException( "<{$nodeName}> may not have any attributes" );
 		}
 	}
 
 	/**
 	 * Get the contents and language of the <style> tag. The language can be 'css' or 'less'.
-	 * @param DOMElement $styleNode The <style> tag.
+	 * @param Element $styleNode The <style> tag.
 	 * @return array [ 'style' => string, 'lang' => string ]
 	 * @throws InvalidArgumentException If an invalid language is used, or if the 'scoped' attribute is set.
 	 */
-	private function getStyleAndLang( DOMElement $styleNode ): array {
-		$style = trim( $styleNode->nodeValue ?? '' );
-		$styleLang = $styleNode->hasAttribute( 'lang' ) ?
-			$styleNode->getAttribute( 'lang' ) : 'css';
+	private function getStyleAndLang( Element $styleNode ): array {
+		$style = trim( $styleNode->textContent );
+		$styleLang = DOMCompat::getAttribute( $styleNode, 'lang' ) ?? 'css';
 		if ( $styleLang !== 'css' && $styleLang !== 'less' ) {
 			throw new InvalidArgumentException( "<style lang=\"$styleLang\"> is invalid," .
 				" lang must be \"css\" or \"less\"" );
@@ -173,7 +147,7 @@ class VueComponentParser {
 	}
 
 	/**
-	 * Get the HTML contents of the <template> tag, optionally minifed.
+	 * Get the HTML contents of the <template> tag, optionally minified.
 	 *
 	 * To work around a bug in PHP's DOMDocument where attributes like @click get mangled,
 	 * we re-parse the entire file using a Remex parse+serialize pipeline, with a custom dispatcher
@@ -184,7 +158,7 @@ class VueComponentParser {
 	 * @param bool $minify Whether to minify the output (remove comments, strip whitespace)
 	 * @return string HTML contents of the template tag
 	 */
-	private function getTemplateHtml( $html, $minify ) {
+	private function getTemplateHtml( string $html, bool $minify ): string {
 		$serializer = new Serializer( $this->newTemplateFormatter( $minify ) );
 		$tokenizer = new Tokenizer(
 			$this->newFilteringDispatcher(
@@ -203,21 +177,22 @@ class VueComponentParser {
 	 * it strips the <!doctype html> tag).
 	 *
 	 * @param bool $minify If true, remove comments and strip whitespace
-	 * @return HtmlFormatter
 	 */
-	private function newTemplateFormatter( $minify ) {
+	private function newTemplateFormatter( bool $minify ): HtmlFormatter {
 		return new class( $minify ) extends HtmlFormatter {
-			private $minify;
+			private bool $minify;
 
-			public function __construct( $minify ) {
+			public function __construct( bool $minify ) {
 				$this->minify = $minify;
 			}
 
+			/** @inheritDoc */
 			public function startDocument( $fragmentNamespace, $fragmentName ) {
 				// Remove <!doctype html>
 				return '';
 			}
 
+			/** @inheritDoc */
 			public function comment( SerializerNode $parent, $text ) {
 				if ( $this->minify ) {
 					// Remove all comments
@@ -226,6 +201,7 @@ class VueComponentParser {
 				return parent::comment( $parent, $text );
 			}
 
+			/** @inheritDoc */
 			public function characters( SerializerNode $parent, $text, $start, $length ) {
 				if (
 					$this->minify && (
@@ -243,6 +219,7 @@ class VueComponentParser {
 				return parent::characters( $parent, $text, $start, $length );
 			}
 
+			/** @inheritDoc */
 			public function element( SerializerNode $parent, SerializerNode $node, $contents ) {
 				if (
 					$this->minify && (
@@ -266,19 +243,19 @@ class VueComponentParser {
 	 *
 	 * @param TreeBuilder $treeBuilder
 	 * @param string $nodeName Tag name to filter for
-	 * @return Dispatcher
 	 */
-	private function newFilteringDispatcher( TreeBuilder $treeBuilder, $nodeName ) {
+	private function newFilteringDispatcher( TreeBuilder $treeBuilder, string $nodeName ): Dispatcher {
 		return new class( $treeBuilder, $nodeName ) extends Dispatcher {
-			private $nodeName;
-			private $nodeDepth = 0;
-			private $seenTag = false;
+			private string $nodeName;
+			private int $nodeDepth = 0;
+			private bool $seenTag = false;
 
-			public function __construct( TreeBuilder $treeBuilder, $nodeName ) {
+			public function __construct( TreeBuilder $treeBuilder, string $nodeName ) {
 				$this->nodeName = $nodeName;
 				parent::__construct( $treeBuilder );
 			}
 
+			/** @inheritDoc */
 			public function startTag( $name, Attributes $attrs, $selfClose, $sourceStart, $sourceLength ) {
 				if ( $this->nodeDepth ) {
 					parent::startTag( $name, $attrs, $selfClose, $sourceStart, $sourceLength );
@@ -294,6 +271,7 @@ class VueComponentParser {
 				}
 			}
 
+			/** @inheritDoc */
 			public function endTag( $name, $sourceStart, $sourceLength ) {
 				if ( $name === $this->nodeName ) {
 					$this->nodeDepth--;
@@ -303,12 +281,14 @@ class VueComponentParser {
 				}
 			}
 
+			/** @inheritDoc */
 			public function characters( $text, $start, $length, $sourceStart, $sourceLength ) {
 				if ( $this->nodeDepth ) {
 					parent::characters( $text, $start, $length, $sourceStart, $sourceLength );
 				}
 			}
 
+			/** @inheritDoc */
 			public function comment( $text, $sourceStart, $sourceLength ) {
 				if ( $this->nodeDepth ) {
 					parent::comment( $text, $sourceStart, $sourceLength );

@@ -3,13 +3,14 @@
 namespace MediaWiki\Tests\Unit\Permissions;
 
 use DatabaseTestHelper;
-use MediaWiki\Cache\LinkCache;
 use MediaWiki\CommentStore\CommentStore;
 use MediaWiki\Config\ServiceOptions;
-use MediaWiki\DAO\WikiAwareEntity;
+use MediaWiki\Deferred\LinksUpdate\ImageLinksTable;
+use MediaWiki\Deferred\LinksUpdate\TemplateLinksTable;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\Linker\LinksMigration;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Page\LinkCache;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageIdentityValue;
 use MediaWiki\Page\PageReferenceValue;
@@ -29,7 +30,9 @@ use Wikimedia\Rdbms\DeleteQueryBuilder;
 use Wikimedia\Rdbms\FakeResultWrapper;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\ILoadBalancer;
+use Wikimedia\Rdbms\LBFactory;
 use Wikimedia\Rdbms\SelectQueryBuilder;
+use Wikimedia\Rdbms\UnionQueryBuilder;
 
 /**
  * @covers \MediaWiki\Permissions\RestrictionStore
@@ -49,9 +52,9 @@ class RestrictionStoreTest extends MediaWikiUnitTestCase {
 	 *       'select' => [ callback, -1 ], # may be called 0 or more times
 	 *     ],
 	 *   ]
-	 * @return ILoadBalancer
+	 * @return LBFactory
 	 */
-	private function newMockLoadBalancer( array $expectedCalls = [] ): ILoadBalancer {
+	private function newMockLBFactory( array $expectedCalls = [] ): LBFactory {
 		if ( !isset( $expectedCalls[DB_REPLICA] ) ) {
 			$expectedCalls[DB_REPLICA] = [];
 		}
@@ -66,7 +69,7 @@ class RestrictionStoreTest extends MediaWikiUnitTestCase {
 		foreach ( $expectedCalls as $index => $calls ) {
 			$dbs[$index] = $this->createNoOpMock(
 				IDatabase::class,
-				array_merge( array_keys( $calls ), [ 'newSelectQueryBuilder', 'newDeleteQueryBuilder' ] )
+				array_merge( array_keys( $calls ), [ 'newSelectQueryBuilder', 'newDeleteQueryBuilder', 'newUnionQueryBuilder' ] )
 			);
 			foreach ( $calls as $method => $callback ) {
 				$count = 1;
@@ -82,13 +85,18 @@ class RestrictionStoreTest extends MediaWikiUnitTestCase {
 					return new SelectQueryBuilder( $dbs[$index] );
 				} );
 			$dbs[$index]
+				->method( 'newUnionQueryBuilder' )
+				->willReturnCallback( static function () use ( $dbs, $index ) {
+					return new UnionQueryBuilder( $dbs[$index] );
+				} );
+			$dbs[$index]
 				->method( 'newDeleteQueryBuilder' )
 				->willReturnCallback( static function () use ( $dbs, $index ) {
 					return new DeleteQueryBuilder( $dbs[$index] );
 				} );
 		}
 
-		$lb = $this->createMock( ILoadBalancer::class, [ 'getConnection' ] );
+		$lb = $this->createMock( ILoadBalancer::class );
 		$lb->method( 'getConnection' )->willReturnCallback(
 			function ( int $index ) use ( $dbs ): IDatabase {
 				$this->assertArrayHasKey( $index, $dbs );
@@ -96,7 +104,20 @@ class RestrictionStoreTest extends MediaWikiUnitTestCase {
 			}
 		);
 
-		return $lb;
+		$lbFactory = $this->createMock( LBFactory::class );
+		$lbFactory->method( 'getReplicaDatabase' )->willReturnCallback(
+			static function ( $domain = null ) use ( $lb ) {
+				return $lb->getConnection( DB_REPLICA, [], $domain );
+			}
+		);
+		$lbFactory->method( 'getPrimaryDatabase' )->willReturnCallback(
+			static function ( $domain = null ) use ( $lb ) {
+				return $lb->getConnection( DB_PRIMARY, [], $domain );
+			}
+		);
+		$lbFactory->method( 'getMainLB' )->willReturn( $lb );
+
+		return $lbFactory;
 	}
 
 	private function newRestrictionStore( array $options = [] ): RestrictionStore {
@@ -106,9 +127,13 @@ class RestrictionStoreTest extends MediaWikiUnitTestCase {
 				MainConfigNames::RestrictionLevels => [ '', 'autoconfirmed', 'sysop' ],
 				MainConfigNames::RestrictionTypes => self::DEFAULT_RESTRICTION_TYPES,
 				MainConfigNames::SemiprotectedRestrictionLevels => [ 'autoconfirmed' ],
+				MainConfigNames::VirtualDomainsMapping => [
+					TemplateLinksTable::VIRTUAL_DOMAIN => [ 'db' => false ],
+					ImageLinksTable::VIRTUAL_DOMAIN => [ 'db' => false ],
+				],
 			] ),
 			$this->createNoOpMock( WANObjectCache::class ),
-			$this->newMockLoadBalancer( $options['db'] ?? [] ),
+			$this->newMockLBFactory( $options['db'] ?? [] ),
 			// @todo test that these calls work correctly
 			$this->createNoOpMock( LinkCache::class, [ 'addLinkObj', 'getGoodLinkFieldObj' ] ),
 			$this->createNoOpMock( LinksMigration::class, [ 'getLinksConditions' ] ),
@@ -205,8 +230,8 @@ class RestrictionStoreTest extends MediaWikiUnitTestCase {
 		$this->assertSame( $expected, $obj->getRestrictions( $page, $action ) );
 	}
 
-	public function provideGetRestrictions(): array {
-		$all = $this->provideGetAllRestrictions();
+	public static function provideGetRestrictions(): array {
+		$all = self::provideGetAllRestrictions();
 		$ret = [];
 
 		foreach ( $all as $name => $arr ) {
@@ -648,7 +673,7 @@ class RestrictionStoreTest extends MediaWikiUnitTestCase {
 				true,
 				[ (object)[ 'pr_type' => 'edit', 'pr_level' => 'custom',
 					'pr_expiry' => 'infinity', 'pr_cascade' => '0' ], ],
-				[ 'action' => 'edit', 'RestrictionLevels' =>
+				[ 'action' => 'edit', MainConfigNames::RestrictionLevels =>
 					[ '', 'autoconfirmed', 'sysop', 'custom' ] ],
 			],
 
@@ -710,7 +735,7 @@ class RestrictionStoreTest extends MediaWikiUnitTestCase {
 		$this->assertSame( $expected, $obj->listApplicableRestrictionTypes( $page ) );
 	}
 
-	public function provideListApplicableRestrictionTypes(): array {
+	public static function provideListApplicableRestrictionTypes(): array {
 		$expandedRestrictions = array_merge( self::DEFAULT_RESTRICTION_TYPES, [ 'liquify' ] );
 		return [
 			'Special page' => [
@@ -801,15 +826,15 @@ class RestrictionStoreTest extends MediaWikiUnitTestCase {
 			'Hook not run for special page' => [
 				[],
 				self::newImproperPageIdentity( NS_SPECIAL, 'X' ),
-				[ 'hookFn' => function () {
-					$this->fail( 'Should be unreached' );
+				[ 'hookFn' => static function () {
+					Assert::fail( 'Should be unreached' );
 				} ],
 			],
 			'Hook not run for media page' => [
 				[],
 				self::newImproperPageIdentity( NS_MEDIA, 'X' ),
-				[ 'hookFn' => function () {
-					$this->fail( 'Should be unreached' );
+				[ 'hookFn' => static function () {
+					Assert::fail( 'Should be unreached' );
 				} ],
 			],
 		];
@@ -960,49 +985,79 @@ class RestrictionStoreTest extends MediaWikiUnitTestCase {
 	}
 
 	public function testGetCascadeProtectionSources() {
-		$obj = $this->newRestrictionStore( [ 'db' => [ DB_REPLICA => [ 'select' =>
-			static function () {
-				return new FakeResultWrapper( [
-					(object)[ 'pr_page' => 1, 'page_namespace' => NS_MAIN, 'page_title' => 'test',
-						'pr_expiry' => 'infinity', 'pr_type' => 'edit', 'pr_level' => 'Sysop' ]
-				] );
-			}
+		$obj = $this->newRestrictionStore( [ 'db' => [ DB_REPLICA => [
+			'select' => [
+				static function () {
+					return new FakeResultWrapper( [
+						(object)[ 'pr_page' => 1, 'page_namespace' => NS_MAIN, 'page_title' => 'test',
+							'pr_expiry' => 'infinity', 'pr_type' => 'edit', 'pr_level' => 'Sysop',
+							'tl_from' => 1 ]
+					] );
+				},
+				2
+			]
 		] ] ] );
 
 		$page = PageIdentityValue::localIdentity( 1, NS_MAIN, 'X' );
-		[ $sources, $restrictions ] = $obj->getCascadeProtectionSources( $page );
+		[ $sources, $restrictions, $tlSources, $ilSources ] = $obj->getCascadeProtectionSources( $page );
 		$this->assertCount( 1, $sources );
+		$this->assertArrayHasKey( 'edit', $restrictions );
+		$this->assertCount( 0, $ilSources );
+		$this->assertCount( 1, $tlSources );
+	}
+
+	public function testGetCascadeProtectionSourcesFile() {
+		$obj = $this->newRestrictionStore( [ 'db' => [ DB_REPLICA => [
+			'select' => [
+				static function () {
+					return new FakeResultWrapper( [
+						(object)[ 'pr_page' => 1, 'page_namespace' => NS_MAIN, 'page_title' => 'test1',
+							'pr_expiry' => 'infinity', 'pr_type' => 'edit', 'pr_level' => 'Sysop',
+							'tl_from' => 1, 'il_from' => 2 ],
+						(object)[ 'pr_page' => 2, 'page_namespace' => NS_MAIN, 'page_title' => 'test2',
+							'pr_expiry' => 'infinity', 'pr_type' => 'edit', 'pr_level' => 'Sysop',
+							'tl_from' => 1, 'il_from' => 2 ]
+					] );
+				},
+				3
+			]
+		] ] ] );
+
+		$page = PageIdentityValue::localIdentity( 1, NS_FILE, 'Image.jpg' );
+		[ $sources, $restrictions, $tlSources, $ilSources ] = $obj->getCascadeProtectionSources( $page );
+		$this->assertCount( 2, $sources );
+		$this->assertCount( 1, $ilSources );
+		$this->assertCount( 1, $tlSources );
 		$this->assertArrayHasKey( 'edit', $restrictions );
 	}
 
 	public function testGetCascadeProtectionSourcesSpecialPage() {
 		$obj = $this->newRestrictionStore( [ 'db' => [ DB_REPLICA => [ 'select' => [
-			static function () {
-				return [];
-			},
+			static fn () => [],
 			0
 		] ] ] ] );
 
 		$page = $this->makeMockTitle( 'Whatlinkshere', [ 'namespace' => NS_SPECIAL ] );
-		[ $sources, $restrictions ] = $obj->getCascadeProtectionSources( $page );
+		[ $sources, $restrictions, $ilSources ] = $obj->getCascadeProtectionSources( $page );
 		$this->assertCount( 0, $sources );
 		$this->assertCount( 0, $restrictions );
+		$this->assertCount( 0, $ilSources );
 	}
 
 	public function testShouldNotFetchProtectionSettingsIfActionCannotBeRestricted(): void {
-		$lb = $this->createMock( ILoadBalancer::class );
-		$lb->expects( $this->never() )
-			->method( $this->anything() );
-
 		$store = new RestrictionStore(
 			new ServiceOptions( RestrictionStore::CONSTRUCTOR_OPTIONS, [
 					MainConfigNames::NamespaceProtection => [],
 					MainConfigNames::RestrictionLevels => [ '', 'autoconfirmed', 'sysop' ],
 					MainConfigNames::RestrictionTypes => self::DEFAULT_RESTRICTION_TYPES,
 					MainConfigNames::SemiprotectedRestrictionLevels => [ 'autoconfirmed' ],
+					MainConfigNames::VirtualDomainsMapping => [
+						TemplateLinksTable::VIRTUAL_DOMAIN => [ 'db' => false ],
+						ImageLinksTable::VIRTUAL_DOMAIN => [ 'db' => false ],
+					],
 				] ),
 			WANObjectCache::newEmpty(),
-			$lb,
+			$this->createNoopMock( LBFactory::class ),
 			$this->createMock( LinkCache::class ),
 			$this->createMock( LinksMigration::class ),
 			$this->createMock( CommentStore::class ),
@@ -1010,7 +1065,7 @@ class RestrictionStoreTest extends MediaWikiUnitTestCase {
 			$this->createMock( PageStore::class )
 		);
 
-		$page = new PageIdentityValue( 1, NS_MAIN, 'Test', WikiAwareEntity::LOCAL );
+		$page = PageIdentityValue::localIdentity( 1, NS_MAIN, 'Test' );
 
 		$this->assertSame( [], $store->getRestrictions( $page, 'non-restrictable-action' ) );
 	}

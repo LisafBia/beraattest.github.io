@@ -293,7 +293,7 @@
 	 */
 	function allWithImplicitReady( module ) {
 		return allReady( registry[ module ].dependencies ) &&
-			( baseModules.indexOf( module ) !== -1 || allReady( baseModules ) );
+			( baseModules.includes( module ) || allReady( baseModules ) );
 	}
 
 	/**
@@ -340,14 +340,14 @@
 			// Stage 1: Propagate failures
 			while ( errorModules.length ) {
 				var errorModule = errorModules.shift(),
-					baseModuleError = baseModules.indexOf( errorModule ) !== -1;
+					baseModuleError = baseModules.includes( errorModule );
 				for ( module in registry ) {
 					if ( registry[ module ].state !== 'error' && registry[ module ].state !== 'missing' ) {
-						if ( baseModuleError && baseModules.indexOf( module ) === -1 ) {
+						if ( baseModuleError && !baseModules.includes( module ) ) {
 							// Propate error from base module to all regular (non-base) modules
 							registry[ module ].state = 'error';
 							didPropagate = true;
-						} else if ( registry[ module ].dependencies.indexOf( errorModule ) !== -1 ) {
+						} else if ( registry[ module ].dependencies.includes( errorModule ) ) {
 							// Propagate error from dependency to depending module
 							registry[ module ].state = 'error';
 							// .. and propagate it further
@@ -479,7 +479,7 @@
 		var deps = registry[ module ].dependencies;
 		unresolved.add( module );
 		for ( var i = 0; i < deps.length; i++ ) {
-			if ( resolved.indexOf( deps[ i ] ) === -1 ) {
+			if ( !resolved.includes( deps[ i ] ) ) {
 				if ( unresolved.has( deps[ i ] ) ) {
 					throw new Error(
 						'Circular reference detected: ' + module + ' -> ' + deps[ i ]
@@ -831,7 +831,7 @@
 		dependencies.forEach( function ( module ) {
 			// Only queue modules that are still in the initial 'registered' state
 			// (e.g. not ones already loading or loaded etc.).
-			if ( registry[ module ].state === 'registered' && queue.indexOf( module ) === -1 ) {
+			if ( registry[ module ].state === 'registered' && !queue.includes( module ) ) {
 				queue.push( module );
 			}
 		} );
@@ -1753,6 +1753,10 @@
 		 * @return {any} Exported value
 		 */
 		require: function ( moduleName ) {
+			if ( moduleName.startsWith( './' ) || moduleName.startsWith( '../' ) ) {
+				throw new Error( 'Module names cannot start with "./" or "../". Did you mean to use Package files?' );
+			}
+
 			var path;
 			if ( window.QUnit ) {
 				// Comply with Node specification
@@ -1822,8 +1826,8 @@
 				localStorage.setItem( store.key, JSON.stringify( {
 					items: store.items,
 					vary: store.vary,
-					// Store with 1e7 ms accuracy (1e4 seconds, or ~ 2.7 hours),
-					// which is enough for the purpose of expiring after ~ 30 days.
+					// Store expiry with 1e7 ms precision (1e4 second increments, or ~2.7 hours),
+					// which is enough for the purpose of expiring after ~30 days.
 					asOf: Math.ceil( Date.now() / 1e7 )
 				} ) );
 			} catch ( e ) {
@@ -1947,6 +1951,13 @@
 					data.vary === this.vary &&
 					data.items &&
 					// Only use if it's been less than 30 days since the data was written
+					//
+					// We discard mw.loader.store contents after 30 days for these reasons:
+					// * Avoid unbounded reuse of unversioned artefacts and configuration (T134368)
+					// * Reuse space from modules that the current user no longer uses (T58778)
+					// * Our math for the version hash entropy requires a limit
+					//   (see also ResourceLoader::makeHash in PHP, and T229245)
+					//
 					// 30 days = 2,592,000 s = 2,592,000,000 ms = ± 259e7 ms
 					Date.now() < ( data.asOf * 1e7 ) + 259e7
 				) {

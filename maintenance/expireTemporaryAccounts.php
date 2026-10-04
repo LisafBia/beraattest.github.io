@@ -2,7 +2,7 @@
 
 use MediaWiki\Auth\AuthManager;
 use MediaWiki\Maintenance\Maintenance;
-use MediaWiki\Session\SessionManager;
+use MediaWiki\Session\SessionManagerInterface;
 use MediaWiki\User\TempUser\TempUserConfig;
 use MediaWiki\User\UserFactory;
 use MediaWiki\User\UserIdentity;
@@ -10,13 +10,15 @@ use MediaWiki\User\UserIdentityLookup;
 use MediaWiki\User\UserIdentityUtils;
 use MediaWiki\User\UserSelectQueryBuilder;
 use Wikimedia\Rdbms\SelectQueryBuilder;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
 // @codeCoverageIgnoreEnd
 
 /**
- * Expire temporary accounts that are registered for longer than `expiryAfterDays` days
+ * Expire temporary accounts that are registered for longer than `expireAfterDays` days
  * (defined in $wgAutoCreateTempUser) by forcefully logging them out.
  *
  * Extensions can extend this class to provide their own logic of determining a list
@@ -32,12 +34,21 @@ class ExpireTemporaryAccounts extends Maintenance {
 	protected AuthManager $authManager;
 	protected TempUserConfig $tempUserConfig;
 	protected UserIdentityUtils $userIdentityUtils;
+	protected SessionManagerInterface $sessionManager;
 
 	public function __construct() {
 		parent::__construct();
 
 		$this->addDescription( 'Expire temporary accounts that exist for more than N days' );
-		$this->addOption( 'frequency', 'How frequently the script runs [days]', true, true );
+		$this->addOption(
+			'frequency',
+			'How frequently the script runs [days]. When used with "expiry", determines the ' .
+			'cutoff for registration of accounts to be expired. For example, if "expiry" is 90 ' .
+			'days and "frequency" is 1 day, then the script will expire accounts that ' .
+			'registered more than 90 days ago but not more than 90 + 1 days ago.',
+			true,
+			true
+		);
 		$this->addOption(
 			'expiry',
 			'Expire accounts older than this number of days. Use 0 to expire all temporary accounts',
@@ -60,6 +71,7 @@ class ExpireTemporaryAccounts extends Maintenance {
 		$this->authManager = $services->getAuthManager();
 		$this->tempUserConfig = $services->getTempUserConfig();
 		$this->userIdentityUtils = $services->getUserIdentityUtils();
+		$this->sessionManager = $services->getSessionManager();
 	}
 
 	/**
@@ -96,11 +108,11 @@ class ExpireTemporaryAccounts extends Maintenance {
 		return $this->userIdentityLookup->newSelectQueryBuilder()
 			->temp()
 			->whereRegisteredTimestamp( wfTimestamp(
-				TS_MW,
+				TS::MW,
 				$registeredBeforeUnix
 			), true )
 			->whereRegisteredTimestamp( wfTimestamp(
-				TS_MW,
+				TS::MW,
 				$registeredBeforeUnix - ( 86_400 * $frequencyDays )
 			), false );
 	}
@@ -110,7 +122,7 @@ class ExpireTemporaryAccounts extends Maintenance {
 	 *
 	 * Default implementation expects $queryBuilder is an instance of UserSelectQueryBuilder. If
 	 * you override getTempAccountsToExpireQueryBuilder() to work with a different query builder,
-	 * this method should be overriden to properly convert the query builder into user identities.
+	 * this method should be overridden to properly convert the query builder into user identities.
 	 *
 	 * @throws LogicException if $queryBuilder is not UserSelectQueryBuilder
 	 * @stable to override
@@ -139,7 +151,7 @@ class ExpireTemporaryAccounts extends Maintenance {
 	 */
 	protected function expireTemporaryAccount( UserIdentity $tempAccountUserIdentity ): void {
 		$this->authManager->revokeAccessForUser( $tempAccountUserIdentity->getName() );
-		SessionManager::singleton()->invalidateSessionsForUser(
+		$this->sessionManager->invalidateSessionsForUser(
 			$this->userFactory->newFromUserIdentity( $tempAccountUserIdentity )
 		);
 	}
@@ -157,15 +169,15 @@ class ExpireTemporaryAccounts extends Maintenance {
 
 		$frequencyDays = (int)$this->getOption( 'frequency' );
 		if ( $this->getOption( 'expiry' ) !== null ) {
-			$expiryAfterDays = (int)$this->getOption( 'expiry' );
+			$expireAfterDays = (int)$this->getOption( 'expiry' );
 		} else {
-			$expiryAfterDays = $this->tempUserConfig->getExpireAfterDays();
+			$expireAfterDays = $this->tempUserConfig->getExpireAfterDays();
 		}
-		if ( $expiryAfterDays === null ) {
+		if ( $expireAfterDays === null ) {
 			$this->output( 'Temporary account expiry is not enabled' . PHP_EOL );
 			return;
 		}
-		$registeredBeforeUnix = (int)wfTimestamp( TS_UNIX ) - ( 86_400 * $expiryAfterDays );
+		$registeredBeforeUnix = (int)ConvertibleTimestamp::now( TS::UNIX ) - ( 86_400 * $expireAfterDays );
 
 		$tempAccounts = $this->queryBuilderToUserIdentities( $this->getTempAccountsToExpireQueryBuilder(
 			$registeredBeforeUnix,

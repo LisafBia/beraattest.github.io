@@ -1,18 +1,19 @@
 <?php
+declare( strict_types = 1 );
 
 namespace MediaWiki\Tests\OutputTransform\Stages;
 
 use MediaWiki\Config\HashConfig;
 use MediaWiki\Config\ServiceOptions;
-use MediaWiki\MainConfigNames;
 use MediaWiki\OutputTransform\OutputTransformStage;
 use MediaWiki\OutputTransform\Stages\HandleSectionLinks;
 use MediaWiki\Parser\ParserOptions;
 use MediaWiki\Parser\ParserOutput;
+use MediaWiki\Parser\Parsoid\PageBundleParserOutputConverter;
 use MediaWiki\Tests\OutputTransform\OutputTransformStageTestBase;
 use MediaWiki\Tests\OutputTransform\TestUtils;
 use Psr\Log\NullLogger;
-use Skin;
+use Wikimedia\Parsoid\Core\HtmlPageBundle;
 
 /** @covers \MediaWiki\OutputTransform\Stages\HandleSectionLinks */
 class HandleSectionLinksTest extends OutputTransformStageTestBase {
@@ -21,111 +22,90 @@ class HandleSectionLinksTest extends OutputTransformStageTestBase {
 		return new HandleSectionLinks(
 			new ServiceOptions(
 				HandleSectionLinks::CONSTRUCTOR_OPTIONS,
-				new HashConfig( [
-					MainConfigNames::ParserEnableLegacyHeadingDOM => false,
-				] )
+				new HashConfig()
 			),
 			new NullLogger(),
 			$this->getServiceContainer()->getTitleFactory()
 		);
 	}
 
-	public function provideShouldRun(): array {
-		return [ [ new ParserOutput(), null, [] ] ];
+	public static function provideShouldRun(): array {
+		return [ [ new ParserOutput(), ParserOptions::newFromAnon(), [] ] ];
 	}
 
-	public function provideShouldNotRun(): array {
-		return [ [ new ParserOutput(), null, [ 'isParsoidContent' => true ] ] ];
+	public static function provideShouldNotRun(): array {
+		return [
+			[ PageBundleParserOutputConverter::parserOutputFromPageBundle( new HtmlPageBundle( '' ), isParsoidContent: true ), ParserOptions::newFromAnon(), [] ]
+		];
 	}
 
 	private static function newParserOutput(
-		?string $rawText = null,
-		?ParserOptions $parserOptions = null,
+		?string $rawText,
+		?ParserOptions $parserOptions,
+		string $fragment,
 		string ...$flags
 	) {
-		$po = new ParserOutput();
-		if ( $rawText !== null ) {
-			$po->setRawText( $rawText );
-		}
+		$po = new ParserOutput( $rawText ?? '' );
 		if ( $parserOptions !== null ) {
 			$po->setFromParserOptions( $parserOptions );
 		}
 		foreach ( $flags as $f ) {
 			$po->setOutputFlag( $f );
 		}
+		$po->getContentHolder()->setAsHtmlString( 'my fragment', $fragment );
+		// T428677: temporarily mark parser output generated with the
+		// data-mw-wikitext marking
+		$po->setExtensionData( 'core:new-heading-attr', true );
 		return $po;
 	}
 
-	public function provideTransform(): iterable {
+	public static function provideTransform(): iterable {
 		yield "TEST_DOC default: with links" => [
-			self::newParserOutput( TestUtils::TEST_DOC ),
-			null, [],
-			self::newParserOutput( TestUtils::TEST_DOC_WITH_LINKS_NEW_MARKUP )
+			self::newParserOutput( TestUtils::TEST_DOC, null, TestUtils::TEST_DOC ),
+			ParserOptions::newFromAnon(), [],
+			self::newParserOutput( TestUtils::TEST_DOC_WITH_LINKS, null, TestUtils::TEST_DOC )
 		];
 		yield "TEST_DOC default ParserOptions: with links" => [
-			self::newParserOutput( TestUtils::TEST_DOC ),
+			self::newParserOutput( TestUtils::TEST_DOC, null, TestUtils::TEST_DOC ),
 			ParserOptions::newFromAnon(), [],
-			self::newParserOutput( TestUtils::TEST_DOC_WITH_LINKS_NEW_MARKUP )
+			self::newParserOutput( TestUtils::TEST_DOC_WITH_LINKS, null, TestUtils::TEST_DOC )
 		];
 		yield 'TEST_DOC disabled via $options: no links' => [
-			self::newParserOutput( TestUtils::TEST_DOC ),
-			null, [ 'enableSectionEditLinks' => false ],
-			self::newParserOutput( TestUtils::TEST_DOC_WITHOUT_LINKS_NEW_MARKUP )
+			self::newParserOutput( TestUtils::TEST_DOC, null, TestUtils::TEST_DOC ),
+			ParserOptions::newFromAnon(), [ 'enableSectionEditLinks' => false ],
+			self::newParserOutput( TestUtils::TEST_DOC_WITHOUT_LINKS, null, TestUtils::TEST_DOC )
 		];
 		$pOptsNoLinks = ParserOptions::newFromAnon();
 		$pOptsNoLinks->setSuppressSectionEditLinks();
 		yield 'TEST_DOC disabled via ParserOptions: no links' => [
-			self::newParserOutput( TestUtils::TEST_DOC, $pOptsNoLinks ),
+			self::newParserOutput( TestUtils::TEST_DOC, $pOptsNoLinks, TestUtils::TEST_DOC ),
 			$pOptsNoLinks, [],
-			self::newParserOutput( TestUtils::TEST_DOC_WITHOUT_LINKS_NEW_MARKUP, $pOptsNoLinks )
+			self::newParserOutput( TestUtils::TEST_DOC_WITHOUT_LINKS, $pOptsNoLinks, TestUtils::TEST_DOC )
 		];
 		yield 'TEST_DOC enabled via $options: with links' => [
-			self::newParserOutput( TestUtils::TEST_DOC ),
-			null, [ 'enableSectionEditLinks' => true ],
-			self::newParserOutput( TestUtils::TEST_DOC_WITH_LINKS_NEW_MARKUP )
-		];
-		$legacyMarkupSkin = $this->getMockBuilder( Skin::class )
-			->setConstructorArgs( [ [ 'name' => 'whatever', 'supportsMwHeading' => false ] ] )
-			->getMockForAbstractClass();
-		yield "TEST_DOC legacy markup: with links" => [
-			self::newParserOutput( TestUtils::TEST_DOC ),
-			null, [ 'skin' => $legacyMarkupSkin ],
-			self::newParserOutput( TestUtils::TEST_DOC_WITH_LINKS_LEGACY_MARKUP )
-		];
-		yield 'TEST_DOC legacy markup: no links' => [
-			self::newParserOutput( TestUtils::TEST_DOC ),
-			null, [ 'skin' => $legacyMarkupSkin, 'enableSectionEditLinks' => false ],
-			self::newParserOutput( TestUtils::TEST_DOC_WITHOUT_LINKS_LEGACY_MARKUP )
+			self::newParserOutput( TestUtils::TEST_DOC, null, TestUtils::TEST_DOC ),
+			ParserOptions::newFromAnon(), [ 'enableSectionEditLinks' => true ],
+			self::newParserOutput( TestUtils::TEST_DOC_WITH_LINKS, null, TestUtils::TEST_DOC )
 		];
 		yield 'TEST_DOC_ANGLE_BRACKETS default: with links' => [
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS ),
-			null, [],
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS_WITH_LINKS_NEW_MARKUP )
+			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS, null, TestUtils::TEST_DOC ),
+			ParserOptions::newFromAnon(), [],
+			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS_WITH_LINKS, null, TestUtils::TEST_DOC )
 		];
 		yield 'TEST_DOC_ANGLE_BRACKETS disabled via $options: no links' => [
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS ),
-			null, [ 'enableSectionEditLinks' => false ],
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS_WITHOUT_LINKS_NEW_MARKUP )
+			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS, null, TestUtils::TEST_DOC ),
+			ParserOptions::newFromAnon(), [ 'enableSectionEditLinks' => false ],
+			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS_WITHOUT_LINKS, null, TestUtils::TEST_DOC )
 		];
 		yield 'TEST_DOC_ANGLE_BRACKETS disabled via ParserOptions: no links' => [
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS, $pOptsNoLinks ),
+			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS, $pOptsNoLinks, TestUtils::TEST_DOC ),
 			$pOptsNoLinks, [],
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS_WITHOUT_LINKS_NEW_MARKUP, $pOptsNoLinks )
+			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS_WITHOUT_LINKS, $pOptsNoLinks, TestUtils::TEST_DOC )
 		];
 		yield 'TEST_DOC_ANGLE_BRACKETS enabled via $options: with links' => [
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS ),
-			null, [ 'enableSectionEditLinks' => true ],
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS_WITH_LINKS_NEW_MARKUP )
-		];
-		yield "TEST_DOC_ANGLE_BRACKETS legacy markup: with links" => [
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS ),
-			null, [ 'skin' => $legacyMarkupSkin ],
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS_WITH_LINKS_LEGACY_MARKUP )
-		];
-		yield 'TEST_DOC_ANGLE_BRACKETS legacy markup: no links' => [
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS ),
-			null, [ 'skin' => $legacyMarkupSkin, 'enableSectionEditLinks' => false ],
-			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS_WITHOUT_LINKS_LEGACY_MARKUP )
+			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS, null, TestUtils::TEST_DOC ),
+			ParserOptions::newFromAnon(), [ 'enableSectionEditLinks' => true ],
+			self::newParserOutput( TestUtils::TEST_DOC_ANGLE_BRACKETS_WITH_LINKS, null, TestUtils::TEST_DOC )
 		];
 	}
 }

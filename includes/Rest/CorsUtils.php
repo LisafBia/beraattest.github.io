@@ -22,19 +22,11 @@ class CorsUtils implements BasicAuthorizerInterface {
 		MainConfigNames::CrossSiteAJAXdomainExceptions,
 	];
 
-	private ServiceOptions $options;
-	private ResponseFactory $responseFactory;
-	private UserIdentity $user;
-
 	public function __construct(
-		ServiceOptions $options,
-		ResponseFactory $responseFactory,
-		UserIdentity $user
+		private readonly ServiceOptions $options,
+		private readonly UserIdentity $user,
 	) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
-		$this->options = $options;
-		$this->responseFactory = $responseFactory;
-		$this->user = $user;
 	}
 
 	/**
@@ -63,10 +55,6 @@ class CorsUtils implements BasicAuthorizerInterface {
 		return null;
 	}
 
-	/**
-	 * @param Origin $origin
-	 * @return bool
-	 */
 	private function allowOrigin( Origin $origin ): bool {
 		$allowed = array_merge( [ $this->getCanonicalDomain() ],
 			$this->options->get( MainConfigNames::CrossSiteAJAXdomains ) );
@@ -75,9 +63,6 @@ class CorsUtils implements BasicAuthorizerInterface {
 		return $origin->match( $allowed, $excluded );
 	}
 
-	/**
-	 * @return string
-	 */
 	private function getCanonicalDomain(): string {
 		$res = parse_url( $this->options->get( MainConfigNames::CanonicalServer ) );
 		'@phan-var array $res';
@@ -108,7 +93,7 @@ class CorsUtils implements BasicAuthorizerInterface {
 		if ( $this->options->get( MainConfigNames::RestAllowCrossOriginCookieAuth ) ) {
 			// @TODO Since we only Vary the response if (1) the method is OPTIONS or (2) the user is
 			//       registered, it is safe to only add the Vary: Origin when those two conditions
-			//       are met since a response to a logged-in user's request is not cachable.
+			//       are met since a response to a logged-in user's request is not cacheable.
 			//       Therefore, logged out users should always get `Access-Control-Allow-Origin: *`
 			//       on all non-OPTIONS request and logged-in users *may* get
 			//      `Access-Control-Allow-Origin: <requested origin>`
@@ -153,8 +138,8 @@ class CorsUtils implements BasicAuthorizerInterface {
 	 * @param array $allowedMethods
 	 * @return Response
 	 */
-	public function createPreflightResponse( array $allowedMethods ): Response {
-		$response = $this->responseFactory->createNoContent();
+	public function createPreflightResponse( array $allowedMethods, ResponseFactory $responseFactory ): Response {
+		$response = $responseFactory->createNoContent();
 		$response->setHeader( 'Access-Control-Allow-Methods', $allowedMethods );
 
 		$allowedHeaders = $this->options->get( MainConfigNames::AllowedCorsHeaders );

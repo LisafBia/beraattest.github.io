@@ -2,31 +2,21 @@
 /**
  * Classes used to send headers and cookies back to the user
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\Request;
 
-use HttpStatus;
+use LogicException;
 use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use RuntimeException;
+use Wikimedia\Http\HttpStatus;
+use Wikimedia\LightweightObjectStore\ExpirationAwareness;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 /**
  * Allow programs to request this object from WebRequest::response()
@@ -64,7 +54,7 @@ class WebResponse {
 	 */
 	public function header( $string, $replace = true, $http_response_code = null ) {
 		if ( $this->disableForPostSend ) {
-			wfDebugLog( 'header', 'ignored post-send header {header}', 'all', [
+			LoggerFactory::getInstance( 'header' )->warning( 'ignored post-send header {header}', [
 				'header' => $string,
 				'replace' => $replace,
 				'http_response_code' => $http_response_code,
@@ -113,7 +103,7 @@ class WebResponse {
 	 */
 	public function statusHeader( $code ) {
 		if ( $this->disableForPostSend ) {
-			wfDebugLog( 'header', 'ignored post-send status header {code}', 'all', [
+			LoggerFactory::getInstance( 'header' )->warning( 'ignored post-send status header {code}', [
 				'code' => $code,
 				'exception' => new RuntimeException( 'Ignored post-send status header' ),
 			] );
@@ -153,6 +143,7 @@ class WebResponse {
 	 * @since 1.22 Replaced $prefix, $domain, and $forceSecure with $options
 	 */
 	public function setCookie( $name, $value, $expire = 0, $options = [] ) {
+		$logger = LoggerFactory::getInstance( 'cookie' );
 		$services = MediaWikiServices::getInstance();
 		$mainConfig = $services->getMainConfig();
 		$cookiePath = $mainConfig->get( MainConfigNames::CookiePath );
@@ -161,9 +152,7 @@ class WebResponse {
 		$cookieSecure = $mainConfig->get( MainConfigNames::CookieSecure );
 		$cookieExpiration = $mainConfig->get( MainConfigNames::CookieExpiration );
 		$cookieHttpOnly = $mainConfig->get( MainConfigNames::CookieHttpOnly );
-		$options = array_filter( $options, static function ( $a ) {
-			return $a !== null;
-		} ) + [
+		$options = array_filter( $options, static fn ( $a ) => $a !== null ) + [
 			'prefix' => $cookiePrefix,
 			'domain' => $cookieDomain,
 			'path' => $cookiePath,
@@ -176,12 +165,12 @@ class WebResponse {
 		if ( $expire === null ) {
 			$expire = 0; // Session cookie
 		} elseif ( $expire == 0 && $cookieExpiration != 0 ) {
-			$expire = time() + $cookieExpiration;
+			$expire = ConvertibleTimestamp::time() + $cookieExpiration;
 		}
 
 		if ( $this->disableForPostSend ) {
 			$prefixedName = $options['prefix'] . $name;
-			wfDebugLog( 'cookie', 'ignored post-send cookie {cookie}', 'all', [
+			$logger->warning( 'ignored post-send cookie {cookie}', [
 				'cookie' => $prefixedName,
 				'data' => [
 					'name' => $prefixedName,
@@ -227,28 +216,28 @@ class WebResponse {
 		}
 
 		// PHP deletes if value is the empty string; also, a past expiry is deleting
-		$deleting = ( $value === '' || ( $setOptions['expires'] > 0 && $setOptions['expires'] <= time() ) );
+		$deleting = ( $value === ''
+			|| ( $setOptions['expires'] > 0
+				 && $setOptions['expires'] <= ConvertibleTimestamp::time()
+			)
+		);
 
 		$logDesc = "$func: \"$prefixedName\", \"$value\", \"" .
 			implode( '", "', array_map( 'strval', $setOptions ) ) . '"';
 		$optionsForDeduplication = [ $func, $prefixedName, $value, $setOptions ];
 
 		if ( $deleting && !isset( self::$setCookies[$key] ) ) { // isset( null ) is false
-			wfDebugLog( 'cookie', "already deleted $logDesc" );
+			$logger->debug( "already deleted $logDesc" );
 			return;
 		} elseif ( !$deleting && isset( self::$setCookies[$key] ) &&
 			self::$setCookies[$key] === $optionsForDeduplication
 		) {
-			wfDebugLog( 'cookie', "already set $logDesc" );
+			$logger->debug( "already set $logDesc" );
 			return;
 		}
 
-		wfDebugLog( 'cookie', $logDesc );
-		if ( $func === 'setrawcookie' ) {
-			setrawcookie( $prefixedName, $value, $setOptions );
-		} else {
-			setcookie( $prefixedName, $value, $setOptions );
-		}
+		$logger->info( $logDesc );
+		$this->actuallySetCookie( $func, $prefixedName, $value, $setOptions );
 		self::$setCookies[$key] = $deleting ? null : $optionsForDeduplication;
 	}
 
@@ -262,7 +251,7 @@ class WebResponse {
 	 * @since 1.27
 	 */
 	public function clearCookie( $name, $options = [] ) {
-		$this->setCookie( $name, '', time() - 31_536_000 /* 1 year */, $options );
+		$this->setCookie( $name, '', ConvertibleTimestamp::time() - ExpirationAwareness::TTL_YEAR, $options );
 	}
 
 	/**
@@ -274,7 +263,22 @@ class WebResponse {
 	public function hasCookies() {
 		return (bool)self::$setCookies;
 	}
-}
 
-/** @deprecated class alias since 1.40 */
-class_alias( WebResponse::class, 'WebResponse' );
+	protected function actuallySetCookie( string $func, string $prefixedName, string $value, array $setOptions ): void {
+		if ( $func === 'setrawcookie' ) {
+			setrawcookie( $prefixedName, $value, $setOptions );
+		} else {
+			setcookie( $prefixedName, $value, $setOptions );
+		}
+	}
+
+	/**
+	 * @internal for tests only
+	 */
+	public static function resetCookieCache(): void {
+		if ( !defined( 'MW_PHPUNIT_TEST' ) ) {
+			throw new LogicException( __METHOD__ . ' should not be called outside tests' );
+		}
+		self::$setCookies = [];
+	}
+}

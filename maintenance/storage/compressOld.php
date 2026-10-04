@@ -22,24 +22,12 @@
  *  -n <endid>          the page_id to stop at (only when using concat compression type)
  *  --extdb <cluster>   store specified revisions in an external cluster (untested)
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance ExternalStorage
  */
+
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Title\Title;
 use Wikimedia\Rdbms\IExpression;
@@ -181,8 +169,8 @@ class CompressOld extends Maintenance {
 	 * @return bool
 	 */
 	private function compressPage( $row, $extdb ) {
-		if ( strpos( $row->old_flags, 'gzip' ) !== false
-			|| strpos( $row->old_flags, 'object' ) !== false
+		if ( str_contains( $row->old_flags, 'gzip' )
+			|| str_contains( $row->old_flags, 'object' )
 		) {
 			# print "Already compressed row {$row->old_id}\n";
 			return false;
@@ -194,8 +182,7 @@ class CompressOld extends Maintenance {
 		# Store in external storage if required
 		if ( $extdb !== '' ) {
 			$esFactory = $this->getServiceContainer()->getExternalStoreFactory();
-			/** @var ExternalStoreDB $storeObj */
-			$storeObj = $esFactory->getStore( 'DB' );
+			$storeObj = $esFactory->getDatabaseStore();
 			$compress = $storeObj->store( $extdb, $compress );
 			if ( $compress === false ) {
 				$this->error( "Unable to store object" );
@@ -240,8 +227,7 @@ class CompressOld extends Maintenance {
 		# Set up external storage
 		if ( $extdb != '' ) {
 			$esFactory = $this->getServiceContainer()->getExternalStoreFactory();
-			/** @var ExternalStoreDB $storeObj */
-			$storeObj = $esFactory->getStore( 'DB' );
+			$storeObj = $esFactory->getDatabaseStore();
 		}
 
 		$blobStore = $this->getServiceContainer()
@@ -371,7 +357,7 @@ class CompressOld extends Maintenance {
 
 				$chunk = new ConcatenatedGzipHistoryBlob();
 				$stubs = [];
-				$this->beginTransaction( $dbw, __METHOD__ );
+				$this->beginTransactionRound( __METHOD__ );
 				$usedChunk = false;
 				$primaryOldid = $revs[$i]->old_id;
 
@@ -477,7 +463,7 @@ class CompressOld extends Maintenance {
 				}
 				# Done, next
 				$this->output( "/" );
-				$this->commitTransaction( $dbw, __METHOD__ );
+				$this->commitTransactionRound( __METHOD__ );
 				$i += $thisChunkSize;
 			}
 			$this->output( "\n" );

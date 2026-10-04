@@ -131,7 +131,7 @@
 	"underline-always": "Semper",
 	"tog-showhiddencats": "Fà vedè i categurie scondude",
 	"tog-showrollbackconfirmation": "Mostra una domanda de conferma quand che se clica in sul conligament de tornà indree",
-	"tog-forcesafemode": "Ten semper ativa la [[mw:Manual:Safemode|manera sicura]]",
+	"tog-forcesafemode": "Ten semper ativa la [[mw:Special:MyLanguage/Manual:Safemode|manera sicura]]",
 	"prefs-editing": "Casella de modifica",
 	"prefs-description-editing": "Personaliza la manera che te droeuvet per fà, stàgh adree, e vardà an'mò i modifeghe.",
 	"prefs-advancedediting": "Opzion generai",
@@ -215,6 +215,7 @@
 	"search-thumbnail-extra-namespaces-label": "Fà vedè i miniadure in Special:Ricerca in sul desktop",
 	"search-thumbnail-extra-namespaces-message": "Mostra anca i miniadure {{PLURAL:$2|del|di}} spazzi di nom $1. I miniadure del spazzi di nom $3 a inn semper mostrade.",
 	"prefs-advancedsearchoptions": "Opzion avanzade",
+	"prefs-misc": "Preferenze varie",
 	"prefs-reset-intro": "Te podet doprà quella pagina chì per rimpostà i to preferenze a quèi predefinide sel sit.\nL'operazzion la po vesser minga anulada.",
 	"prefs-reset-confirm": "Si, mi voeuli rimpostà i me preferenze.",
 	"restoreprefs": "Ristabiliss i impostazzion predefinide"

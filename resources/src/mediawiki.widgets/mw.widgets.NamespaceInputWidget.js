@@ -47,7 +47,7 @@
 	 *
 	 * @method getNamespaceDropdownOptions
 	 * @param {Object} [config] Configuration options
-	 * @return {DropdownOptions[]} Dropdown options
+	 * @return {Object[]} Dropdown options, with data and label
 	 * @memberof mw.widgets.NamespaceInputWidget
 	 */
 	mw.widgets.NamespaceInputWidget.static.getNamespaceDropdownOptions = function ( config ) {
@@ -66,8 +66,8 @@
 		const options = $.map( namespaces, ( name, ns ) => {
 			if (
 				ns < mainNamespace ||
-				exclude.indexOf( Number( ns ) ) !== -1 ||
-				( Array.isArray( include ) && include.indexOf( Number( ns ) ) === -1 )
+				exclude.includes( Number( ns ) ) ||
+				( Array.isArray( include ) && !include.includes( Number( ns ) ) )
 			) {
 				return null; // skip
 			}

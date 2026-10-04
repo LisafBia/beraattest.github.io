@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @author Roan Kattouw
  * @author Trevor Parscal
@@ -23,13 +9,14 @@
 namespace MediaWiki\ResourceLoader;
 
 use Exception;
-use HttpStatus;
 use InvalidArgumentException;
 use Less_Environment;
 use Less_Parser;
-use LogicException;
 use MediaWiki\CommentStore\CommentStore;
 use MediaWiki\Config\Config;
+use MediaWiki\Context\RequestContext;
+use MediaWiki\Exception\MWExceptionHandler;
+use MediaWiki\Exception\MWExceptionRenderer;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\Html\Html;
 use MediaWiki\Html\HtmlJsCode;
@@ -43,9 +30,6 @@ use MediaWiki\Request\WebRequest;
 use MediaWiki\Title\Title;
 use MediaWiki\User\Options\UserOptionsLookup;
 use MediaWiki\WikiMap\WikiMap;
-use MWExceptionHandler;
-use MWExceptionRenderer;
-use Net_URL2;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -53,7 +37,7 @@ use RuntimeException;
 use stdClass;
 use Throwable;
 use UnexpectedValueException;
-use Wikimedia\DependencyStore\DependencyStore;
+use Wikimedia\Http\HttpStatus;
 use Wikimedia\Minify\CSSMin;
 use Wikimedia\Minify\IdentityMinifierState;
 use Wikimedia\Minify\IndexMap;
@@ -68,6 +52,7 @@ use Wikimedia\RequestTimeout\TimeoutException;
 use Wikimedia\ScopedCallback;
 use Wikimedia\Stats\StatsFactory;
 use Wikimedia\Timestamp\ConvertibleTimestamp;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 use Wikimedia\WrappedString;
 
 /**
@@ -93,8 +78,6 @@ use Wikimedia\WrappedString;
 class ResourceLoader implements LoggerAwareInterface {
 	/** @var int */
 	public const CACHE_VERSION = 9;
-	/** @var string Pragma to disable minification in JavaScript or CSS. */
-	public const FILTER_NOMIN = '/*@nomin*/';
 
 	/** @var int */
 	private const MAXAGE_RECOVER = 60;
@@ -172,7 +155,7 @@ class ResourceLoader implements LoggerAwareInterface {
 		$this->maxageUnversioned = $params['maxageUnversioned'] ?? 5 * 60;
 
 		$this->config = $config;
-		$this->logger = $logger ?: new NullLogger();
+		$this->logger = $logger ?? new NullLogger();
 
 		$services = MediaWikiServices::getInstance();
 		$this->hookContainer = $services->getHookContainer();
@@ -190,8 +173,7 @@ class ResourceLoader implements LoggerAwareInterface {
 			new MessageBlobStore( $this, $this->logger, $services->getMainWANObjectCache() )
 		);
 
-		$tracker = $tracker ?: new DependencyStore( new HashBagOStuff() );
-		$this->setDependencyStore( $tracker );
+		$this->setDependencyStore( $tracker ?? new DependencyStore( new HashBagOStuff() ) );
 	}
 
 	/**
@@ -205,7 +187,7 @@ class ResourceLoader implements LoggerAwareInterface {
 	 * @since 1.26
 	 * @param LoggerInterface $logger
 	 */
-	public function setLogger( LoggerInterface $logger ) {
+	public function setLogger( LoggerInterface $logger ): void {
 		$this->logger = $logger;
 	}
 
@@ -213,7 +195,7 @@ class ResourceLoader implements LoggerAwareInterface {
 	 * @since 1.27
 	 * @return LoggerInterface
 	 */
-	public function getLogger() {
+	public function getLogger(): LoggerInterface {
 		return $this->logger;
 	}
 
@@ -275,11 +257,8 @@ class ResourceLoader implements LoggerAwareInterface {
 		foreach ( $registrations as $name => $info ) {
 			// Warn on duplicate registrations
 			if ( isset( $this->moduleInfos[$name] ) ) {
-				// A module has already been registered by this name
-				$this->logger->warning(
-					'ResourceLoader duplicate registration warning. ' .
-					'Another module has already been registered as ' . $name
-				);
+				// (T438387) Add a PHP warning to make CI & production log this in channel:error
+				trigger_error( "ResourceLoader duplicate module registration: \"$name\"", E_USER_WARNING );
 			}
 
 			// Check validity
@@ -304,7 +283,7 @@ class ResourceLoader implements LoggerAwareInterface {
 	 */
 	public function registerTestModules(): void {
 		$extRegistry = ExtensionRegistry::getInstance();
-		$testModules = $extRegistry->getAttribute( 'QUnitTestModules' );
+		$testModules = $extRegistry->getAttribute( 'QUnitTestModule' );
 
 		$testModuleNames = [];
 		foreach ( $testModules as $name => &$module ) {
@@ -410,7 +389,7 @@ class ResourceLoader implements LoggerAwareInterface {
 			$info = $this->moduleInfos[$name];
 			if ( isset( $info['factory'] ) ) {
 				/** @var Module $object */
-				$object = call_user_func( $info['factory'], $info );
+				$object = $info['factory']( $info );
 			} else {
 				$class = $info['class'] ?? FileModule::class;
 				/** @var Module $object */
@@ -443,33 +422,34 @@ class ResourceLoader implements LoggerAwareInterface {
 		$depsByEntity = $this->depStore->retrieveMulti(
 			$entitiesByModule
 		);
+
+		$modulesWithMessages = [];
+
 		// Inject the indirect file dependencies for all the modules
 		foreach ( $moduleNames as $moduleName ) {
 			$module = $this->getModule( $moduleName );
 			if ( $module ) {
 				$entity = $entitiesByModule[$moduleName];
 				$deps = $depsByEntity[$entity];
-				$paths = Module::expandRelativePaths( $deps['paths'] );
+				$paths = $deps['paths'];
 				$module->setFileDependencies( $context, $paths );
+
+				if ( $module->getMessages() ) {
+					$modulesWithMessages[$moduleName] = $module;
+				}
 			}
 		}
 
 		WikiModule::preloadTitleInfo( $context, $moduleNames );
 
 		// Prime in-object cache for message blobs for modules with messages
-		$modulesWithMessages = [];
-		foreach ( $moduleNames as $moduleName ) {
-			$module = $this->getModule( $moduleName );
-			if ( $module && $module->getMessages() ) {
-				$modulesWithMessages[$moduleName] = $module;
+		if ( $modulesWithMessages ) {
+			$lang = $context->getLanguage();
+			$store = $this->getMessageBlobStore();
+			$blobs = $store->getBlobs( $modulesWithMessages, $lang );
+			foreach ( $blobs as $moduleName => $blob ) {
+				$modulesWithMessages[$moduleName]->setMessageBlob( $blob, $lang );
 			}
-		}
-		// Prime in-object cache for message blobs for modules with messages
-		$lang = $context->getLanguage();
-		$store = $this->getMessageBlobStore();
-		$blobs = $store->getBlobs( $modulesWithMessages, $lang );
-		foreach ( $blobs as $moduleName => $blob ) {
-			$modulesWithMessages[$moduleName]->setMessageBlob( $blob, $lang );
 		}
 	}
 
@@ -663,8 +643,10 @@ class ResourceLoader implements LoggerAwareInterface {
 	 * Output a response to a load request, including the content-type header.
 	 *
 	 * @param Context $context Context in which a response should be formed
+	 * @param string[] $extraHeaders HTTP response headers to send regardless of
+	 * status (200 OK, or 304 Not Modified) and content type (CSS, JS, Image, SourceMap)
 	 */
-	public function respond( Context $context ) {
+	public function respond( Context $context, array $extraHeaders = [] ) {
 		// Buffer output to catch warnings. Normally we'd use ob_clean() on the
 		// top-level output buffer to clear warnings, but that breaks when ob_gzhandler
 		// is used: ob_clean() will clear the GZIP header in that case and it won't come
@@ -675,6 +657,7 @@ class ResourceLoader implements LoggerAwareInterface {
 		ob_start();
 
 		$this->errors = [];
+		$this->extraHeaders = $extraHeaders;
 		$responseTime = $this->measureResponseTime();
 		ProfilingContext::singleton()->init( MW_ENTRY_POINT, 'respond' );
 
@@ -753,12 +736,24 @@ class ResourceLoader implements LoggerAwareInterface {
 		// error list if we're in debug mode.
 		if ( $context->getDebug() ) {
 			$warnings = ob_get_contents();
-			if ( strlen( $warnings ) ) {
+			if ( $warnings !== false && $warnings !== '' ) {
 				$this->errors[] = $warnings;
 			}
 		}
 
-		$this->sendResponseHeaders( $context, $etag, (bool)$this->errors, $this->extraHeaders );
+		// Use an alternate E-Tag so that HTTP caches self-correct after an error (T431583).
+		//
+		// Usually when a module is broken, ResourceLoader sends a partial response with the rest
+		// of the batch. The mw.loader client isolates dependency trees such that errors often go unnoticed.
+		// The combined version hash skips broken modules and so the future response with the fixed
+		// module naturally has different E-Tag and the cache self-corrects. But, if
+		// Module::getVersionHash suceeeds and only Module::getVersionHash fails, then the error
+		// response could be renewed via HTTP 304 after the error is fixed. This prevents that.
+		if ( $this->errors ) {
+			$etag = 'W/"' . $versionHash . '_with_errors"';
+		}
+
+		$this->sendResponseHeaders( $context, $etag, (bool)$this->errors );
 
 		// Remove the output buffer and output the response
 		ob_end_clean();
@@ -782,20 +777,20 @@ class ResourceLoader implements LoggerAwareInterface {
 			}
 		}
 
+		// @phan-suppress-next-line SecurityCheck-XSS
 		echo $response;
 	}
 
 	/**
 	 * Send stats about the time used to build the response
-	 * @return ScopedCallback
 	 */
-	protected function measureResponseTime() {
-		$statStart = $_SERVER['REQUEST_TIME_FLOAT'];
-		return new ScopedCallback( function () use ( $statStart ) {
-			$statTiming = microtime( true ) - $statStart;
+	#[\NoDiscard]
+	protected function measureResponseTime(): ScopedCallback {
+		$requestStart = $_SERVER['REQUEST_TIME_FLOAT'];
+		return new ScopedCallback( function () use ( $requestStart ) {
+			$statTiming = microtime( true ) - $requestStart;
 
 			$this->statsFactory->getTiming( 'resourceloader_response_time_seconds' )
-				->copyToStatsdAt( 'resourceloader.responseTime' )
 				->observe( 1000 * $statTiming );
 		} );
 	}
@@ -808,10 +803,9 @@ class ResourceLoader implements LoggerAwareInterface {
 	 * @param Context $context
 	 * @param string $etag ETag header value
 	 * @param bool $errors Whether there are errors in the response
-	 * @param string[] $extra Array of extra HTTP response headers
 	 */
 	protected function sendResponseHeaders(
-		Context $context, $etag, $errors, array $extra = []
+		Context $context, $etag, $errors
 	): void {
 		HeaderCallback::warnIfHeadersSent();
 
@@ -866,9 +860,10 @@ class ResourceLoader implements LoggerAwareInterface {
 				: ''
 			);
 			header( "Cache-Control: public, max-age=$maxage, s-maxage=$maxage" . $staleDirective );
-			header( 'Expires: ' . ConvertibleTimestamp::convert( TS_RFC2822, time() + $maxage ) );
+			header( 'Expires: ' . ConvertibleTimestamp::convert( TS::RFC2822, time() + $maxage ) );
 		}
-		foreach ( $extra as $header ) {
+
+		foreach ( $this->extraHeaders as $header ) {
 			header( $header );
 		}
 	}
@@ -901,7 +896,6 @@ class ResourceLoader implements LoggerAwareInterface {
 			wfResetOutputBuffers( /* $resetGzipEncoding = */ true );
 
 			HttpStatus::header( 304 );
-
 			$this->sendResponseHeaders( $context, $etag, false );
 			return true;
 		}
@@ -1078,9 +1072,8 @@ MESSAGE;
 
 		if ( $indexMap ) {
 			return $indexMap->getMap();
-		} else {
-			return $out;
 		}
+		return $out;
 	}
 
 	/**
@@ -1147,15 +1140,9 @@ MESSAGE;
 		};
 
 		// The below is based on ResourceLoader::filter. Keep together to ease review/maintenance:
-		// * Handle FILTER_NOMIN, skip minify entirely if set.
 		// * Handle $shouldCache, skip cache and minify directly if set.
 		// * Use minify cache, minify on-demand and populate cache as needed.
 		// * Emit resourceloader_cache_total stats.
-
-		if ( strpos( $plainContent, self::FILTER_NOMIN ) !== false ) {
-			// FILTER_NOMIN should work for JavaScript, too. T373990
-			return [ $plainContent, null ];
-		}
 
 		if ( $shouldCache ) {
 			[ $response, $offsetArray ] = $this->srvCache->getWithSetCallback(
@@ -1171,13 +1158,9 @@ MESSAGE;
 			);
 
 			$mapType = $context->isSourceMap() ? 'map-js' : 'minify-js';
-			$statsdNamespace = implode( '.', [
-				"resourceloader_cache", $mapType, $isHit ? 'hit' : 'miss'
-			] );
 			$this->statsFactory->getCounter( 'resourceloader_cache_total' )
 				->setLabel( 'type', $mapType )
 				->setLabel( 'status', $isHit ? 'hit' : 'miss' )
-				->copyToStatsdAt( [ $statsdNamespace ] )
 				->increment();
 		} else {
 			[ $response, $offsetArray ] = $callback();
@@ -1281,7 +1264,7 @@ MESSAGE;
 	 */
 	public static function ensureNewline( $str ) {
 		$end = substr( $str, -1 );
-		if ( $end === false || $end === '' || $end === "\n" ) {
+		if ( $end === '' || $end === "\n" ) {
 			return $str;
 		}
 		return $str . "\n";
@@ -1499,9 +1482,10 @@ MESSAGE;
 	 * single stylesheet with "@media" blocks.
 	 *
 	 * @param array<string,string|string[]> $stylePairs Map from media type to CSS string(s)
+	 * @param WebRequest $request
 	 * @return string[] CSS strings
 	 */
-	public static function makeCombinedStyles( array $stylePairs ) {
+	public static function makeCombinedStyles( array $stylePairs, WebRequest $request ) {
 		$out = [];
 		foreach ( $stylePairs as $media => $styles ) {
 			// FileModule::getStyle can return the styles as a string or an
@@ -1515,7 +1499,7 @@ MESSAGE;
 				}
 				// Transform the media type based on request params and config
 				// The way that this relies on $wgRequest to propagate request params is slightly evil
-				$media = OutputPage::transformCssMedia( $media );
+				$media = OutputPage::transformCssMedia( $media, $request );
 
 				if ( $media === '' || $media == 'all' ) {
 					$out[] = $style;
@@ -1526,33 +1510,6 @@ MESSAGE;
 			}
 		}
 		return $out;
-	}
-
-	/**
-	 * Wrapper around json_encode that avoids needless escapes,
-	 * and pretty-prints in debug mode.
-	 *
-	 * @param mixed $data
-	 * @return string|false JSON string, false on error
-	 */
-	private static function encodeJsonForScript( $data ) {
-		// Keep output as small as possible by disabling needless escape modes
-		// that PHP uses by default.
-		// However, while most module scripts are only served on HTTP responses
-		// for JavaScript, some modules can also be embedded in the HTML as inline
-		// scripts. This, and the fact that we sometimes need to export strings
-		// containing user-generated content and labels that may genuinely contain
-		// a sequences like "</script>", we need to encode either '/' or '<'.
-		// By default PHP escapes '/'. Let's escape '<' instead which is less common
-		// and allows URLs to mostly remain readable.
-		$jsonFlags = JSON_UNESCAPED_SLASHES |
-			JSON_UNESCAPED_UNICODE |
-			JSON_HEX_TAG |
-			JSON_HEX_AMP;
-		if ( self::inDebugMode() ) {
-			$jsonFlags |= JSON_PRETTY_PRINT;
-		}
-		return json_encode( $data, $jsonFlags );
 	}
 
 	/**
@@ -1574,7 +1531,7 @@ MESSAGE;
 			. ');';
 	}
 
-	private static function isEmptyObject( stdClass $obj ) {
+	private static function isEmptyObject( stdClass $obj ): bool {
 		foreach ( $obj as $value ) {
 			return false;
 		}
@@ -1591,8 +1548,6 @@ MESSAGE;
 	 * - new HtmlJsCode( '{}' )
 	 * - new stdClass()
 	 * - (object)[]
-	 *
-	 * @param array &$array
 	 */
 	private static function trimArray( array &$array ): void {
 		$i = count( $array );
@@ -1628,10 +1583,10 @@ MESSAGE;
 	 *  - string: module name
 	 *  - string: module version
 	 *  - array|null: List of dependencies (optional)
-	 *  - string|null: Module group (optional)
+	 *  - int|null: Module group (optional)
 	 *  - string|null: Name of foreign module source, or 'local' (optional)
 	 *  - string|null: Script body of a skip function (optional)
-	 * @phan-param array<int,array{0:string,1:string,2?:?array,3?:?string,4?:?string,5?:?string}> $modules
+	 * @phan-param array<int,array{0:string,1:string,2?:?array,3?:?int,4?:?string,5?:?string}> $modules
 	 * @return string JavaScript code
 	 */
 	public static function makeLoaderRegisterScript(
@@ -1706,7 +1661,7 @@ MESSAGE;
 	public static function makeInlineCodeWithModule( $modules, $script ) {
 		// Adds an array to lazy-created RLQ
 		return '(RLQ=window.RLQ||[]).push(['
-			. self::encodeJsonForScript( $modules ) . ','
+			. json_encode( $modules ) . ','
 			. 'function(){' . trim( $script ) . '}'
 			. ']);';
 	}
@@ -1728,31 +1683,6 @@ MESSAGE;
 			"<script>(RLQ=window.RLQ||[]).push(function(){",
 			'});</script>'
 		);
-	}
-
-	/**
-	 * Return JS code which will set the MediaWiki configuration array to
-	 * the given value.
-	 *
-	 * @param array $configuration List of configuration values keyed by variable name
-	 * @return string JavaScript code
-	 * @throws LogicException
-	 *
-	 * @deprecated since 1.44, Consider using package files instead or
-	 * you can return mw.config.set() combined with RL\Context::encodeJson, if available.
-	 * If not, use FormatJson::encode.
-	 */
-	public static function makeConfigSetScript( array $configuration ) {
-		$json = self::encodeJsonForScript( $configuration );
-		if ( $json === false ) {
-			$e = new LogicException(
-				'JSON serialization of config data failed. ' .
-				'This usually means the config data is not valid UTF-8.'
-			);
-			MWExceptionHandler::logException( $e );
-			return 'mw.log.error(' . self::encodeJsonForScript( $e->__toString() ) . ');';
-		}
-		return "mw.config.set($json);";
 	}
 
 	/**
@@ -1800,7 +1730,7 @@ MESSAGE;
 		$retval = [];
 		$exploded = explode( '|', $modules );
 		foreach ( $exploded as $group ) {
-			if ( strpos( $group, ',' ) === false ) {
+			if ( !str_contains( $group, ',' ) ) {
 				// This is not a set of modules in foo.bar,baz notation
 				// but a single module
 				$retval[] = $group;
@@ -1831,16 +1761,17 @@ MESSAGE;
 	 * - 2) Cookie,
 	 * - 3) Site configuration.
 	 *
+	 * @deprecated since 1.47
 	 * @return int
 	 */
 	public static function inDebugMode() {
+		wfDeprecated( __METHOD__, '1.47' );
 		if ( self::$debugMode === null ) {
-			global $wgRequest;
-
 			$resourceLoaderDebug = MediaWikiServices::getInstance()->getMainConfig()->get(
 				MainConfigNames::ResourceLoaderDebug );
-			$str = $wgRequest->getRawVal( 'debug' ) ??
-				$wgRequest->getCookie( 'resourceLoaderDebug', '', $resourceLoaderDebug ? 'true' : '' );
+			$request = RequestContext::getMain()->getRequest();
+			$str = $request->getRawVal( 'debug' ) ??
+				$request->getCookie( 'resourceLoaderDebug', '', $resourceLoaderDebug ? 'true' : '' );
 			self::$debugMode = Context::debugFromString( $str );
 		}
 		return self::$debugMode;
@@ -1972,7 +1903,9 @@ MESSAGE;
 	 */
 	public static function isValidModuleName( $moduleName ) {
 		$len = strlen( $moduleName );
-		return $len <= 255 && strcspn( $moduleName, '!,|', 0, $len ) === $len;
+		return ( $len <= 255
+			&& strcspn( $moduleName, '!,|', 0, $len ) === $len )
+			&& ( !str_starts_with( $moduleName, "./" ) && !str_starts_with( $moduleName, "../" ) );
 	}
 
 	/**
@@ -1998,7 +1931,7 @@ MESSAGE;
 		$parser = new Less_Parser;
 		$parser->ModifyVars( $vars );
 		$parser->SetOption( 'relativeUrls', false );
-		$parser->SetOption( 'math', 'always' );
+		$parser->SetOption( 'math', 'parens-division' );
 
 		// SetImportDirs expects an array like [ 'path1' => '', 'path2' => '' ]
 		$formattedImportDirs = array_fill_keys( $importDirs, '' );
@@ -2017,7 +1950,7 @@ MESSAGE;
 				'mediawiki.skin.codex-design-tokens/' => $codexDevDir !== null ?
 					"$codexDevDir/packages/codex-design-tokens/dist/" :
 					MW_INSTALL_PATH . '/resources/lib/codex-design-tokens/',
-				'@wikimedia/codex-design-tokens/' => /** @return never */ static function ( $unused_path ) {
+				'@wikimedia/codex-design-tokens/' => static function ( $unused_path ): never {
 					throw new RuntimeException(
 						'Importing from @wikimedia/codex-design-tokens is not supported. ' .
 						"To use the Codex tokens, use `@import 'mediawiki.skin.variables.less';` instead."
@@ -2028,7 +1961,8 @@ MESSAGE;
 				if ( str_starts_with( $path, $importPath ) ) {
 					$restOfPath = substr( $path, strlen( $importPath ) );
 					if ( is_callable( $substPath ) ) {
-						$resolvedPath = call_user_func( $substPath, $restOfPath );
+						// @phan-suppress-next-line PhanUseReturnValueOfNever
+						$resolvedPath = $substPath( $restOfPath );
 					} else {
 						$filePath = $substPath . $restOfPath;
 
@@ -2058,34 +1992,6 @@ MESSAGE;
 	}
 
 	/**
-	 * Resolve a possibly relative URL against a base URL.
-	 *
-	 * The base URL must have a server and should have a protocol.
-	 * A protocol-relative base expands to HTTPS.
-	 *
-	 * This is a standalone version of MediaWiki's UrlUtils::expand (T32956).
-	 *
-	 * @internal For use by core ResourceLoader classes only
-	 * @param string $base
-	 * @param string $url
-	 * @return string URL
-	 */
-	public function expandUrl( string $base, string $url ): string {
-		// Net_URL2::resolve() doesn't allow protocol-relative URLs, but we do.
-		$isProtoRelative = strpos( $base, '//' ) === 0;
-		if ( $isProtoRelative ) {
-			$base = "https:$base";
-		}
-		// Net_URL2::resolve() takes care of throwing if $base doesn't have a server.
-		$baseUrl = new Net_URL2( $base );
-		$ret = $baseUrl->resolve( $url );
-		if ( $isProtoRelative ) {
-			$ret->setScheme( false );
-		}
-		return $ret->getURL();
-	}
-
-	/**
 	 * Run JavaScript or CSS data through a filter, caching the filtered result for future calls.
 	 *
 	 * Available filters are:
@@ -2103,10 +2009,6 @@ MESSAGE;
 	 * @return string Filtered data or unfiltered data
 	 */
 	public static function filter( $filter, $data, array $options = [] ) {
-		if ( strpos( $data, self::FILTER_NOMIN ) !== false ) {
-			return $data;
-		}
-
 		if ( isset( $options['cache'] ) && $options['cache'] === false ) {
 			return self::applyFilter( $filter, $data ) ?? $data;
 		}
@@ -2123,20 +2025,17 @@ MESSAGE;
 		);
 
 		$status = 'hit';
-		$incKey = "resourceloader_cache.$filter.$status";
 		$result = $cache->getWithSetCallback(
 			$key,
 			BagOStuff::TTL_DAY,
-			static function () use ( $filter, $data, &$incKey, &$status ) {
+			static function () use ( $filter, $data, &$status ) {
 				$status = 'miss';
-				$incKey = "resourceloader_cache.$filter.$status";
 				return self::applyFilter( $filter, $data );
 			}
 		);
 		$statsFactory->getCounter( 'resourceloader_cache_total' )
 			->setLabel( 'type', $filter )
 			->setLabel( 'status', $status )
-			->copyToStatsdAt( [ $incKey ] )
 			->increment();
 
 		// Use $data on cache failure

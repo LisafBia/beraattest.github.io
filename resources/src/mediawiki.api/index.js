@@ -8,13 +8,25 @@
 	 * @property {boolean} [useUS] Whether to use U+001F when joining multi-valued
 	 *  parameters (since 1.28). Default is true if ajax.url is not set, false otherwise for
 	 *  compatibility.
+	 * @property {string} [userAgent] User agent string to use for API requests (since 1.44).
+	 *  This should identify what component (extension, gadget, user script) is making the request.
 	 */
 
 	/**
 	 * @private
 	 * @type {mw.Api.Options}
 	 */
-	let defaultOptions = null;
+	const defaultOptions = {
+		parameters: {
+			action: 'query',
+			format: 'json'
+		},
+		ajax: {
+			url: mw.util.wikiScript( 'api' ),
+			timeout: 30 * 1000, // 30 seconds
+			dataType: 'json'
+		}
+	};
 
 	/**
 	 * @classdesc Interact with the MediaWiki API. `mw.Api` is a client library for
@@ -61,8 +73,9 @@
 
 		defaults.parameters = Object.assign( {}, defaultOptions.parameters, defaults.parameters );
 		defaults.ajax = Object.assign( {}, defaultOptions.ajax, defaults.ajax );
+		defaults.userAgent = defaults.userAgent || ( 'MediaWiki-JS/' + mw.config.get( 'wgVersion' ) );
 
-		// Force a string if we got a mw.Uri object
+		// Force a string if we got an object, e.g. a `URL`
 		if ( setsUrl ) {
 			defaults.ajax.url = String( defaults.ajax.url );
 		}
@@ -74,24 +87,9 @@
 		this.requests = [];
 	};
 
-	/**
-	 * @private
-	 * @type {mw.Api.Options}
-	 */
-	defaultOptions = {
-		parameters: {
-			action: 'query',
-			format: 'json'
-		},
-		ajax: {
-			url: mw.util.wikiScript( 'api' ),
-			timeout: 30 * 1000, // 30 seconds
-			dataType: 'json'
-		}
-	};
-
-	function mapLegacyToken( action ) {
-		// Legacy types for backward-compatibility with API action=tokens.
+	function normalizeTokenType( type ) {
+		// Aliases for types that mw.Api has always supported,
+		// based on how action=tokens worked previously (T280806).
 		const csrfActions = [
 			'edit',
 			'delete',
@@ -103,12 +101,10 @@
 			'import',
 			'options'
 		];
-		if ( csrfActions.indexOf( action ) !== -1 ) {
-			mw.track( 'mw.deprecate', 'apitoken_' + action );
-			mw.log.warn( 'Use of the "' + action + '" token is deprecated. Use "csrf" instead.' );
+		if ( csrfActions.includes( type ) ) {
 			return 'csrf';
 		}
-		return action;
+		return type;
 	}
 
 	function createTokenCache() {
@@ -192,7 +188,7 @@
 			for ( key in parameters ) {
 				// Multiple values are pipe-separated
 				if ( Array.isArray( parameters[ key ] ) ) {
-					if ( !useUS || parameters[ key ].join( '' ).indexOf( '|' ) === -1 ) {
+					if ( !useUS || !parameters[ key ].join( '' ).includes( '|' ) ) {
 						parameters[ key ] = parameters[ key ].join( '|' );
 					} else {
 						parameters[ key ] = '\x1f' + parameters[ key ].join( '\x1f' );
@@ -299,6 +295,27 @@
 				}
 			}
 
+			ajaxOptions.headers = ajaxOptions.headers || {};
+			const lowercaseHeaders = Object.keys( ajaxOptions.headers || {} ).map( ( k ) => k.toLowerCase() );
+			if ( !lowercaseHeaders.includes( 'api-user-agent' ) ) {
+				ajaxOptions.headers[ 'Api-User-Agent' ] = this.defaults.userAgent;
+			}
+
+			if ( ajaxOptions.type === 'GET' && ajaxOptions.data.length > 7500 ) {
+				// Change GET requests which are likely to fail due to URL length limits
+				// to read-only POST requests. One day this should use QUERY instead. (T410883)
+				ajaxOptions.type = 'POST';
+				ajaxOptions.headers[ 'Promise-Non-Write-API-Action' ] = 'true';
+				mw.log.warn( 'API request method changed from GET to POST due to URL length', ajaxOptions );
+			}
+
+			// Add the 'action' query parameter to the request URL, and not just POST request body,
+			// for ease of use in debugging, analytics, and request routing or filtering. (T421288)
+			if ( ajaxOptions.type === 'POST' && parameters.action !== undefined ) {
+				ajaxOptions.url += ( ajaxOptions.url.includes( '?' ) ? '&' : '?' ) +
+					'action=' + encodeURIComponent( parameters.action );
+			}
+
 			// Make the AJAX request
 			const xhr = $.ajax( ajaxOptions )
 				// If AJAX fails, or is aborted by the abortable promise's .abort() method,
@@ -357,6 +374,21 @@
 					( details instanceof DOMException && details.name === 'AbortError' )
 				) ) {
 					mw.log( 'mw.Api error: ', code, details );
+
+					const inSample = Math.random() < require( './config.json' ).ApiClientErrorSampleRate;
+					if ( code === 'http' && details.xhr.status === 429 && inSample ) {
+						// Abbreviate the query parameters into something that can be logged publicly,
+						// but can still indicate which component is making too many API requests.
+						let logParameters = `action=${ parameters.action }`;
+						if ( parameters.action === 'query' ) {
+							for ( const param of [ 'prop', 'list', 'meta' ] ) {
+								if ( parameters[ param ] ) {
+									logParameters += `&${ param }=${ parameters[ param ] }`;
+								}
+							}
+						}
+						mw.errorLogger.logError( new Error( `HTTP 429 ${ logParameters }` ), 'error.mw-api' );
+					}
 				}
 			} );
 		},
@@ -449,7 +481,6 @@
 					if ( code === 'badtoken' ) {
 						this.badToken( tokenType );
 						// Try again, once
-						params.token = undefined;
 						return this.getToken( tokenType, assertParams ).then( ( t ) => {
 							params.token = t;
 							return this.post( params, ajaxOptions );
@@ -473,7 +504,7 @@
 		 * @return {mw.Api~AbortablePromise<string>} Received token.
 		 */
 		getToken: function ( type, additionalParams, ajaxOptions ) {
-			type = mapLegacyToken( type );
+			type = normalizeTokenType( type );
 			if ( typeof additionalParams === 'string' ) {
 				additionalParams = { assert: additionalParams };
 			}
@@ -534,7 +565,7 @@
 		badToken: function ( type ) {
 			const promiseGroup = promises[ this.defaults.ajax.url ];
 
-			type = mapLegacyToken( type );
+			type = normalizeTokenType( type );
 			if ( promiseGroup ) {
 				delete promiseGroup[ type + 'Token' ];
 			}
@@ -544,6 +575,13 @@
 		 * Given an API response indicating an error, get a jQuery object containing a human-readable
 		 * error message that you can display somewhere on the page.
 		 *
+		 * This method handles the different error formats returned by the action API itself, and some
+		 * error conditions that may occur at other layers, e.g. user losing their network connection,
+		 * server being down, rate limits enforced by a proxy in front of MediaWiki, etc.
+		 *
+		 * Error messages, particularly for editing pages, may consist of multiple paragraphs of text.
+		 * Your user interface should have enough space for that.
+		 *
 		 * For better quality of error messages, it's recommended to use the following options in your
 		 * API queries:
 		 *
@@ -552,9 +590,6 @@
 		 * errorlang: mw.config.get( 'wgUserLanguage' ),
 		 * errorsuselocal: true,
 		 * ```
-		 *
-		 * Error messages, particularly for editing pages, may consist of multiple paragraphs of text.
-		 * Your user interface should have enough space for that.
 		 *
 		 * @example
 		 * var api = new mw.Api();
@@ -600,6 +635,29 @@
 					// Server returned invalid JSON
 					// data.exception is probably a SyntaxError exception
 					return $( '<div>' ).append( mw.message( 'api-clientside-error-invalidresponse' ).parseDom() );
+				} else if ( data.xhr.status === 429 ) {
+					// Server HTTP error: 429 Too Many Requests
+					const retryAfter = data.xhr.getResponseHeader( 'Retry-After' );
+					if ( retryAfter ) {
+						// Simplified from Language::formatDuration()
+						const segments = [];
+						if ( Math.floor( retryAfter / 3600 ) > 0 ) {
+							segments.push( mw.msg( 'duration-hours', mw.language.convertNumber( Math.floor( retryAfter / 3600 ) ) ) );
+						}
+						if ( Math.floor( retryAfter % 3600 / 60 ) > 0 ) {
+							segments.push( mw.msg( 'duration-minutes', mw.language.convertNumber( Math.floor( retryAfter % 3600 / 60 ) ) ) );
+						}
+						if ( Math.floor( retryAfter % 60 ) > 0 ) {
+							segments.push( mw.msg( 'duration-seconds', mw.language.convertNumber( Math.floor( retryAfter % 60 ) ) ) );
+						}
+						if ( segments.length === 0 ) {
+							segments.push( mw.msg( 'duration-seconds', mw.language.convertNumber( 0 ) ) );
+						}
+						const formattedDuration = mw.language.listToText( segments );
+						return $( '<div>' ).append( mw.message( 'api-clientside-error-http-429-retry', formattedDuration ).parseDom() );
+					} else {
+						return $( '<div>' ).append( mw.message( 'api-clientside-error-http-429' ).parseDom() );
+					}
 				} else if ( data.xhr.status ) {
 					// Server HTTP error
 					// data.exception is probably the HTTP "reason phrase", e.g. "Internal Server Error"
@@ -616,10 +674,18 @@
 				return $( '<div>' ).text( data.error.info );
 
 			} else if ( data.errors ) {
-				// errorformat: 'html'
+				// errorformat: 'html' (hopefully) or another non-bc format
 				return $( data.errors.map( ( err ) => {
-					// formatversion: 1 / 2
-					const $node = $( '<div>' ).html( err[ '*' ] || err.html );
+					const $node = $( '<div>' );
+					if ( err.html ) {
+						$node.html( err.html );
+					} else if ( err.text ) {
+						$node.text( err.text );
+					} else {
+						// formatversion=1, we can’t tell if this was errorformat=html or errorformat=plaintext;
+						// err on the safe side and treat it as text
+						$node.text( err[ '*' ] );
+					}
 					return $node[ 0 ];
 				} ) );
 
@@ -674,3 +740,17 @@
 		};
 	}
 }() );
+
+require( './AbortablePromise.js' );
+require( './AbortController.js' );
+require( './rest.js' );
+require( './category.js' );
+require( './edit.js' );
+require( './login.js' );
+require( './messages.js' );
+require( './options.js' );
+require( './parse.js' );
+require( './rollback.js' );
+require( './upload.js' );
+require( './user.js' );
+require( './watch.js' );

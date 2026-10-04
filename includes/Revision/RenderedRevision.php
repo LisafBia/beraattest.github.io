@@ -2,21 +2,7 @@
 /**
  * This file is part of MediaWiki.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -132,9 +118,6 @@ class RenderedRevision implements SlotRenderingProvider {
 		$this->performer = $performer;
 	}
 
-	/**
-	 * @param LoggerInterface $saveParseLogger
-	 */
 	public function setSaveParseLogger( LoggerInterface $saveParseLogger ) {
 		$this->saveParseLogger = $saveParseLogger;
 	}
@@ -184,8 +167,8 @@ class RenderedRevision implements SlotRenderingProvider {
 
 	/**
 	 * @param array $hints Hints given as an associative array. Known keys:
-	 *      - 'generate-html' => bool: Whether the caller is interested in output HTML (as opposed
-	 *        to just meta-data). Default is to generate HTML.
+	 *   - 'generate-html' => bool: Whether the caller is interested in output HTML (as opposed
+	 *     to just meta-data). Default is to generate HTML.
 	 * @phan-param array{generate-html?:bool} $hints
 	 *
 	 * @return ParserOutput
@@ -196,7 +179,7 @@ class RenderedRevision implements SlotRenderingProvider {
 		if ( !$this->revisionOutput
 			|| ( $withHtml && !$this->revisionOutput->hasText() )
 		) {
-			$output = call_user_func( $this->combineOutput, $this, $hints );
+			$output = ( $this->combineOutput )( $this, $hints );
 
 			Assert::postcondition(
 				$output instanceof ParserOutput,
@@ -212,14 +195,14 @@ class RenderedRevision implements SlotRenderingProvider {
 	/**
 	 * @param string $role
 	 * @param array $hints Hints given as an associative array. Known keys:
-	 *      - 'generate-html' => bool: Whether the caller is interested in output HTML (as opposed
-	 *        to just meta-data). Default is to generate HTML.
-	 *      - 'previous-output' => ?ParserOutput: An optional "previously parsed"
-	 *        version of this slot; used to allow Parsoid selective updates.
+	 *   - 'generate-html' => bool: Whether the caller is interested in output HTML (as opposed
+	 *     to just meta-data). Default is to generate HTML.
+	 *   - 'previous-output' => ?ParserOutput: An optional "previously parsed"
+	 *     version of this slot; used to allow Parsoid selective updates.
 	 * @phan-param array{generate-html?:bool,previous-output?:?ParserOutput} $hints
 	 *
 	 * @throws SuppressedDataException if the content is not accessible for the audience
-	 *         specified in the constructor.
+	 *   specified in the constructor.
 	 * @throws BadRevisionException
 	 * @throws RevisionAccessException
 	 * @return ParserOutput
@@ -299,6 +282,27 @@ class RenderedRevision implements SlotRenderingProvider {
 			$this->revision->getId(),
 			$this->revision->getTimestamp()
 		);
+
+		// T358708: Update the cache revision ID on any ParserOutput that was
+		// kept (not pruned) by pruneRevisionSensitiveOutput(). These outputs
+		// were originally rendered with a MutableRevisionRecord that had no
+		// revision ID, so ContentRenderer did not set the cacheRevisionId.
+		// Without this, ParserCache::save() would see a mismatch between the
+		// actual revision ID and the null cacheRevisionId, causing a
+		// high-volume "Inconsistent revision ID" warning.
+		$revId = $this->revision->getId();
+		if ( $revId ) {
+			if ( $this->revisionOutput !== null
+				&& $this->revisionOutput->getCacheRevisionId() === null
+			) {
+				$this->revisionOutput->setCacheRevisionId( $revId );
+			}
+			foreach ( $this->slotsOutput as $output ) {
+				if ( $output->getCacheRevisionId() === null ) {
+					$output->setCacheRevisionId( $revId );
+				}
+			}
+		}
 	}
 
 	/**
@@ -344,9 +348,6 @@ class RenderedRevision implements SlotRenderingProvider {
 		}
 	}
 
-	/**
-	 * @param RevisionRecord $revision
-	 */
 	private function setRevisionInternal( RevisionRecord $revision ) {
 		$this->revision = $revision;
 
@@ -387,7 +388,7 @@ class RenderedRevision implements SlotRenderingProvider {
 					if ( $this->revision->getPage()->isSamePageAs( $parserPage ) ) {
 						return $this->revision;
 					} else {
-						return call_user_func( $oldCallback, $parserPage, $parser );
+						return $oldCallback( $parserPage, $parser );
 					}
 				}
 			);

@@ -2,13 +2,12 @@
 
 namespace MediaWiki\Rest\Handler\Helper;
 
-use Liuggio\StatsdClient\Factory\StatsdDataFactoryInterface;
 use MediaWiki\ChangeTags\ChangeTagsStore;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Content\IContentHandlerFactory;
 use MediaWiki\Edit\ParsoidOutputStash;
-use MediaWiki\Languages\LanguageConverterFactory;
-use MediaWiki\Languages\LanguageFactory;
+use MediaWiki\Language\LanguageConverterFactory;
+use MediaWiki\Language\LanguageFactory;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageLookup;
 use MediaWiki\Page\ParserOutputAccess;
@@ -23,6 +22,7 @@ use MediaWiki\Rest\Router;
 use MediaWiki\Revision\RevisionLookup;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\RevisionRenderer;
+use MediaWiki\ShadowPage\ShadowPageLoader;
 use MediaWiki\Title\TitleFactory;
 use MediaWiki\Title\TitleFormatter;
 use Wikimedia\Bcp47Code\Bcp47Code;
@@ -46,7 +46,6 @@ class PageRestHelperFactory {
 	private TitleFormatter $titleFormatter;
 	private PageLookup $pageLookup;
 	private ParsoidOutputStash $parsoidOutputStash;
-	private StatsdDataFactoryInterface $stats;
 	private ParserOutputAccess $parserOutputAccess;
 	private ParsoidSiteConfig $parsoidSiteConfig;
 	private HtmlTransformFactory $htmlTransformFactory;
@@ -58,6 +57,7 @@ class PageRestHelperFactory {
 	private IConnectionProvider $dbProvider;
 	private ChangeTagsStore $changeTagsStore;
 	private StatsFactory $statsFactory;
+	private ShadowPageLoader $shadowPageLoader;
 
 	public function __construct(
 		ServiceOptions $options,
@@ -66,7 +66,6 @@ class PageRestHelperFactory {
 		TitleFormatter $titleFormatter,
 		PageLookup $pageLookup,
 		ParsoidOutputStash $parsoidOutputStash,
-		StatsdDataFactoryInterface $statsDataFactory,
 		ParserOutputAccess $parserOutputAccess,
 		ParsoidSiteConfig $parsoidSiteConfig,
 		HtmlTransformFactory $htmlTransformFactory,
@@ -77,7 +76,8 @@ class PageRestHelperFactory {
 		TitleFactory $titleFactory,
 		IConnectionProvider $dbProvider,
 		ChangeTagsStore $changeTagsStore,
-		StatsFactory $statsFactory
+		StatsFactory $statsFactory,
+		ShadowPageLoader $shadowPageLoader,
 	) {
 		$this->options = $options;
 		$this->revisionLookup = $revisionLookup;
@@ -85,7 +85,6 @@ class PageRestHelperFactory {
 		$this->titleFormatter = $titleFormatter;
 		$this->pageLookup = $pageLookup;
 		$this->parsoidOutputStash = $parsoidOutputStash;
-		$this->stats = $statsDataFactory;
 		$this->parserOutputAccess = $parserOutputAccess;
 		$this->parsoidSiteConfig = $parsoidSiteConfig;
 		$this->htmlTransformFactory = $htmlTransformFactory;
@@ -97,6 +96,7 @@ class PageRestHelperFactory {
 		$this->titleFactory = $titleFactory;
 		$this->dbProvider = $dbProvider;
 		$this->changeTagsStore = $changeTagsStore;
+		$this->shadowPageLoader = $shadowPageLoader;
 	}
 
 	public function newRevisionContentHelper(): RevisionContentHelper {
@@ -107,7 +107,8 @@ class PageRestHelperFactory {
 			$this->pageLookup,
 			$this->titleFactory,
 			$this->dbProvider,
-			$this->changeTagsStore
+			$this->changeTagsStore,
+			$this->shadowPageLoader,
 		);
 	}
 
@@ -119,7 +120,8 @@ class PageRestHelperFactory {
 			$this->pageLookup,
 			$this->titleFactory,
 			$this->dbProvider,
-			$this->changeTagsStore
+			$this->changeTagsStore,
+			$this->shadowPageLoader,
 		);
 	}
 
@@ -181,16 +183,25 @@ class PageRestHelperFactory {
 		);
 	}
 
-	/**
-	 * @note Since 1.43, passing a null $page is deprecated.
-	 */
-	public function newHtmlMessageOutputHelper( ?PageIdentity $page = null ): HtmlMessageOutputHelper {
-		if ( $page === null ) {
-			wfDeprecated( __METHOD__ . ' with null $page', '1.43' );
-		}
-		return new HtmlMessageOutputHelper( $page );
+	public function newHtmlShadowOutputHelper( PageIdentity $page, ParserOptions $parserOptions
+	): HtmlShadowOutputHelper {
+		return new HtmlShadowOutputHelper(
+			$this->shadowPageLoader,
+			$this->titleFormatter,
+			$this->parsoidSiteConfig,
+			$parserOptions,
+			$page
+		);
 	}
 
+	/**
+	 * @param array $envOptions
+	 * @param ?PageIdentity $page
+	 * @param array|string|null $body
+	 * @param array $parameters
+	 * @param RevisionRecord|null $originalRevision
+	 * @param Bcp47Code|null $pageLanguage
+	 */
 	public function newHtmlInputTransformHelper(
 		$envOptions = [],
 		?PageIdentity $page = null,
@@ -209,6 +220,7 @@ class PageRestHelperFactory {
 			$this->parserOutputAccess,
 			$this->pageLookup,
 			$this->revisionLookup,
+			$this->parsoidSiteConfig,
 			$envOptions,
 			$page,
 			$body ?? '',
@@ -224,7 +236,7 @@ class PageRestHelperFactory {
 	public function newPageRedirectHelper(
 		ResponseFactory $responseFactory,
 		Router $router,
-		string $route,
+		string $pathWithModulePrefix,
 		RequestInterface $request
 	): PageRedirectHelper {
 		return new PageRedirectHelper(
@@ -232,7 +244,7 @@ class PageRestHelperFactory {
 			$this->titleFormatter,
 			$responseFactory,
 			$router,
-			$route,
+			$pathWithModulePrefix,
 			$request,
 			$this->languageConverterFactory
 		);

@@ -233,6 +233,86 @@ QUnit.module( 'jquery.tablesorter', QUnit.newMwEnvironment( {
 		}
 	);
 	QUnit.test(
+		'Planets: descending radius with data-sort-order="desc" on first click',
+		( assert ) => {
+			const $table = tableCreate( planetHeader, planets );
+			$table.find( 'th' ).eq( 1 ).attr( 'data-sort-order', 'desc' );
+			$table.tablesorter();
+			assert.strictEqual(
+				$table.find( '.headerSort' ).eq( 1 ).attr( 'title' ),
+				mw.msg( 'sort-descending' ),
+				'Initial title indicates descending sort'
+			);
+			$table.find( '.headerSort' ).eq( 1 ).trigger( 'click' );
+
+			assert.deepEqual( tableExtract( $table ), reversed( planetsAscRadius ) );
+			assert.strictEqual(
+				$table.find( '.headerSort' ).eq( 1 ).attr( 'title' ),
+				mw.msg( 'sort-ascending' ),
+				'Title indicates ascending sort after descending sort'
+			);
+		}
+	);
+	QUnit.test(
+		'Planets: data-sort-order="desc" cycles to ascending on second click',
+		( assert ) => {
+			const $table = tableCreate( planetHeader, planets );
+			$table.find( 'th' ).eq( 1 ).attr( 'data-sort-order', 'desc' );
+			$table.tablesorter();
+			$table.find( '.headerSort' ).eq( 1 ).trigger( 'click' ).trigger( 'click' );
+
+			assert.deepEqual( tableExtract( $table ), planetsAscRadius );
+			assert.strictEqual(
+				$table.find( '.headerSort' ).eq( 1 ).attr( 'title' ),
+				mw.msg( 'sort-initial' ),
+				'Title indicates initial sort after ascending sort'
+			);
+		}
+	);
+	QUnit.test(
+		'Planets: data-sort-order="desc" cycles to initial on third click',
+		( assert ) => {
+			const $table = tableCreate( planetHeader, planets );
+			$table.find( 'th' ).eq( 1 ).attr( 'data-sort-order', 'desc' );
+			$table.tablesorter();
+			$table.find( '.headerSort' ).eq( 1 )
+				.trigger( 'click' )
+				.trigger( 'click' )
+				.trigger( 'click' );
+
+			assert.deepEqual( tableExtract( $table ), planets );
+			assert.strictEqual(
+				$table.find( '.headerSort' ).eq( 1 ).attr( 'title' ),
+				mw.msg( 'sort-descending' ),
+				'Title indicates descending sort after returning to initial sort'
+			);
+		}
+	);
+	QUnit.test(
+		'Planets: data-sort-order="desc" cycles correctly after initial sort',
+		( assert ) => {
+			const $table = tableCreate( planetHeader, planets );
+			$table.find( 'th' ).eq( 1 ).attr( 'data-sort-order', 'desc' );
+			$table.tablesorter( { sortList: [
+				{ 1: 'desc' }
+			] } );
+
+			assert.strictEqual(
+				$table.find( '.headerSort' ).eq( 1 ).attr( 'title' ),
+				mw.msg( 'sort-ascending' ),
+				'Initial sort title indicates ascending sort'
+			);
+			$table.find( '.headerSort' ).eq( 1 ).trigger( 'click' );
+
+			assert.deepEqual( tableExtract( $table ), planetsAscRadius );
+			assert.strictEqual(
+				$table.find( '.headerSort' ).eq( 1 ).attr( 'title' ),
+				mw.msg( 'sort-initial' ),
+				'Title indicates initial sort after ascending sort'
+			);
+		}
+	);
+	QUnit.test(
 		'Sorting multiple columns by passing sort list',
 		( assert ) => {
 			const $table = tableCreate( planetHeader, simple );
@@ -327,7 +407,7 @@ QUnit.module( 'jquery.tablesorter', QUnit.newMwEnvironment( {
 		assert.strictEqual(
 			$table.find( 'th.headerSortUp' ).length + $table.find( 'th.headerSortDown' ).length,
 			0,
-			'No sort specific sort classes addign to header cells'
+			'No sort specific sort classes adding to header cells'
 		);
 
 		assert.strictEqual(
@@ -426,10 +506,9 @@ QUnit.module( 'jquery.tablesorter', QUnit.newMwEnvironment( {
 		const $cell = $table.find( 'tr > th' ).eq( 0 );
 		$table.find( 'tr > th' ).eq( 1 ).trigger( 'click' );
 
-		assert.strictEqual(
+		assert.false(
 			// eslint-disable-next-line no-jquery/no-class-state
 			$cell.hasClass( 'headerSortUp' ) || $cell.hasClass( 'headerSortDown' ),
-			false,
 			'after sort: no class headerSortUp or headerSortDown'
 		);
 
@@ -803,7 +882,7 @@ QUnit.module( 'jquery.tablesorter', QUnit.newMwEnvironment( {
 		}
 	);
 
-	QUnit.test( 'Rowspan invalid value (T265503)', ( assert ) => {
+	QUnit.test( 'Rowspan invalid value (T265503)', function ( assert ) {
 		const rowspanText = 'Row 1 col 3, Row 2 col 3, row 3 col 3 (but there is no row 3)';
 		const $table = $(
 			'<table class="sortable">' +
@@ -816,6 +895,8 @@ QUnit.module( 'jquery.tablesorter', QUnit.newMwEnvironment( {
 				'<tr><td>Row 2 col 1</td><td>Row 2 col 2</td></tr>' +
 				'</table>'
 		);
+		this.suppressWarnings(); // sort-rowspan-error
+
 		$table.tablesorter();
 		$table.find( '.headerSort' ).eq( 0 ).trigger( 'click' );
 		assert.strictEqual(
@@ -861,7 +942,7 @@ QUnit.module( 'jquery.tablesorter', QUnit.newMwEnvironment( {
 		);
 	} );
 
-	// FIXME: the diff output is not very readeable.
+	// FIXME: the diff output is not very readable.
 	QUnit.test( 'T34047 - caption must be before thead', ( assert ) => {
 		const $table = $(
 			'<table class="sortable">' +
@@ -1716,7 +1797,7 @@ QUnit.module( 'jquery.tablesorter', QUnit.newMwEnvironment( {
 		QUnit.test( 'MY Dates', function ( assert ) {
 			this.parser( assert, 'date', [
 				[ 'December 2010', false, '99999999', 'Plain month year' ],
-				[ 'Dec 2010', false, '99999999', 'Abreviated month year' ],
+				[ 'Dec 2010', false, '99999999', 'Abbreviated month year' ],
 				[ '12 2010', false, '99999999', 'Numeric month year' ]
 			] );
 		} );
@@ -1726,7 +1807,7 @@ QUnit.module( 'jquery.tablesorter', QUnit.newMwEnvironment( {
 				[ '2010', false, '99999999', 'Plain 4-digit year' ],
 				[ '876', false, '99999999', '3-digit year' ],
 				[ '76', false, '99999999', '2-digit year' ],
-				[ '\'76', false, '99999999', '2-digit millenium bug year' ],
+				[ '\'76', false, '99999999', '2-digit millennium bug year' ],
 				[ '2010 BC', false, '99999999', '4-digit year BC' ]
 			] );
 		} );

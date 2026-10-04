@@ -2,27 +2,14 @@
 /**
  * Generic class to cleanup a database table.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\WikiMap\WikiMap;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -74,7 +61,7 @@ class TableCleanup extends Maintenance {
 		$this->runTable( $this->defaultParams );
 	}
 
-	protected function init( $count, $table ) {
+	protected function init( int $count, string $table ) {
 		$this->processed = 0;
 		$this->updated = 0;
 		$this->count = $count;
@@ -102,10 +89,10 @@ class TableCleanup extends Maintenance {
 		$this->output(
 			sprintf( "%s %s: %6.2f%% done on %s; ETA %s [%d/%d] %.2f/sec <%.2f%% updated>\n",
 				WikiMap::getCurrentWikiDbDomain()->getId(),
-				wfTimestamp( TS_DB, intval( $now ) ),
+				wfTimestamp( TS::DB, intval( $now ) ),
 				$portion * 100.0,
 				$this->table,
-				wfTimestamp( TS_DB, intval( $eta ) ),
+				wfTimestamp( TS::DB, intval( $eta ) ),
 				$this->processed,
 				$this->count,
 				$this->processed / $delta,
@@ -155,7 +142,7 @@ class TableCleanup extends Maintenance {
 			}
 
 			foreach ( $res as $row ) {
-				call_user_func( $callback, $row );
+				$callback( $row );
 			}
 
 			if ( $res->numRows() < $this->getBatchSize() ) {

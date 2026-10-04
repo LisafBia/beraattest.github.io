@@ -1,44 +1,29 @@
 <?php
 
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\Tests\Unit;
 
-use Interwiki;
 use InvalidArgumentException;
-use MediaWiki\Cache\CacheKeyHelper;
 use MediaWiki\Cache\GenderCache;
 use MediaWiki\CommentFormatter\CommentParser;
 use MediaWiki\CommentFormatter\CommentParserFactory;
 use MediaWiki\CommentStore\CommentStore;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Content\IContentHandlerFactory;
+use MediaWiki\Interwiki\Interwiki;
 use MediaWiki\Interwiki\InterwikiLookup;
 use MediaWiki\Language\Language;
-use MediaWiki\Languages\LanguageNameUtils;
+use MediaWiki\Language\LanguageNameUtils;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\MainConfigSchema;
+use MediaWiki\Page\CacheKeyHelper;
 use MediaWiki\Page\PageReference;
 use MediaWiki\Tests\MockDatabase;
 use MediaWiki\Title\MalformedTitleException;
-use MediaWiki\Title\MediaWikiTitleCodec;
 use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Title\TitleFormatter;
 use MediaWiki\Title\TitleParser;
@@ -68,9 +53,8 @@ use Wikimedia\Services\NoSuchServiceException;
  * Getters are in the form getDummy{ServiceName} because they *might* be
  * returning mock objects (like getDummyWatchedItemStore), they *might* be
  * returning real services but with dependencies that are mocks (like
- * getDummyMediaWikiTitleCodec), or they *might* be full real services
- * with no mocks (like getDummyNamespaceInfo) but with the name "dummy"
- * to be consistent.
+ * getDummyTitleParser), or they *might* be full real services with no mocks
+ * (like getDummyNamespaceInfo) but with the name "dummy" to be consistent.
  *
  * @internal
  * @author DannyS712
@@ -105,13 +89,10 @@ trait DummyServicesTrait {
 		CommentParser $parser
 	): CommentParserFactory {
 		return new class( $parser ) extends CommentParserFactory {
-			private $parser;
-
-			public function __construct( $parser ) {
-				$this->parser = $parser;
+			public function __construct( private readonly CommentParser $parser ) {
 			}
 
-			public function create() {
+			public function create(): CommentParser {
 				return $this->parser;
 			}
 		};
@@ -165,7 +146,7 @@ trait DummyServicesTrait {
 	 *     that it is valid, or an array with some or all of the information for a row
 	 *     from the interwiki table (iw_prefix, iw_url, iw_api, iw_wikiid, iw_local, iw_trans).
 	 *     Like the real InterwikiLookup interface, the iw_api/iw_wikiid/iw_local/iw_trans are
-	 *     all optional, defaulting to empty strings or 0 as approriate. *Unlike* the real
+	 *     all optional, defaulting to empty strings or 0 as appropriate. *Unlike* the real
 	 *     InterwikiLookup interface, iw_url is also optional, defaulting to an empty string.
 	 * @return InterwikiLookup
 	 */
@@ -203,16 +184,20 @@ trait DummyServicesTrait {
 
 		// Actual implementation
 		return new class( $allInterwikiRows ) implements InterwikiLookup {
+			/** @var array */
 			private $allInterwikiRows;
 
+			/** @inheritDoc */
 			public function __construct( $allInterwikiRows ) {
 				$this->allInterwikiRows = $allInterwikiRows;
 			}
 
+			/** @inheritDoc */
 			public function isValidInterwiki( $prefix ) {
 				return (bool)$this->fetch( $prefix );
 			}
 
+			/** @inheritDoc */
 			public function fetch( $prefix ) {
 				if ( $prefix == '' ) {
 					return null;
@@ -238,6 +223,7 @@ trait DummyServicesTrait {
 				);
 			}
 
+			/** @inheritDoc */
 			public function getAllPrefixes( $local = null ) {
 				if ( $local === null ) {
 					return array_values( $this->allInterwikiRows );
@@ -252,6 +238,7 @@ trait DummyServicesTrait {
 				);
 			}
 
+			/** @inheritDoc */
 			public function invalidateCache( $prefix ) {
 				// Nothing to do
 			}
@@ -280,29 +267,40 @@ trait DummyServicesTrait {
 	}
 
 	/**
-	 * @param array $options see getDummyMediaWikiTitleCodec for supported options
+	 * @param array $options Options passed to getDummyNamespaceInfo()
 	 * @return TitleFormatter
 	 */
 	private function getDummyTitleFormatter( array $options = [] ): TitleFormatter {
-		return $this->getDummyMediaWikiTitleCodec( $options );
+		$namespaceInfo = $this->getDummyNamespaceInfo( $options );
+
+		/** @var Language|MockObject $language */
+		$language = $this->createMock( Language::class );
+		$language->method( 'getNsText' )->willReturnCallback(
+			static function ( $index ) use ( $namespaceInfo ) {
+				// based on the real Language::getNsText but without
+				// the support for translated namespace names
+				$namespaces = $namespaceInfo->getCanonicalNamespaces();
+				return $namespaces[$index] ?? false;
+			}
+		);
+		// Not dealing with genders, most languages don't - as a result,
+		// the GenderCache is never used and thus a no-op mock
+		$language->method( 'needsGenderDistinction' )->willReturn( false );
+
+		/** @var GenderCache|MockObject $genderCache */
+		$genderCache = $this->createMock( GenderCache::class );
+
+		return new TitleFormatter(
+			$language,
+			$genderCache,
+			$namespaceInfo
+		);
 	}
 
 	/**
-	 * @param array $options see getDummyMediaWikiTitleCodec for supported options
-	 * @return TitleParser
-	 */
-	private function getDummyTitleParser( array $options = [] ): TitleParser {
-		return $this->getDummyMediaWikiTitleCodec( $options );
-	}
-
-	/**
-	 * Note: you should probably use getDummyTitleFormatter or getDummyTitleParser,
-	 * unless you actually need both services, in which case it doesn't make sense
-	 * to get two different objects when they are implemented together.
-	 *
-	 * Note that MediaWikiTitleCodec can throw MalformedTitleException which cannot be
+	 * Note that TitleParser can throw MalformedTitleException which cannot be
 	 * created in unit tests - you can change this by providing a callback to
-	 * MediaWikiTitleCodec::overrideCreateMalformedTitleExceptionCallback() to use to
+	 * TitleParser::overrideCreateMalformedTitleExceptionCallback() to use to
 	 * create the exception that can return a mock. If you use the option 'throwMockExceptions'
 	 * here, the callback will be replaced with one that throws a generic mock
 	 * MalformedTitleException, i.e. without taking into account the actual message or
@@ -311,13 +309,12 @@ trait DummyServicesTrait {
 	 * detecting invalid titles.
 	 *
 	 * @param array $options Supported keys:
-	 *    - validInterwikis: array of interwiki info to pass to getDummyInterwikiLookup
-	 *    - throwMockExceptions: boolean, see above
-	 *    - any of the options passed to getDummyNamespaceInfo (the same $options is passed on)
-	 *
-	 * @return MediaWikiTitleCodec
+	 *   - validInterwikis: array of interwiki info to pass to getDummyInterwikiLookup
+	 *   - throwMockExceptions: boolean, see above
+	 *   - any of the options passed to getDummyNamespaceInfo (the same $options is passed on)
+	 * @return TitleParser
 	 */
-	private function getDummyMediaWikiTitleCodec( array $options = [] ): MediaWikiTitleCodec {
+	private function getDummyTitleParser( array $options = [] ): TitleParser {
 		$baseConfig = [
 			'validInterwikis' => [],
 			'throwMockExceptions' => false,
@@ -356,42 +353,27 @@ trait DummyServicesTrait {
 				return $aliases[$text] ?? false;
 			}
 		);
-		$language->method( 'getNsText' )->willReturnCallback(
-			static function ( $index ) use ( $namespaceInfo ) {
-				// based on the real Language::getNsText but without
-				// the support for translated namespace names
-				$namespaces = $namespaceInfo->getCanonicalNamespaces();
-				return $namespaces[$index] ?? false;
-			}
-		);
-		// Not dealing with genders, most languages don't - as a result,
-		// the GenderCache is never used and thus a no-op mock
-		$language->method( 'needsGenderDistinction' )->willReturn( false );
-
-		/** @var GenderCache|MockObject $genderCache */
-		$genderCache = $this->createMock( GenderCache::class );
 
 		$interwikiLookup = $this->getDummyInterwikiLookup( $config['validInterwikis'] );
 
-		$titleCodec = new MediaWikiTitleCodec(
+		$titleParser = new TitleParser(
 			$language,
-			$genderCache,
-			[ 'en' ],
 			$interwikiLookup,
-			$namespaceInfo
+			$namespaceInfo,
+			[ 'en' ],
 		);
 
 		if ( $config['throwMockExceptions'] ) {
 			// Throw mock `MalformedTitleException`s, doesn't take into account the
 			// specifics of the parameters provided
-			$titleCodec->overrideCreateMalformedTitleExceptionCallback(
+			$titleParser->overrideCreateMalformedTitleExceptionCallback(
 				function ( $errorMessage, $titleText = null, $errorMessageParameters = [] ) {
 					return $this->createMock( MalformedTitleException::class );
 				}
 			);
 		}
 
-		return $titleCodec;
+		return $titleParser;
 	}
 
 	/**
@@ -521,12 +503,7 @@ trait DummyServicesTrait {
 
 		$titleParser = $options['titleParser'] ?? false;
 		if ( !$titleParser ) {
-			// The TitleParser from DummyServicesTrait::getDummyTitleParser is really a
-			// MediaWikiTitleCodec object, and by passing `throwMockExceptions` we replace
-			// the actual creation of `MalformedTitleException`s with mocks - see
-			// MediaWikiTitleCodec::overrideCreateMalformedTitleExceptionCallback()
-			// The UserNameUtils code doesn't care about the message in the exception,
-			// just whether it is thrown.
+			// Use `throwMockExceptions` to avoid wfMessage() call
 			$titleParser = $this->getDummyTitleParser(
 				$options + [
 					'validInterwikis' => [ 'interwiki' ],
@@ -628,7 +605,11 @@ trait DummyServicesTrait {
 	private function getDummyCommentStore(): CommentStore {
 		$mockLang = $this->createNoOpMock( Language::class,
 			[ 'truncateForVisual', 'truncateForDatabase' ] );
-		$mockLang->method( $this->logicalOr( 'truncateForDatabase', 'truncateForVisual' ) )
+		$mockLang
+			->method( $this->logicalOr(
+				$this->identicalTo( 'truncateForDatabase' ),
+				$this->identicalTo( 'truncateForVisual' )
+			) )
 			->willReturnCallback(
 				static function ( string $text, int $limit ): string {
 					if ( strlen( $text ) > $limit - 3 ) {

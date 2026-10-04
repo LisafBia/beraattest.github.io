@@ -1,40 +1,31 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\Permissions;
 
-use ErrorPageError;
+use MediaWiki\Block\AbstractBlock;
 use MediaWiki\Block\Block;
-use PermissionsError;
+use MediaWiki\Block\CompositeBlock;
+use MediaWiki\Exception\ErrorPageError;
+use MediaWiki\Exception\PermissionsError;
+use MediaWiki\Exception\ThrottledError;
+use MediaWiki\Exception\UserBlockedError;
 use StatusValue;
-use ThrottledError;
-use UserBlockedError;
 
 /**
  * A StatusValue for permission errors.
+ *
+ * This status will never have a value. It's only used to keep track of errors.
  *
  * @todo Add compat code for PermissionManager::getPermissionErrors
  *       and additional info about user blocks.
  *
  * @unstable
  * @since 1.36
+ * @extends StatusValue<never>
  */
 class PermissionStatus extends StatusValue {
 
@@ -46,6 +37,48 @@ class PermissionStatus extends StatusValue {
 
 	/** @var ?string */
 	private $permission = null;
+
+	private ?string $reauthOperation = null;
+
+	/** @var string[] Potential reauth operations checked for this action */
+	private array $checkedReauthOperations = [];
+
+	/**
+	 * @note Merging two PermissionStatus objects with different permission fields is not advised.
+	 *   If both $this and $other have permission set, the one from $this will be kept and the
+	 *   one from $other will be lost.
+	 * @inheritDoc
+	 */
+	public function merge( $other, $overwriteValue = false ) {
+		parent::merge( $other, $overwriteValue );
+		if ( $other instanceof PermissionStatus ) {
+			if ( $other->block !== null ) {
+				if ( $this->block === null ) {
+					$this->block = $other->block;
+				} elseif (
+					$other->block->getIdentifier() !== $this->block->getIdentifier() &&
+					// For Phan
+					$this->block instanceof AbstractBlock &&
+					$other->block instanceof AbstractBlock
+				) {
+					$this->block = CompositeBlock::createFromBlocks( $this->block, $other->block );
+				}
+			}
+			if ( $this->permission === null ) {
+				$this->permission = $other->permission;
+			}
+			if ( $other->rateLimitExceeded !== null ) {
+				$this->rateLimitExceeded = $this->rateLimitExceeded || $other->rateLimitExceeded;
+			}
+			if ( $other->reauthOperation !== null ) {
+				$this->reauthOperation = $other->reauthOperation;
+			}
+			foreach ( $other->checkedReauthOperations as $operation ) {
+				$this->addCheckedReauthOperation( $operation );
+			}
+		}
+		return $this;
+	}
 
 	/**
 	 * Returns the user block that contributed to permissions being denied,
@@ -83,30 +116,15 @@ class PermissionStatus extends StatusValue {
 		$this->setOK( false );
 	}
 
-	/**
-	 * @return static
-	 */
-	public static function newEmpty() {
+	public static function newEmpty(): static {
 		return new static();
-	}
-
-	/**
-	 * Returns this permission status in legacy error array format.
-	 *
-	 * @deprecated since 1.43
-	 * @see PermissionManager::getPermissionErrors()
-	 *
-	 * @return array[]
-	 */
-	public function toLegacyErrorArray(): array {
-		return $this->getStatusArray();
 	}
 
 	/**
 	 * Call this to indicate that the user is over the rate limit for some action.
 	 * @since 1.41
 	 * @internal
-	 * Will cause isRateLimited() to return true.
+	 * Will cause isRateLimitExceeded() to return true.
 	 */
 	public function setRateLimitExceeded() {
 		$this->rateLimitExceeded = true;
@@ -127,7 +145,6 @@ class PermissionStatus extends StatusValue {
 	 *
 	 * @since 1.41
 	 * @internal
-	 * Will cause isRateLimited() to return true.
 	 */
 	public function setPermission( string $permission ) {
 		$this->permission = $permission;
@@ -141,6 +158,52 @@ class PermissionStatus extends StatusValue {
 	 */
 	public function getPermission(): ?string {
 		return $this->permission;
+	}
+
+	/**
+	 * Call this to indicate the user needs to reauthenticate in order to perform the requested action.
+	 * @param string $operation The name of the operation the user needs to reauthenticate for
+	 */
+	public function setReauthOperation( string $operation ): void {
+		$this->reauthOperation = $operation;
+	}
+
+	/**
+	 * Get the name of the operation the user needs to reauthenticate for, if any.
+	 * @return string|null The name of the operation if reauthentication is required, or null otherwise.
+	 */
+	public function getReauthOperation(): ?string {
+		return $this->reauthOperation;
+	}
+
+	/**
+	 * Record that a reauth-gated operation was checked for the requested action,
+	 * whether or not the reauthentication requirement was currently satisfied.
+	 *
+	 * @since 1.47
+	 * @param string $operation The name of the reauth operation that was checked
+	 */
+	public function addCheckedReauthOperation( string $operation ): void {
+		if ( !in_array( $operation, $this->checkedReauthOperations, true ) ) {
+			$this->checkedReauthOperations[] = $operation;
+		}
+	}
+
+	/**
+	 * List the reauth operation(s) that gate the requested action, even if they
+	 * were satisfied by a recent reauthentication event (T430197).
+	 *
+	 * Unlike getReauthOperation(), which is only set when reauthentication is
+	 * currently required (SEC_REAUTH) or impossible (SEC_FAIL), this also
+	 * includes operations whose check returned SEC_OK. It allows callers to
+	 * arm client-side reauth UX (e.g. AuthPopup) for the case where a currently
+	 * valid reauthentication expires before the user completes the action.
+	 *
+	 * @since 1.47
+	 * @return string[]
+	 */
+	public function getCheckedReauthOperations(): array {
+		return $this->checkedReauthOperations;
 	}
 
 	/**

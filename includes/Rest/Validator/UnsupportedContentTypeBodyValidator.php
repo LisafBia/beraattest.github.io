@@ -20,21 +20,16 @@ use Wikimedia\Message\MessageValue;
  */
 class UnsupportedContentTypeBodyValidator implements BodyValidator {
 
-	/** @var string */
-	private string $contentType;
-
-	/**
-	 * @param string $contentType
-	 */
-	public function __construct( string $contentType ) {
-		$this->contentType = $contentType;
+	public function __construct(
+		private readonly string $contentType,
+	) {
 	}
 
 	/**
 	 * @inheritDoc
 	 * @return never
 	 */
-	public function validateBody( RequestInterface $request ) {
+	public function validateBody( RequestInterface $request ): never {
 		throw new LocalizedHttpException(
 			new MessageValue( 'rest-unsupported-content-type', [ $this->contentType ] ),
 			415

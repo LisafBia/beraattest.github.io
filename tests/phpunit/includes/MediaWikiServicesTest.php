@@ -6,8 +6,10 @@ use MediaWiki\Config\HashConfig;
 use MediaWiki\Hook\MediaWikiServicesHook;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\StaticHookRegistry;
+use MediaWiki\Import\OldRevisionImporter;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Search\SearchEngine;
 use Wikimedia\Services\DestructibleService;
 use Wikimedia\Services\SalvageableService;
 
@@ -86,9 +88,7 @@ class MediaWikiServicesTest extends MediaWikiIntegrationTestCase {
 		$newServices = $this->newMediaWikiServices();
 		$oldServices = MediaWikiServices::forceGlobalInstance( $newServices );
 
-		$service1 = $this->createMock( SalvageableService::class );
-		$service1->expects( $this->never() )
-			->method( 'salvage' );
+		$service1 = $this->createNoOpMock( SalvageableService::class );
 
 		$newServices->defineService(
 			'Test',
@@ -119,9 +119,7 @@ class MediaWikiServicesTest extends MediaWikiIntegrationTestCase {
 		$newServices = $this->newMediaWikiServices();
 		$oldServices = MediaWikiServices::forceGlobalInstance( $newServices );
 
-		$service1 = $this->createMock( SalvageableService::class );
-		$service1->expects( $this->never() )
-			->method( 'salvage' );
+		$service1 = $this->createNoOpMock( SalvageableService::class );
 
 		$service2 = $this->createMock( SalvageableService::class );
 		$service2->expects( $this->once() )
@@ -218,7 +216,7 @@ class MediaWikiServicesTest extends MediaWikiIntegrationTestCase {
 
 		try {
 			$newServices->getDBLoadBalancer()->getConnection( DB_REPLICA );
-		} catch ( RuntimeException $ex ) {
+		} catch ( RuntimeException ) {
 			// ok, as expected
 		}
 
@@ -240,9 +238,7 @@ class MediaWikiServicesTest extends MediaWikiIntegrationTestCase {
 		$service1->expects( $this->once() )
 			->method( 'destroy' );
 
-		$service2 = $this->createMock( DestructibleService::class );
-		$service2->expects( $this->never() )
-			->method( 'destroy' );
+		$service2 = $this->createNoOpMock( DestructibleService::class );
 
 		// sequence of values the instantiator will return
 		$instantiatorReturnValues = [
@@ -321,9 +317,13 @@ class MediaWikiServicesTest extends MediaWikiIntegrationTestCase {
 		$this->assertNotSame( $oldInstance, $newInstance );
 	}
 
-	public function provideGetters() {
+	public static function provideGetters() {
 		$getServiceCases = self::provideGetService();
-		$getterCases = [];
+		$getterCases = [
+			// These are "mis-named" getters that don't follow the standard pattern, so are listed explicitly
+			'getWikiRevisionOldRevisionImporter' => [ 'getWikiRevisionOldRevisionImporter', OldRevisionImporter::class ],
+			'newSearchEngine' => [ 'newSearchEngine', SearchEngine::class ]
+		];
 
 		// All getters should be named just like the service, with "get" added.
 		foreach ( $getServiceCases as $name => $case ) {
@@ -393,8 +393,11 @@ class MediaWikiServicesTest extends MediaWikiIntegrationTestCase {
 
 		foreach ( $names as $name ) {
 			$this->assertTrue( $services->hasService( $name ) );
-			$service = $services->getService( $name );
-			$this->assertIsObject( $service );
+
+			// Check that the service can be instantiated without errors.
+			// Make no assumption about the value returned by the instantiator
+			// as extensions may be putting all manners of values in the container.
+			$services->getService( $name );
 		}
 	}
 
@@ -413,15 +416,12 @@ class MediaWikiServicesTest extends MediaWikiIntegrationTestCase {
 		$methods = ( new ReflectionClass( MediaWikiServices::class ) )
 			->getMethods( ReflectionMethod::IS_STATIC | ReflectionMethod::IS_PUBLIC );
 
-		$names = array_map( static function ( $method ) {
-			return $method->getName();
-		}, $methods );
-		$serviceNames = array_map( static function ( $name ) {
-			return "get$name";
-		}, array_keys( self::provideGetService() ) );
-		$names = array_values( array_filter( $names, static function ( $name ) use ( $serviceNames ) {
-			return in_array( $name, $serviceNames );
-		} ) );
+		$getters = self::provideGetService();
+		$names = array_map( static fn ( $method ) => $method->getName(), $methods );
+		$names = array_filter(
+			$names,
+			static fn ( $name ) => array_key_exists( "get$name", $getters )
+		);
 
 		$sortedNames = $names;
 		natcasesort( $sortedNames );

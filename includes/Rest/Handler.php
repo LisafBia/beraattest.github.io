@@ -39,45 +39,40 @@ abstract class Handler {
 	 */
 	public const PARAM_DESCRIPTION = Validator::PARAM_DESCRIPTION;
 
+	/**
+	 * @see Validator::PARAM_EXAMPLE
+	 * @since 1.47
+	 */
+	public const PARAM_EXAMPLE = Validator::PARAM_EXAMPLE;
+
 	public const OPENAPI_DESCRIPTION_KEY = 'description';
 
-	public const RESPONSE_BODY_DESCRIPTION_KEY = 'x-i18n-description';
+	/**
+	 * Placeholder used as the example value of a body parameter that declares
+	 * no PARAM_EXAMPLE. Emitting a recognizable sentinel (rather than guessing a
+	 * type-appropriate value that may not satisfy the parameter's schema) makes
+	 * the missing example visible in the generated OpenAPI spec and prompts
+	 * developers to supply a real one.
+	 *
+	 * @see getRequestBodyExample()
+	 */
+	private const MISSING_BODY_EXAMPLE = 'missing_example';
 
-	/** @var Module */
-	private $module;
-
-	/** @var RequestInterface */
-	private $request;
-
-	/** @var Authority */
-	private $authority;
-
-	/** @var string */
-	private $path;
-
-	/** @var array */
-	private $config;
-
-	/** @var ResponseFactory */
-	private $responseFactory;
-
-	/** @var array|null */
-	private $validatedParams;
+	private ?Module $module = null;
+	private ?RequestInterface $request = null;
+	private ?Authority $authority = null;
+	private string $path;
+	private array $config;
+	private array $openApiSpec;
+	private ?ResponseFactory $responseFactory = null;
+	private ?array $validatedParams = null;
 
 	/** @var mixed|null */
 	private $validatedBody;
-
-	/** @var ConditionalHeaderUtil */
-	private $conditionalHeaderUtil;
-
-	/** @var HookContainer */
-	private $hookContainer;
-
-	/** @var Session */
-	private $session;
-
-	/** @var HookRunner */
-	private $hookRunner;
+	private ?ConditionalHeaderUtil $conditionalHeaderUtil = null;
+	private HookContainer $hookContainer;
+	private ?Session $session = null;
+	private HookRunner $hookRunner;
 
 	/**
 	 * Injects information about the handler's context in the Module.
@@ -89,10 +84,16 @@ abstract class Handler {
 	 * @param Module $module
 	 * @param string $path
 	 * @param array $routeConfig information about the route declaration.
+	 * @param array $openApiSpec OpenAPI meta-data, such as the description.
 	 *
 	 * @internal
 	 */
-	final public function initContext( Module $module, string $path, array $routeConfig ) {
+	final public function initContext(
+		Module $module,
+		string $path,
+		array $routeConfig,
+		array $openApiSpec = []
+	) {
 		Assert::precondition(
 			$this->authority === null,
 			'initContext() must be called before initServices()'
@@ -101,6 +102,7 @@ abstract class Handler {
 		$this->module = $module;
 		$this->path = $path;
 		$this->config = $routeConfig;
+		$this->openApiSpec = $openApiSpec;
 	}
 
 	/**
@@ -110,13 +112,12 @@ abstract class Handler {
 	 * initContext() and before initSession().
 	 *
 	 * @param Authority $authority
-	 * @param ResponseFactory $responseFactory
 	 * @param HookContainer $hookContainer
 	 *
 	 * @internal
 	 */
 	final public function initServices(
-		Authority $authority, ResponseFactory $responseFactory, HookContainer $hookContainer
+		Authority $authority, HookContainer $hookContainer
 	) {
 		// Warn if a subclass overrides getBodyValidator()
 		MWDebug::detectDeprecatedOverride(
@@ -136,7 +137,6 @@ abstract class Handler {
 		);
 
 		$this->authority = $authority;
-		$this->responseFactory = $responseFactory;
 		$this->hookContainer = $hookContainer;
 		$this->hookRunner = new HookRunner( $hookContainer );
 	}
@@ -177,12 +177,13 @@ abstract class Handler {
 	 *
 	 * @internal
 	 *
-	 * @param RequestInterface $request
-	 *
 	 * @throws HttpException if the handler does not accept the request for
 	 *         some reason.
 	 */
-	final public function initForExecute( RequestInterface $request ) {
+	final public function initForExecute(
+		RequestInterface $request,
+		ResponseFactory $responseFactory
+	) {
 		Assert::precondition(
 			$this->session !== null,
 			'initForExecute() must not be called before initSession()'
@@ -193,6 +194,7 @@ abstract class Handler {
 		}
 
 		$this->request = $request;
+		$this->responseFactory = $responseFactory;
 
 		$this->postInitSetup();
 	}
@@ -227,7 +229,7 @@ abstract class Handler {
 						"rest-request-body-expected",
 						[ $requestMethod ]
 					),
-					411
+					400
 				);
 			}
 		}
@@ -244,10 +246,25 @@ abstract class Handler {
 	 * Returns the path this handler is bound to relative to the module prefix.
 	 * Includes path variables.
 	 *
-	 * @return string
+	 * This does not prepend a leading slash for module-based handlers.
 	 */
 	public function getPath(): string {
 		return $this->path;
+	}
+
+	/**
+	 * Returns the path this handler is bound to relative to the base router prefix.
+	 * Includes path variables and leading slash for module-based handlers.
+	 *
+	 * @since 1.46
+	 */
+	public function getRoutePath(): string {
+		$prefix = $this->getModulePathPrefix();
+		if ( $prefix !== '' ) {
+			$prefix = "/$prefix";
+		}
+
+		return $prefix . $this->path;
 	}
 
 	/**
@@ -260,17 +277,16 @@ abstract class Handler {
 	 * @return string[]
 	 */
 	public function getSupportedPathParams(): array {
-		$path = $this->getPath();
-
-		preg_match_all( '/\{(.*?)\}/', $path, $matches, PREG_PATTERN_ORDER );
+		preg_match_all( '/\{(.*?)\}/', $this->path, $matches, PREG_PATTERN_ORDER );
 
 		return $matches[1] ?? [];
 	}
 
 	/**
-	 * Get the Router.
+	 * Get the Router of the Module that this handler belongs to.
 	 *
-	 * @return Router
+	 * @note This method forces component coupling and its usage is discouraged (T411521)
+	 * @todo Replace this with a method to expose a narrower interface (T411521)
 	 */
 	protected function getRouter(): Router {
 		return $this->module->getRouter();
@@ -280,10 +296,29 @@ abstract class Handler {
 	 * Get the Module this handler belongs to.
 	 * Will fail hard if called before initContext().
 	 *
-	 * @return Module
+	 * @note This method forces component coupling and its usage is discouraged (T411521)
+	 * @todo Replace this with methods exposing narrower interfaces (T411521)
 	 */
 	protected function getModule(): Module {
+		Assert::precondition(
+			$this->module !== null,
+			'initContext() must be called before getModule()'
+		);
+
 		return $this->module;
+	}
+
+	/**
+	 * Get the path prefix of the Module this handler belongs to.
+	 *
+	 * This does not prepend a leading slash for module-based handlers.
+	 *
+	 * @return string
+	 * @since 1.46
+	 */
+	protected function getModulePathPrefix(): string {
+		// @todo Use an injected module path prefix string (T411521)
+		return $this->module->getPathPrefix();
 	}
 
 	/**
@@ -298,7 +333,8 @@ abstract class Handler {
 	 * @return string
 	 */
 	protected function getRouteUrl( $pathParams = [], $queryParams = [] ): string {
-		$path = $this->getPath();
+		$path = $this->getRoutePath();
+		// @todo: use a narrower route interface to the URL instead of Router (T411521)
 		return $this->getRouter()->getRouteUrl( $path, $pathParams, $queryParams );
 	}
 
@@ -328,23 +364,28 @@ abstract class Handler {
 	}
 
 	/**
-	 * Get the current request. The return type declaration causes it to raise
-	 * a fatal error if initForExecute() has not yet been called.
+	 * Get the current request.
 	 *
-	 * @return RequestInterface
+	 * @throws \RuntimeException If initForExecute() has not yet been called
 	 */
 	public function getRequest(): RequestInterface {
+		if ( !$this->request ) {
+			throw new \RuntimeException( 'initForExecute() must be called before getRequest()' );
+		}
 		return $this->request;
 	}
 
 	/**
-	 * Get the current acting authority. The return type declaration causes it to raise
-	 * a fatal error if initServices() has not yet been called.
+	 * Get the current acting authority.
 	 *
 	 * @since 1.36
 	 * @return Authority
+	 * @throws \RuntimeException If initServices() has not yet been called
 	 */
 	public function getAuthority(): Authority {
+		if ( !$this->authority ) {
+			throw new \RuntimeException( 'initServices() must be called before getAuthority()' );
+		}
 		return $this->authority;
 	}
 
@@ -352,21 +393,37 @@ abstract class Handler {
 	 * Get the configuration array for the current route. The return type
 	 * declaration causes it to raise a fatal error if initContext() has not
 	 * been called.
-	 *
-	 * @return array
 	 */
 	public function getConfig(): array {
 		return $this->config;
 	}
 
 	/**
+	 * Returns the http method for which this module was registered.
+	 * Useful for inspection of handlers in a context other than request
+	 * handling, e.g. while generating an OpenAPI spec.
+	 *
+	 * While handling a request, this would typically be the same
+	 * as $this->getRequest()->getMethod(). The notable exception is a handler
+	 * that was registered for GET being used to handle a HEAD request.
+	 *
+	 * @return string the HTTP method (lower case), or the empty string if
+	 *         initContext() has not been called on the handler.
+	 */
+	public function getHttpMethod(): string {
+		return strtolower( $this->config['method'] ?? '' );
+	}
+
+	/**
 	 * Get the ResponseFactory which can be used to generate Response objects.
 	 * This will raise a fatal error if initServices() has not been
 	 * called.
-	 *
-	 * @return ResponseFactory
 	 */
 	public function getResponseFactory(): ResponseFactory {
+		Assert::precondition(
+			$this->responseFactory !== null,
+			'getResponseFactory() must not be called before initForExecute()'
+		);
 		return $this->responseFactory;
 	}
 
@@ -374,11 +431,42 @@ abstract class Handler {
 	 * Get the Session.
 	 * This will raise a fatal error if initSession() has not been
 	 * called.
-	 *
-	 * @return Session
 	 */
 	public function getSession(): Session {
 		return $this->session;
+	}
+
+	/**
+	 * Indicates whether this is deprecated.
+	 *
+	 * Whenever possible, module deprecation is preferred to endpoint deprecation.
+	 * Modules and endpoints are normally deprecated in module or route definition .json files
+	 * rather than by overriding this function.
+	 *
+	 * @since 1.45
+	 * @stable to override
+	 * @return bool
+	 */
+	protected function isDeprecated(): bool {
+		return isset( $this->getModule()->getModuleDescription()['info']['deprecationSettings'] ) ||
+			isset( $this->openApiSpec['deprecationSettings'] );
+	}
+
+	/**
+	 * Returns the timestamp at which this was or will be deprecated, or null if none.
+	 *
+	 * Whenever possible, module deprecation is preferred to endpoint deprecation.
+	 * Modules and endpoints are normally deprecated in module or route definition .json files
+	 * rather than by overriding this function.
+	 *
+	 * @since 1.45
+	 * @stable to override
+	 * @return ?int deprecation date, as a unix timestamp, or null if none
+	 */
+	protected function getDeprecatedDate(): ?int {
+		return $this->getModule()->getDeprecatedDate()
+			?? $this->openApiSpec['deprecationSettings']['since']
+			?? null;
 	}
 
 	/**
@@ -391,16 +479,15 @@ abstract class Handler {
 	 * @throws HttpException On validation failure.
 	 */
 	public function validate( Validator $restValidator ) {
-		$this->validatedParams = $restValidator->validateParams(
-			$this->getParamSettings()
-		);
+		$allParamSettings = array_merge( $this->getParamSettings(), $this->getHeaderParamSettings() );
+		$this->validatedParams = $restValidator->validateParams( $allParamSettings );
 
 		$bodyType = $this->request->getBodyType();
 		$legacyBodyValidator = $bodyType === null ? null
 			: $this->getBodyValidator( $bodyType );
 
 		if ( $legacyBodyValidator && !$legacyBodyValidator instanceof NullBodyValidator ) {
-			$this->validatedBody = $restValidator->validateBody( $this->request, $this );
+			$this->validatedBody = $restValidator->validateBody( $this->getRequest(), $this );
 		} else {
 			// Allow type coercion if the request body is form data.
 			// For JSON requests, insist on proper types.
@@ -421,6 +508,22 @@ abstract class Handler {
 		}
 
 		$this->postValidationSetup();
+	}
+
+	/**
+	 * Apply Deprecation header per RFC 9745.
+	 *
+	 * @since 1.45
+	 * @stable to override
+	 * @see https://www.rfc-editor.org/rfc/rfc9745.txt
+	 *
+	 * @param ResponseInterface $response
+	 */
+	public function applyDeprecationHeader( ResponseInterface $response ) {
+		$dd = $this->getDeprecatedDate();
+		if ( $dd !== null && !$response->getHeaderLine( 'Deprecation' ) ) {
+			$response->setHeader( ResponseHeaders::DEPRECATION, '@' . $dd );
+		}
 	}
 
 	/**
@@ -468,6 +571,20 @@ abstract class Handler {
 	}
 
 	/**
+	 * Get a JsonLocalizer object.
+	 *
+	 * @return JsonLocalizer
+	 */
+	protected function getJsonLocalizer(): JsonLocalizer {
+		Assert::precondition(
+			$this->module !== null,
+			'getJsonLocalizer() must not be called before initContext()'
+		);
+
+		return $this->module->getJsonLocalizer();
+	}
+
+	/**
 	 * Get a ConditionalHeaderUtil object.
 	 *
 	 * On the first call to this method, the object will be initialized with
@@ -479,10 +596,17 @@ abstract class Handler {
 	protected function getConditionalHeaderUtil() {
 		if ( $this->conditionalHeaderUtil === null ) {
 			$this->conditionalHeaderUtil = new ConditionalHeaderUtil;
+
+			// NOTE: It would be nicer to have Handler implement a
+			// ConditionalHeaderValues interface that defines methods that
+			// ConditionalHeaderUtil can call. But the relevant methods already
+			// exist in Handler as protected and stable to override.
+			// We can't make them public without breaking all subclasses that
+			// override them. So we pass closures for now.
 			$this->conditionalHeaderUtil->setValidators(
-				$this->getETag(),
-				$this->getLastModified(),
-				$this->hasRepresentation()
+				$this->getETag( ... ),
+				$this->getLastModified( ... ),
+				$this->hasRepresentation( ... )
 			);
 		}
 		return $this->conditionalHeaderUtil;
@@ -501,6 +625,7 @@ abstract class Handler {
 		if ( $status ) {
 			$response = $this->getResponseFactory()->create();
 			$response->setStatus( $status );
+			$this->applyConditionalResponseHeaders( $response );
 			return $response;
 		}
 
@@ -535,8 +660,6 @@ abstract class Handler {
 
 	/**
 	 * Apply cache control to enforce privacy.
-	 *
-	 * @param ResponseInterface $response
 	 */
 	public function applyCacheControl( ResponseInterface $response ) {
 		// NOTE: keep this consistent with the logic in OutputPage::sendCacheControl
@@ -547,14 +670,14 @@ abstract class Handler {
 		// cookies in the response, or the response itself may vary on user-specific variables,
 		// for example on private wikis where the 'read' permission is restricted. (T264631)
 		if ( $response->getHeaderLine( 'Set-Cookie' ) || $this->getSession()->isPersistent() ) {
-			$response->setHeader( 'Cache-Control', 'private,must-revalidate,s-maxage=0' );
+			$response->setHeader( ResponseHeaders::CACHE_CONTROL, 'private,must-revalidate,s-maxage=0' );
 		}
 
-		if ( !$response->getHeaderLine( 'Cache-Control' ) ) {
+		if ( !$response->getHeaderLine( ResponseHeaders::CACHE_CONTROL ) ) {
 			$rqMethod = $this->getRequest()->getMethod();
 			if ( $rqMethod !== 'GET' && $rqMethod !== 'HEAD' ) {
 				// Responses to requests other than GET or HEAD should not be cacheable by default.
-				$response->setHeader( 'Cache-Control', 'private,no-cache,s-maxage=0' );
+				$response->setHeader( ResponseHeaders::CACHE_CONTROL, 'private,no-cache,s-maxage=0' );
 			}
 		}
 	}
@@ -587,6 +710,25 @@ abstract class Handler {
 	}
 
 	/**
+	 * Fetch ParamValidator settings for request headers
+	 *
+	 * Every setting must include self::PARAM_SOURCE as 'header' to specify
+	 * it's a request header for the endpoint.
+	 *
+	 * Subclasses that must use the headers from a request should consider
+	 * having PARAM_REQUIRED setting of "true", Otherwise if the header's existence
+	 * or non-existence doesn't break the code the PARAM_REQUIRED should be set to "false".
+	 *
+	 * @stable to override
+	 *
+	 * @return array[] Associative array mapping header names to
+	 *  ParamValidator settings arrays
+	 */
+	public function getHeaderParamSettings() {
+		return [];
+	}
+
+	/**
 	 * Fetch ParamValidator settings for body fields. Parameters defined
 	 * by this method are used to validate the request body. The parameter
 	 * values will become available through getValidatedBody().
@@ -599,30 +741,6 @@ abstract class Handler {
 	 */
 	public function getBodyParamSettings(): array {
 		return [];
-	}
-
-	/**
-	 * Returns the translated description string if possible, the untranslated string if one is
-	 * available, or null otherwise.
-	 *
-	 * @param array $schema a schema array
-	 * @param string $descKey key name of the description field in $setting
-	 *
-	 * @return ?string
-	 */
-	private function resolveDescription( array $schema, string $descKey ): ?string {
-		$desc = null;
-
-		if ( array_key_exists( $descKey, $schema ) ) {
-			if ( $schema[ $descKey ] instanceof MessageValue ) {
-				// TODO: consider if we want to request a specific preferred language
-				$desc = $this->responseFactory->getFormattedMessage( $schema[ $descKey ] );
-			} else {
-				$desc = $schema[ $descKey ];
-			}
-		}
-
-		return $desc;
 	}
 
 	/**
@@ -649,8 +767,8 @@ abstract class Handler {
 
 		$supportedPathParams = array_flip( $this->getSupportedPathParams() );
 
-		foreach ( $this->getParamSettings() as $name => $paramSetting ) {
-			$source = $paramSetting[ Validator::PARAM_SOURCE ] ?? '';
+		foreach ( $this->getParamSettings() as $name => $setting ) {
+			$source = $setting[ Validator::PARAM_SOURCE ] ?? '';
 
 			if ( $source !== 'query' && $source !== 'path' ) {
 				continue;
@@ -661,14 +779,45 @@ abstract class Handler {
 				continue;
 			}
 
-			$paramSetting[ Validator::PARAM_DESCRIPTION ] = $this->resolveDescription(
-				$paramSetting, Validator::PARAM_DESCRIPTION
+			$setting[ Validator::PARAM_DESCRIPTION ] = $this->getJsonLocalizer()->localizeValue(
+				$setting, Validator::PARAM_DESCRIPTION,
 			);
 
-			$param = Validator::getParameterSpec(
-				$name,
-				$paramSetting
+			if (
+				isset( $setting[ Validator::PARAM_EXAMPLE ] ) &&
+				$setting[ Validator::PARAM_EXAMPLE ] instanceof MessageValue
+			) {
+				$setting[ Validator::PARAM_EXAMPLE ] = $this->getJsonLocalizer()->localizeValue(
+					$setting, Validator::PARAM_EXAMPLE,
+				);
+			}
+
+			$param = Validator::getParameterSpec( $name, $setting );
+
+			$parameters[] = $param;
+		}
+
+		foreach ( $this->getHeaderParamSettings() as $name => $setting ) {
+			$source = $setting[ Validator::PARAM_SOURCE ] ?? '';
+
+			if ( $source !== 'header' ) {
+				continue;
+			}
+
+			$setting[ Validator::PARAM_DESCRIPTION ] = $this->getJsonLocalizer()->localizeValue(
+				$setting, Validator::PARAM_DESCRIPTION,
 			);
+
+			if (
+				isset( $setting[ Validator::PARAM_EXAMPLE ] ) &&
+				$setting[ Validator::PARAM_EXAMPLE ] instanceof MessageValue
+			) {
+				$setting[ Validator::PARAM_EXAMPLE ] = $this->getJsonLocalizer()->localizeValue(
+					$setting, Validator::PARAM_EXAMPLE,
+				);
+			}
+
+			$param = Validator::getParameterSpec( $name, $setting );
 
 			$parameters[] = $param;
 		}
@@ -687,8 +836,12 @@ abstract class Handler {
 
 		// TODO: Allow additional information about parameters and responses to
 		//       be provided in the route definition.
-		$oas = $this->getConfig()['OAS'] ?? [];
-		$spec += $oas;
+		$spec += $this->openApiSpec;
+
+		if ( $this->isDeprecated() ) {
+			$spec['deprecated'] = true;
+			unset( $spec['deprecationSettings'] );
+		}
 
 		return $spec;
 	}
@@ -717,7 +870,12 @@ abstract class Handler {
 			$schema = $this->getRequestBodySchema( $type );
 
 			if ( $schema ) {
+				$schema = $this->getJsonLocalizer()->localizeJson( $schema );
 				$mediaTypes[$type] = [ 'schema' => $schema ];
+				$example = $this->getRequestBodyExample( $type );
+				if ( $example ) {
+					$mediaTypes[$type]['example'] = $example;
+				}
 			}
 		}
 
@@ -725,12 +883,118 @@ abstract class Handler {
 			return null;
 		}
 
-		return [
+		$spec = [
 			// TODO: some DELETE handlers may require a body that contains a token
 			// FIXME: check if there are required body params!
 			'required' => in_array( $method, RequestInterface::BODY_METHODS ),
-			'content' => $mediaTypes
+			'content' => $mediaTypes,
 		];
+
+		$description = $this->getRequestBodyDescription();
+		if ( $description ) {
+			$spec['description'] = $this->getJsonLocalizer()->localizeValue(
+				[ self::OPENAPI_DESCRIPTION_KEY => $description ],
+				self::OPENAPI_DESCRIPTION_KEY
+			);
+		}
+
+		return $spec;
+	}
+
+	/**
+	 * Returns a description for the OpenAPI Request Body Object, or null if no
+	 * description should be included. Return a MessageValue to have the description
+	 * automatically localized by the framework.
+	 *
+	 * @see https://swagger.io/specification/#request-body-object
+	 *
+	 * @since 1.47
+	 * @stable to override
+	 * @return MessageValue|string|null
+	 */
+	public function getRequestBodyDescription(): MessageValue|string|null {
+		return null;
+	}
+
+	/**
+	 * Returns an example value for the OpenAPI Media Type Object, or null if no
+	 * example should be included. When non-null, the value is included as the
+	 * 'example' field under each media type in the requestBody.content object
+	 * generated by getRequestSpec().
+	 *
+	 * A composite example is produced only for application/json. For non-JSON
+	 * media types (such as application/x-www-form-urlencoded and
+	 * multipart/form-data) null is returned: Swagger UI builds those request
+	 * bodies from the schema properties — each prefilled from its own
+	 * PARAM_EXAMPLE via getRequestBodySchema() — and mis-encodes a
+	 * media-type-level example, so none is emitted. Form / url-encoded examples
+	 * can be revisited later.
+	 *
+	 * For application/json the composite example is assembled from the 'body'
+	 * parameters returned by getBodyParamSettings(): each parameter contributes
+	 * its PARAM_EXAMPLE (a MessageValue example is localized), and any parameter
+	 * that declares no example contributes the MISSING_BODY_EXAMPLE sentinel so
+	 * the gap is visible in the generated spec. Null is returned when there are
+	 * no such parameters.
+	 *
+	 * Override this in a subclass to supply a hand-crafted payload, or call the
+	 * parent implementation and adjust the result for trickier cases.
+	 *
+	 * @see https://swagger.io/specification/#media-type-object
+	 *
+	 * @since 1.47
+	 * @stable to override
+	 * @param string $mediaType
+	 * @return array|null
+	 */
+	public function getRequestBodyExample( string $mediaType ): ?array {
+		if ( $mediaType !== RequestInterface::JSON_CONTENT_TYPE ) {
+			return null;
+		}
+
+		$allowedSources = $this->getParamSourcesForRequestType( $mediaType );
+		$example = [];
+
+		foreach ( $this->getBodyParamSettings() as $name => $settings ) {
+			$source = $settings[ Validator::PARAM_SOURCE ] ?? '';
+			if ( !in_array( $source, $allowedSources, true ) ) {
+				continue;
+			}
+
+			if ( !array_key_exists( Validator::PARAM_EXAMPLE, $settings ) ) {
+				$example[$name] = self::MISSING_BODY_EXAMPLE;
+			} elseif ( $settings[ Validator::PARAM_EXAMPLE ] instanceof MessageValue ) {
+				$example[$name] = $this->getJsonLocalizer()->localizeValue(
+					$settings, Validator::PARAM_EXAMPLE
+				);
+			} else {
+				$example[$name] = $settings[ Validator::PARAM_EXAMPLE ];
+			}
+		}
+
+		return $example ?: null;
+	}
+
+	/**
+	 * Returns the parameter sources (as used by PARAM_SOURCE) that are valid for
+	 * a request body of the given media type.
+	 *
+	 * Form-style media types (application/x-www-form-urlencoded and
+	 * multipart/form-data) accept both 'body' and 'post' parameters, while other
+	 * media types (such as application/json) accept only 'body' parameters.
+	 *
+	 * @param string $mediaType
+	 * @return string[]
+	 */
+	private function getParamSourcesForRequestType( string $mediaType ): array {
+		if (
+			$mediaType === RequestInterface::FORM_URLENCODED_CONTENT_TYPE ||
+			$mediaType === RequestInterface::MULTIPART_FORM_DATA_CONTENT_TYPE
+		) {
+			return [ 'body', 'post' ];
+		}
+
+		return [ 'body' ];
 	}
 
 	/**
@@ -747,13 +1011,7 @@ abstract class Handler {
 	 * @return array
 	 */
 	protected function getRequestBodySchema( string $mediaType ): array {
-		if ( $mediaType === RequestInterface::FORM_URLENCODED_CONTENT_TYPE ) {
-			$allowedSources = [ 'body', 'post' ];
-		} elseif ( $mediaType === RequestInterface::MULTIPART_FORM_DATA_CONTENT_TYPE ) {
-			$allowedSources = [ 'body', 'post' ];
-		} else {
-			$allowedSources = [ 'body' ];
-		}
+		$allowedSources = $this->getParamSourcesForRequestType( $mediaType );
 
 		$paramSettings = $this->getBodyParamSettings();
 
@@ -769,9 +1027,18 @@ abstract class Handler {
 				continue;
 			}
 
+			if (
+				isset( $settings[ Validator::PARAM_EXAMPLE ] ) &&
+				$settings[ Validator::PARAM_EXAMPLE ] instanceof MessageValue
+			) {
+				$settings[ Validator::PARAM_EXAMPLE ] = $this->getJsonLocalizer()->localizeValue(
+					$settings, Validator::PARAM_EXAMPLE,
+				);
+			}
+
 			$properties[$name] = Validator::getParameterSchema( $settings );
 			$properties[$name][self::OPENAPI_DESCRIPTION_KEY] =
-				$this->resolveDescription( $settings, Validator::PARAM_DESCRIPTION )
+				$this->getJsonLocalizer()->localizeValue( $settings, Validator::PARAM_DESCRIPTION )
 				?? "$name parameter";
 
 			if ( $isRequired ) {
@@ -800,8 +1067,8 @@ abstract class Handler {
 	 *
 	 * @see https://swagger.io/specification/#schema-object
 	 *
-	 * Returns null by default. Subclasses that return a JSON response should
-	 * implement this method to return a schema of the response body.
+	 * Loads and decodes the JSON schema file returned by getResponseBodySchemaFileName().
+	 * Returns null if getResponseBodySchemaFileName() returns null.
 	 *
 	 * @param string $method The HTTP method to produce a spec for ("get", "post", etc).
 	 *
@@ -814,12 +1081,70 @@ abstract class Handler {
 	}
 
 	/**
-	 * Returns the path and name of a JSON file containing an OpenAPI Schema Object
-	 * specification structure.
+	 * Fetch Response headers specs for response headers returned by a Handler
+	 *
+	 * Subclasses that return other headers in addition to the default ones should
+	 * extend getResponseHeaderSettings()
+	 *
+	 * @return array[] Associative array mapping response header names to
+	 *  their types and localizable descriptions
+	 */
+	private function getResponseHeaderSchemas(): array {
+		$responseHeaderSettings = [];
+		foreach ( $this->getResponseHeaderSettings() as $headerName => $settings ) {
+			// Set description field for localization
+			$settings[ self::OPENAPI_DESCRIPTION_KEY  ] = new MessageValue( $settings[ 'messageKey' ] );
+			// 'messageKey' field no longer required
+			unset( $settings[ 'messageKey' ] );
+			$settings[ self::OPENAPI_DESCRIPTION_KEY ] = $this->getJsonLocalizer()->localizeValue(
+				$settings, self::OPENAPI_DESCRIPTION_KEY,
+			);
+			$responseHeaderSettings[ $headerName ] = [
+				self::OPENAPI_DESCRIPTION_KEY => $settings[ self::OPENAPI_DESCRIPTION_KEY ],
+				'schema' => $settings[ 'schema' ]
+			];
+		}
+		return $responseHeaderSettings;
+	}
+
+	/**
+	 * Fetch the settings array mapping response headers to their descriptions and schemas
+	 *
+	 * Subclasses that return other headers should extend this function.
+	 * Subclasses that use Response headers not defined in the ResponseHeaders class can
+	 * hardcode the headers names as keys in this function as well.
+	 *
+	 * @stable to override
+	 *
+	 * @return array[] List of Response headers as constants from ResponseHeaders class
+	 */
+	public function getResponseHeaderSettings(): array {
+		$responseHeaderSettings = [
+			ResponseHeaders::CACHE_CONTROL => ResponseHeaders::RESPONSE_HEADER_DEFINITIONS[
+				ResponseHeaders::CACHE_CONTROL
+			]
+		];
+
+		if ( $this->isDeprecated() ) {
+			$responseHeaderSettings[ ResponseHeaders::DEPRECATION ] = ResponseHeaders::RESPONSE_HEADER_DEFINITIONS[
+				ResponseHeaders::DEPRECATION
+			];
+		}
+		return $responseHeaderSettings;
+	}
+
+	/**
+	 * Returns the absolute path of a JSON file containing an OpenAPI Schema
+	 * Object specification structure describing the response body.
 	 *
 	 * @see https://swagger.io/specification/#schema-object
 	 *
-	 * Returns null by default. Subclasses with a suitable JSON file should implement this method.
+	 * Returns null by default. Subclasses that return a JSON response
+	 * should override this method to return a schema file path.
+	 *
+	 * The returned path must be absolute. Use `__DIR__` to construct the
+	 * path relative to the handler file, e.g.
+	 * `__DIR__ . '/Schema/Foo.json'`.
 	 *
 	 * @param string $method The HTTP method to produce a spec for ("get", "post", etc).
 	 *
@@ -832,25 +1157,42 @@ abstract class Handler {
 	}
 
 	/**
-	 * If possible, adds a translated description to the schema, and removes the custom key
+	 * Returns the absolute path of a JSON file containing an example response body.
 	 *
-	 * @param array $schema The response schema
+	 * Returns null by default. Subclasses that return a JSON response should
+	 * override this method to return a file path.
 	 *
-	 * @return array the adjusted schema, or the unchanged schema if no adjustments were made
+	 * The returned path must be absolute. Use `__DIR__` to construct the
+	 * path relative to the handler file, e.g.
+	 * `__DIR__ . '/Example/Foo.json'`.
+	 *
+	 * @param string $method The HTTP method to produce a spec for ("get", "post", etc).
+	 *
+	 * @since 1.47
+	 * @stable to override
+	 * @return ?string
 	 */
-	private function resolveResponseDescription( array $schema ): array {
-		$key = self::RESPONSE_BODY_DESCRIPTION_KEY;
-		if ( array_key_exists( $key, $schema ) && is_string( $schema[$key] ) ) {
-			// Add the description to the top of the schema, for visibility in raw specs
-			$desc = [ self::OPENAPI_DESCRIPTION_KEY => new MessageValue( $schema[$key] ) ];
-			$schema = $desc + $schema;
-			$schema[self::OPENAPI_DESCRIPTION_KEY] = $this->resolveDescription(
-				$schema, self::OPENAPI_DESCRIPTION_KEY
-			);
-			unset( $schema[$key] );
-		}
+	protected function getResponseBodyExampleFileName( string $method ): ?string {
+		return null;
+	}
 
-		return $schema;
+	/**
+	 * Returns an example response body for use in the OpenAPI description.
+	 *
+	 * Loads and decodes the JSON file returned by getResponseBodyExampleFileName().
+	 * Returns null if getResponseBodyExampleFileName() returns null.
+	 *
+	 * @see https://swagger.io/specification/#media-type-object
+	 *
+	 * @param string $method The HTTP method to produce a spec for ("get", "post", etc).
+	 *
+	 * @since 1.47
+	 * @stable to override
+	 * @return ?array
+	 */
+	protected function getResponseBodyExample( string $method ): ?array {
+		$file = $this->getResponseBodyExampleFileName( $method );
+		return $file ? Module::loadJsonFile( $file ) : null;
 	}
 
 	/**
@@ -874,23 +1216,22 @@ abstract class Handler {
 		$bodySchema = $this->getResponseBodySchema( $method );
 
 		if ( $bodySchema ) {
-			$bodySchema = $this->resolveResponseDescription( $bodySchema );
-			if ( array_key_exists( 'properties', $bodySchema ) ) {
-				// TODO: each property can be an object with its own properties, and so on.
-				//  Consider recursively resolving nested descriptions.
-				foreach ( $bodySchema['properties'] as &$definition ) {
-					$definition = $this->resolveResponseDescription( $definition );
-				}
-			}
-
+			$bodySchema = $this->getJsonLocalizer()->localizeJson( $bodySchema );
 			$ok['content']['application/json']['schema'] = $bodySchema;
 		}
 
-		// XXX: we should add info about redirects, and maybe a default for errors?
+		$bodyExample = $this->getResponseBodyExample( $method );
+		if ( $bodyExample !== null ) {
+			$ok['content']['application/json']['example'] = $bodyExample;
+		}
+
+		$headersSpec = $this->getResponseHeaderSchemas();
+		$ok['headers'] = $headersSpec;
+
+		// XXX: we should add info about redirects
 		return [
 			'200' => $ok,
-			'400' => [ '$ref' => '#/components/responses/GenericErrorResponse' ],
-			'500' => [ '$ref' => '#/components/responses/GenericErrorResponse' ],
+			'default' => [ '$ref' => '#/components/responses/GenericErrorResponse' ],
 		];
 	}
 
@@ -933,6 +1274,15 @@ abstract class Handler {
 	 *  not called yet, validation failed, there was no body, or the body was form data.
 	 */
 	public function getValidatedBody() {
+		return $this->validatedBody;
+	}
+
+	/**
+	 * Fetch the validated body, asserting that it is an array. This is safe to
+	 * call from execute() if the body validator is defined such that it only
+	 * permits arrays.
+	 */
+	public function getValidatedBodyArray(): array {
 		return $this->validatedBody;
 	}
 
@@ -1002,7 +1352,7 @@ abstract class Handler {
 			case RequestInterface::MULTIPART_FORM_DATA_CONTENT_TYPE:
 				$params = $request->getPostParams();
 				foreach ( $params as $key => $value ) {
-					$params[ $key ] = UtfNormalValidator::cleanUp( $value );
+					$params[ $key ] = $this->recursiveUtfCleanup( $value );
 					// TODO: Warn if normalization was applied
 				}
 				return $params;
@@ -1033,6 +1383,29 @@ abstract class Handler {
 					new MessageValue( 'rest-unsupported-content-type', [ $contentType ?? '(null)' ] ),
 					415
 				);
+		}
+	}
+
+	/**
+	 * Recursively applies unicode normalization
+	 *
+	 * @param mixed $value
+	 *
+	 * @return mixed
+	 */
+	private function recursiveUtfCleanup( $value ) {
+		if ( is_string( $value ) ) {
+			return UtfNormalValidator::cleanUp( $value );
+		} elseif ( is_array( $value ) ) {
+			foreach ( $value as $k => $v ) {
+				$value[ $k ] = $this->recursiveUtfCleanup( $v );
+				// TODO: Warn if normalization was applied
+				// TODO: also normalize key
+			}
+
+			return $value;
+		} else {
+			return $value;
 		}
 	}
 
@@ -1147,6 +1520,9 @@ abstract class Handler {
 	 * This must be a complete ETag, including double quotes.
 	 * See RFC 7231 §7.2 and RFC 7232 §2.3 for semantics.
 	 *
+	 * This method should return null if the resource doesn't exist. It may also
+	 * return null if ETag semantics is not supported by the Handler.
+	 *
 	 * @stable to override
 	 *
 	 * @return string|null
@@ -1159,6 +1535,9 @@ abstract class Handler {
 	 * The subclass should override this to indicate whether the resource
 	 * exists. This is used for wildcard validators, for example "If-Match: *"
 	 * fails if the resource does not exist.
+	 *
+	 * If this method returns null, the value returned by getETag() will be used
+	 * to determine whether the resource exists.
 	 *
 	 * In a state-changing request, the return value of this method should
 	 * reflect the state before the requested change is applied.

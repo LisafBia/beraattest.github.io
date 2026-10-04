@@ -2,20 +2,21 @@
 
 namespace MediaWiki\Rest;
 
-use MediaWiki\Config\Config;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Context\IContextSource;
 use MediaWiki\Context\RequestContext;
 use MediaWiki\EntryPointEnvironment;
+use MediaWiki\Exception\MWExceptionRenderer;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiEntryPoint;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Registration\ExtensionRegistry;
 use MediaWiki\Rest\BasicAccess\CompoundAuthorizer;
 use MediaWiki\Rest\BasicAccess\MWBasicAuthorizer;
+use MediaWiki\Rest\Module\ModuleManager;
 use MediaWiki\Rest\Reporter\MWErrorReporter;
 use MediaWiki\Rest\Validator\Validator;
-use MWExceptionRenderer;
+use Wikimedia\Assert\Assert;
 use Wikimedia\Message\ITextFormatter;
 
 /**
@@ -23,7 +24,6 @@ use Wikimedia\Message\ITextFormatter;
  */
 class EntryPoint extends MediaWikiEntryPoint {
 
-	private RequestInterface $request;
 	private ?Router $router = null;
 	private ?CorsUtils $cors  = null;
 
@@ -33,7 +33,8 @@ class EntryPoint extends MediaWikiEntryPoint {
 	 * @param MediaWikiServices $services
 	 * @param IContextSource $context
 	 * @param RequestInterface $request
-	 * @param ResponseFactory $responseFactory
+	 * @param ITextFormatter[] $textFormatters
+	 * @param bool $showExceptionDetails
 	 * @param CorsUtils $cors
 	 *
 	 * @return Router
@@ -42,9 +43,15 @@ class EntryPoint extends MediaWikiEntryPoint {
 		MediaWikiServices $services,
 		IContextSource $context,
 		RequestInterface $request,
-		ResponseFactory $responseFactory,
+		array $textFormatters,
+		bool $showExceptionDetails,
 		CorsUtils $cors
 	): Router {
+		Assert::parameter(
+			count( $textFormatters ) > 0,
+			'$textFormatters', 'must not be empty'
+		);
+
 		$conf = $services->getMainConfig();
 
 		$authority = $context->getAuthority();
@@ -61,19 +68,30 @@ class EntryPoint extends MediaWikiEntryPoint {
 
 		$stats = $services->getStatsFactory();
 
+		// NOTE: Use preferred language, see getTextFormatters().
+		$defaultTextFormatter = array_first( $textFormatters );
+		$moduleManager = new ModuleManager(
+			new ServiceOptions( ModuleManager::CONSTRUCTOR_OPTIONS, $conf ),
+			ExtensionRegistry::getInstance()->getAttribute( 'RestModuleFiles' ),
+			$services->getLocalServerObjectCache(),
+			new JsonLocalizer( $defaultTextFormatter )
+		);
+
 		return ( new Router(
-			self::getRouteFiles( $conf ),
+			$moduleManager,
 			ExtensionRegistry::getInstance()->getAttribute( 'RestRoutes' ),
 			new ServiceOptions( Router::CONSTRUCTOR_OPTIONS, $conf ),
 			$services->getLocalServerObjectCache(),
-			$responseFactory,
+			$textFormatters,
+			$showExceptionDetails,
 			$authorizer,
 			$authority,
 			$objectFactory,
 			$restValidator,
 			new MWErrorReporter(),
 			$services->getHookContainer(),
-			$context->getRequest()->getSession()
+			$context->getRequest()->getSession(),
+			$services->getUrlUtils(),
 		) )
 			->setCors( $cors )
 			->setStats( $stats );
@@ -99,19 +117,15 @@ class EntryPoint extends MediaWikiEntryPoint {
 	protected function doSetup() {
 		parent::doSetup();
 
-		$context = RequestContext::getMain();
-
-		$responseFactory = new ResponseFactory( $this->getTextFormatters() );
-		$responseFactory->setShowExceptionDetails(
-			MWExceptionRenderer::shouldShowExceptionDetails()
-		);
+		$context = $this->getContext();
+		$textFormatters = $this->getTextFormatters();
+		$showExceptionDetails = MWExceptionRenderer::shouldShowExceptionDetails();
 
 		$this->cors = new CorsUtils(
 			new ServiceOptions(
 				CorsUtils::CONSTRUCTOR_OPTIONS,
 				$this->getServiceContainer()->getMainConfig()
 			),
-			$responseFactory,
 			$context->getUser()
 		);
 
@@ -120,7 +134,8 @@ class EntryPoint extends MediaWikiEntryPoint {
 				$this->getServiceContainer(),
 				$context,
 				$this->request,
-				$responseFactory,
+				$textFormatters,
+				$showExceptionDetails,
 				$this->cors
 			);
 		}
@@ -135,67 +150,41 @@ class EntryPoint extends MediaWikiEntryPoint {
 		$services = $this->getServiceContainer();
 
 		$code = $services->getContentLanguageCode()->toString();
-		$langs = array_unique( [ $code, 'en' ] );
+		$langs = [];
+
+		$queryParams = $this->request->getQueryParams();
+		$requestedLang = $queryParams['lang'] ?? null;
+		if ( is_string( $requestedLang ) && $requestedLang !== '' ) {
+			$internalCode = \MediaWiki\Language\LanguageCode::bcp47ToInternal( $requestedLang );
+			if ( $services->getLanguageNameUtils()->isSupportedLanguage( $internalCode ) ) {
+				$langs = [ $internalCode ];
+			}
+		}
+
+		$langs = array_unique( array_merge( $langs, [ $code, 'en' ] ) );
 		$textFormatters = [];
 		$factory = $services->getMessageFormatterFactory();
 
 		foreach ( $langs as $lang ) {
+			// XXX: we could key on language here
 			$textFormatters[] = $factory->getTextFormatter( $lang );
 		}
 
 		return $textFormatters;
 	}
 
-	/**
-	 * @param Config $conf
-	 *
-	 * @return string[]
-	 */
-	private static function getRouteFiles( $conf ) {
-		global $IP;
-		$extensionsDir = $conf->get( MainConfigNames::ExtensionDirectory );
-		// Always include the "official" routes. Include additional routes if specified.
-		$routeFiles = array_merge(
-			[
-				'includes/Rest/coreRoutes.json',
-			],
-			$conf->get( MainConfigNames::RestAPIAdditionalRouteFiles )
-		);
-		foreach ( $routeFiles as &$file ) {
-			if (
-				str_starts_with( $file, '/' )
-			) {
-				// Allow absolute paths on non-Windows
-			} elseif (
-				str_starts_with( $file, 'extensions/' )
-			) {
-				// Support hacks like Wikibase.ci.php
-				$file = substr_replace( $file, $extensionsDir,
-					0, strlen( 'extensions' ) );
-			} else {
-				$file = "$IP/$file";
-			}
-		}
-
-		return $routeFiles;
-	}
-
 	public function __construct(
-		RequestInterface $request,
+		private readonly RequestInterface $request,
 		RequestContext $context,
 		EntryPointEnvironment $environment,
-		MediaWikiServices $mediaWikiServices
+		MediaWikiServices $mediaWikiServices,
 	) {
 		parent::__construct( $context, $environment, $mediaWikiServices );
-
-		$this->request = $request;
 	}
 
 	/**
 	 * Sets the router to use.
 	 * Intended for testing.
-	 *
-	 * @param Router $router
 	 */
 	public function setRouter( Router $router ): void {
 		$this->router = $router;
@@ -204,12 +193,7 @@ class EntryPoint extends MediaWikiEntryPoint {
 	public function execute() {
 		$this->startOutputBuffer();
 
-		// IDEA: Move the call to cors->modifyResponse() into Module,
-		//       so it's in the same class as cors->createPreflightResponse().
-		$response = $this->cors->modifyResponse(
-			$this->request,
-			$this->router->execute( $this->request )
-		);
+		$response = $this->router->execute( $this->request );
 
 		$webResponse = $this->getResponse();
 
@@ -226,7 +210,7 @@ class EntryPoint extends MediaWikiEntryPoint {
 			$webResponse->setCookie(
 				$cookie['name'],
 				$cookie['value'],
-				$cookie['expiry'],
+				$cookie['expire'],
 				$cookie['options']
 			);
 		}

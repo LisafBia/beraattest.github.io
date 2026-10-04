@@ -18,7 +18,6 @@ use MediaWiki\Rest\RequestData;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Utils\MWTimestamp;
 use MediaWikiIntegrationTestCase;
-use Psr\Http\Message\StreamInterface;
 use ReflectionClass;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ObjectCache\HashBagOStuff;
@@ -26,6 +25,8 @@ use Wikimedia\Parsoid\Core\ClientError;
 use Wikimedia\Parsoid\Core\ResourceLimitExceededException;
 use Wikimedia\Parsoid\Parsoid;
 use Wikimedia\Stats\StatsFactory;
+use Wikimedia\TestingAccessWrapper;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * @covers \MediaWiki\Rest\Handler\RevisionHTMLHandler
@@ -50,9 +51,6 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		$this->parserCacheBagOStuff = new HashBagOStuff();
 	}
 
-	/**
-	 * @return RevisionHTMLHandler
-	 */
 	private function newHandler(): RevisionHTMLHandler {
 		$services = $this->getServiceContainer();
 		$config = [
@@ -75,7 +73,8 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 				$services->getPageStore(),
 				$services->getTitleFactory(),
 				$services->getConnectionProvider(),
-				$services->getChangeTagsStore()
+				$services->getChangeTagsStore(),
+				$services->getShadowPageLoader(),
 			) );
 
 		$parsoidOutputStash = $this->getParsoidOutputStash();
@@ -119,27 +118,6 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		return [ $page, $revisions ];
 	}
 
-	public function testExecuteWithHtml() {
-		[ $page, $revisions ] = $this->getExistingPageWithRevisions( __METHOD__ );
-		$this->assertStatusGood( $this->editPage( $page, self::WIKITEXT ),
-			'Edited a page'
-		);
-
-		$request = new RequestData(
-			[ 'pathParams' => [ 'id' => $revisions['first']->getId() ] ]
-		);
-
-		$handler = $this->newHandler();
-		$data = $this->executeHandlerAndGetBodyData( $handler, $request, [
-			'format' => 'with_html'
-		] );
-
-		$this->assertResponseData( $revisions['first'], $data );
-		$this->assertStringContainsString( '<!DOCTYPE html>', $data['html'] );
-		$this->assertStringContainsString( '<html', $data['html'] );
-		$this->assertStringContainsString( self::HTML, $data['html'] );
-	}
-
 	public function testExecuteHtmlOnly() {
 		[ $page, $revisions ] = $this->getExistingPageWithRevisions( __METHOD__ );
 		$this->assertStatusGood( $this->editPage( $page, self::WIKITEXT ),
@@ -151,14 +129,26 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		);
 
 		$handler = $this->newHandler();
-		$response = $this->executeHandler( $handler, $request, [
-			'format' => 'html'
-		] );
+		$response = $this->executeHandler( $handler, $request );
 
 		$htmlResponse = (string)$response->getBody();
 		$this->assertStringContainsString( '<!DOCTYPE html>', $htmlResponse );
 		$this->assertStringContainsString( '<html', $htmlResponse );
 		$this->assertStringContainsString( self::HTML, $htmlResponse );
+	}
+
+	public function testGenerateResponseSpecWithHtml() {
+		$handler = $this->newHandler();
+		$this->initHandler( $handler, new RequestData( [] ), [] );
+		$wrapper = TestingAccessWrapper::newFromObject( $handler );
+		$spec = $wrapper->generateResponseSpec( 'GET' );
+
+		$this->assertArrayNotHasKey( 'application/json', $spec['200']['content'] );
+		$this->assertSame( 'string', $spec['200']['content']['text/html']['schema']['type'] );
+		$this->assertSame(
+			'<h2 id="mwAA">Hello world</h2>',
+			$spec['200']['content']['text/html']['example']
+		);
 	}
 
 	public function testEtagLastModified() {
@@ -174,12 +164,10 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		// Make some time pass since page was created:
 		MWTimestamp::setFakeTime( $time + 10 );
 		$handler = $this->newHandler();
-		$response = $this->executeHandler( $handler, $request, [
-			'format' => 'html'
-		] );
+		$response = $this->executeHandler( $handler, $request );
 		$this->assertArrayHasKey( 'ETag', $response->getHeaders() );
 		$this->assertArrayHasKey( 'Last-Modified', $response->getHeaders() );
-		$this->assertSame( MWTimestamp::convert( TS_RFC2822, $time + 10 ),
+		$this->assertSame( MWTimestamp::convert( TS::RFC2822, $time + 10 ),
 			$response->getHeaderLine( 'Last-Modified' ) );
 
 		$etag = $response->getHeaderLine( 'ETag' );
@@ -187,31 +175,27 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		// Now, test that headers work when getting from cache too.
 		MWTimestamp::setFakeTime( $time + 20 );
 		$handler = $this->newHandler();
-		$response = $this->executeHandler( $handler, $request, [
-			'format' => 'html'
-		] );
+		$response = $this->executeHandler( $handler, $request );
 		$this->assertArrayHasKey( 'ETag', $response->getHeaders() );
 		$this->assertSame( $etag, $response->getHeaderLine( 'ETag' ) );
 		$this->assertArrayHasKey( 'Last-Modified', $response->getHeaders() );
-		$this->assertSame( MWTimestamp::convert( TS_RFC2822, $time + 10 ),
+		$this->assertSame( MWTimestamp::convert( TS::RFC2822, $time + 10 ),
 			$response->getHeaderLine( 'Last-Modified' ) );
 
 		// Now, expire the cache, and assert we are getting a new timestamp back
 		MWTimestamp::setFakeTime( $time + 10000 );
 		$this->assertTrue(
-			$page->getTitle()->invalidateCache( MWTimestamp::convert( TS_MW, $time ) ),
+			$page->getTitle()->invalidateCache( MWTimestamp::convert( TS::MW, $time ) ),
 			'Can invalidate cache'
 		);
 		DeferredUpdates::doUpdates();
 
 		$handler = $this->newHandler();
-		$response = $this->executeHandler( $handler, $request, [
-			'format' => 'html'
-		] );
+		$response = $this->executeHandler( $handler, $request );
 		$this->assertArrayHasKey( 'ETag', $response->getHeaders() );
 		$this->assertNotSame( $etag, $response->getHeaderLine( 'ETag' ) );
 		$this->assertArrayHasKey( 'Last-Modified', $response->getHeaders() );
-		$this->assertSame( MWTimestamp::convert( TS_RFC2822, $time + 10000 ),
+		$this->assertSame( MWTimestamp::convert( TS::RFC2822, $time + 10000 ),
 			$response->getHeaderLine( 'Last-Modified' ) );
 	}
 
@@ -262,7 +246,6 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		// Install it in the ParsoidParser object
 		$reflector = new ReflectionClass( ParsoidParser::class );
 		$prop = $reflector->getProperty( 'parsoid' );
-		$prop->setAccessible( true );
 		$prop->setValue( $parsoidParser, $mockParsoid );
 		$this->assertEquals( $prop->getValue( $parsoidParser ), $mockParsoid );
 
@@ -277,15 +260,12 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		$wtHandler = $services->getContentHandlerFactory()->getContentHandler( 'wikitext' );
 		$reflector = new ReflectionClass( 'WikitextContentHandler' );
 		$prop = $reflector->getProperty( 'parsoidParserFactory' );
-		$prop->setAccessible( true );
 		$prop->setValue( $wtHandler, $mockParsoidParserFactory );
 		$this->assertEquals( $prop->getValue( $wtHandler ), $mockParsoidParserFactory );
 
 		$handler = $this->newHandler();
 		$this->expectExceptionObject( $expectedException );
-		$this->executeHandler( $handler, $request, [
-			'format' => 'html'
-		] );
+		$this->executeHandler( $handler, $request );
 	}
 
 	public function testExecute_missingparam() {
@@ -316,10 +296,6 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		$this->executeHandler( $handler, $request );
 	}
 
-	/**
-	 * @param RevisionRecord $rev
-	 * @param array $data
-	 */
 	private function assertResponseData( RevisionRecord $rev, array $data ): void {
 		$page = $rev->getPage();
 		$link = $rev->getPageAsLinkTarget();
@@ -328,7 +304,7 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		$this->assertSame( $rev->getSize(), $data['size'] );
 		$this->assertSame( $rev->isMinor(), $data['minor'] );
 		$this->assertSame(
-			wfTimestampOrNull( TS_ISO_8601, $rev->getTimestamp() ),
+			wfTimestampOrNull( TS::ISO_8601, $rev->getTimestamp() ),
 			$data['timestamp']
 		);
 		$this->assertSame( $page->getId(), $data['page']['id'] );
@@ -386,18 +362,6 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		// FIXME: implement flavors
 	}
 
-	public function testETagVariesOnFormat() {
-		$page = $this->getExistingTestPage();
-
-		[ /* $html1 */, $etag1 ] =
-			$this->executeRevisionHTMLRequest( $page->getLatest(), [], [ 'format' => 'html' ] );
-
-		[ /* $html2 */, $etag2 ] =
-			$this->executeRevisionHTMLRequest( $page->getLatest(), [], [ 'format' => 'with_html' ] );
-
-		$this->assertNotSame( $etag1, $etag2 );
-	}
-
 	public function testStashingWithRateLimitExceeded() {
 		// Set the rate limit to 1 request per minute
 		$this->overrideConfigValue(
@@ -421,15 +385,7 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		$this->executeRevisionHTMLRequest( $page->getLatest(), [ 'stash' => true ], [], $authority );
 	}
 
-	/**
-	 * @dataProvider provideExecuteWithVariant
-	 */
-	public function testExecuteWithVariant(
-		string $format,
-		callable $bodyHtmlHandler,
-		string $expectedContentLanguage,
-		string $expectedVaryHeader
-	) {
+	public function testExecuteWithVariant() {
 		$this->overrideConfigValue( MainConfigNames::UsePigLatinVariant, true );
 		$page = $this->getNonexistingTestPage( __METHOD__ );
 		$this->editPage( $page, '<p>test language conversion</p>', 'Edited a page' );
@@ -446,41 +402,15 @@ class RevisionHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		);
 
 		$handler = $this->newHandler();
-		$response = $this->executeHandler( $handler, $request, [
-			'format' => $format
-		] );
+		$response = $this->executeHandler( $handler, $request );
 
-		$responseBody = json_decode( $response->getBody(), true );
-		$htmlBody = $bodyHtmlHandler( $response->getBody() );
-		$contentLanguageHeader = $response->getHeaderLine( 'Content-Language' );
-		$varyHeader = $response->getHeaderLine( 'Vary' );
-
-		// html format doesn't return a response in JSON format
-		if ( $responseBody ) {
-			$this->assertResponseData( $revRecord, $responseBody );
-		}
-		$this->assertStringContainsString( '>esttay anguagelay onversioncay<', $htmlBody );
-		$this->assertEquals( $expectedContentLanguage, $contentLanguageHeader );
-		$this->assertStringContainsStringIgnoringCase( $expectedVaryHeader, $varyHeader );
+		// The top-level HTML endpoint sets the content language and varies on it.
+		$this->assertStringContainsString(
+			'>esttay anguagelay onversioncay<',
+			(string)$response->getBody()
+		);
+		$this->assertEquals( 'en-x-piglatin', $response->getHeaderLine( 'Content-Language' ) );
+		$this->assertStringContainsStringIgnoringCase( 'accept-language', $response->getHeaderLine( 'Vary' ) );
 		$this->assertStringContainsString( $acceptLanguage, $response->getHeaderLine( 'ETag' ) );
-	}
-
-	public static function provideExecuteWithVariant() {
-		yield 'with_html request should contain accept language but not content language' => [
-			'with_html',
-			static function ( StreamInterface $response ) {
-				return json_decode( $response->getContents(), true )['html'];
-			},
-			'',
-			'accept-language'
-		];
-		yield 'html request should contain accept and content language' => [
-			'html',
-			static function ( StreamInterface $response ) {
-				return $response->getContents();
-			},
-			'en-x-piglatin',
-			'accept-language'
-		];
 	}
 }

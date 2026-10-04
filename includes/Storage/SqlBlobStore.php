@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * Attribution notice: when this file was created, much of its content was taken
  * from the Revision.php file as present in release 1.30. Refer to the history
  * of that file for original authorship (that file was removed entirely in 1.37,
@@ -26,12 +12,13 @@
 namespace MediaWiki\Storage;
 
 use AppendIterator;
-use ExternalStoreAccess;
-use ExternalStoreException;
 use HistoryBlobUtils;
 use InvalidArgumentException;
+use MediaWiki\ExternalStore\ExternalStoreAccess;
+use MediaWiki\ExternalStore\ExternalStoreException;
 use StatusValue;
 use Wikimedia\Assert\Assert;
+use Wikimedia\ObjectCache\BagOStuff;
 use Wikimedia\ObjectCache\WANObjectCache;
 use Wikimedia\Rdbms\DBAccessObjectUtils;
 use Wikimedia\Rdbms\IDatabase;
@@ -53,26 +40,6 @@ class SqlBlobStore implements BlobStore {
 
 	/** @internal */
 	public const DEFAULT_TTL = 7 * 24 * 3600; // 7 days
-
-	/**
-	 * @var ILoadBalancer
-	 */
-	private $dbLoadBalancer;
-
-	/**
-	 * @var ExternalStoreAccess
-	 */
-	private $extStoreAccess;
-
-	/**
-	 * @var WANObjectCache
-	 */
-	private $cache;
-
-	/**
-	 * @var string|bool DB domain ID of a wiki or false for the local one
-	 */
-	private $dbDomain;
 
 	/**
 	 * @var int
@@ -106,15 +73,11 @@ class SqlBlobStore implements BlobStore {
 	 * @param bool|string $dbDomain The ID of the target wiki database. Use false for the local wiki.
 	 */
 	public function __construct(
-		ILoadBalancer $dbLoadBalancer,
-		ExternalStoreAccess $extStoreAccess,
-		WANObjectCache $cache,
-		$dbDomain = false
+		private readonly ILoadBalancer $dbLoadBalancer,
+		private readonly ExternalStoreAccess $extStoreAccess,
+		private readonly WANObjectCache $cache,
+		private readonly bool|string $dbDomain = false,
 	) {
-		$this->dbLoadBalancer = $dbLoadBalancer;
-		$this->extStoreAccess = $extStoreAccess;
-		$this->cache = $cache;
-		$this->dbDomain = $dbDomain;
 	}
 
 	/**
@@ -460,7 +423,7 @@ class SqlBlobStore implements BlobStore {
 		return [ $result, $errors ];
 	}
 
-	private static function getDBOptions( $bitfield ) {
+	private static function getDBOptions( int $bitfield ): array {
 		if ( DBAccessObjectUtils::hasFlags( $bitfield, IDBAccessObject::READ_LATEST_IMMUTABLE ) ) {
 			$index = DB_REPLICA; // override READ_LATEST if set
 			$fallbackIndex = DB_PRIMARY;
@@ -608,7 +571,7 @@ class SqlBlobStore implements BlobStore {
 
 		if ( $this->compressBlobs ) {
 			if ( function_exists( 'gzdeflate' ) ) {
-				$deflated = gzdeflate( $blob );
+				$deflated = gzdeflate( $blob, 9 );
 
 				if ( $deflated === false ) {
 					wfLogWarning( __METHOD__ . ': gzdeflate() failed' );
@@ -699,7 +662,7 @@ class SqlBlobStore implements BlobStore {
 	private function getCacheTTL() {
 		$cache = $this->cache;
 
-		if ( $cache->getQoS( $cache::ATTR_DURABILITY ) >= $cache::QOS_DURABILITY_RDBMS ) {
+		if ( $cache->getQoS( BagOStuff::ATTR_DURABILITY ) >= BagOStuff::QOS_DURABILITY_RDBMS ) {
 			// Do not cache RDBMs blobs in...the RDBMs store
 			$ttl = $cache::TTL_UNCACHEABLE;
 		} else {
@@ -793,6 +756,7 @@ class SqlBlobStore implements BlobStore {
 		return [ $schema, $id, $parameters ];
 	}
 
+	/** @inheritDoc */
 	public function isReadOnly() {
 		if ( $this->useExternalStore && $this->extStoreAccess->isReadOnly() ) {
 			return true;

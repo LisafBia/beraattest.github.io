@@ -6,17 +6,16 @@ const api = new mw.Api();
  * Pinia store for the SpecialBlock application.
  */
 module.exports = exports = defineStore( 'block', () => {
-	// ** State properties (refs) **
-
-	// Form fields.
-	// TODO: Rid of the `mw.config.get( 'whatever' )` atrocity once we have Codex PHP (T377529)
-
 	/**
 	 * Whether the multiblocks feature is enabled with $wgEnableMultiBlocks.
 	 *
 	 * @type {boolean}
 	 */
 	const enableMultiblocks = mw.config.get( 'blockEnableMultiblocks' ) || false;
+
+	// ** State properties (refs) **
+
+	// Form fields.
 
 	/**
 	 * The target user to block. Beyond the initial value,
@@ -71,7 +70,8 @@ module.exports = exports = defineStore( 'block', () => {
 	const expiry = ref(
 		// From URL, ?wpExpiry=...
 		mw.config.get( 'blockExpiryPreset' ) ||
-		// From [[MediaWiki:ipb-default-expiry]] or [[MediaWiki:ipb-default-expiry-ip]].
+		// From [[MediaWiki:ipb-default-expiry]], [[MediaWiki:ipb-default-expiry-ip]],
+		// or [[MediaWiki:ipb-default-expiry-temporary-account]]
 		mw.config.get( 'blockExpiryDefault' ) ||
 		''
 	);
@@ -80,35 +80,27 @@ module.exports = exports = defineStore( 'block', () => {
 	 * These options are ultimately defined by [[MediaWiki:Ipbreason-dropdown]].
 	 *
 	 * @type {Ref<string>}
-	 * @todo Combine with `reasonOther` here within the store.
 	 */
-	const reason = ref( 'other' );
-	/**
-	 * The free-form text for the block summary.
-	 *
-	 * @type {Ref<string>}
-	 * @todo Combine with `reason` here within the store.
-	 */
-	const reasonOther = ref( mw.config.get( 'blockReasonOtherPreset' ) || '' );
+	const reason = ref( mw.config.get( 'blockReasonPreset' ) );
 	const details = mw.config.get( 'blockDetailsPreset' ) || [];
 	/**
 	 * Whether to block an IP or IP range from creating accounts.
 	 *
 	 * @type {Ref<boolean>}
 	 */
-	const createAccount = ref( details.indexOf( 'wpCreateAccount' ) !== -1 );
+	const createAccount = ref( details.includes( 'wpCreateAccount' ) );
 	/**
 	 * Whether to disable the target's ability to send email via Special:EmailUser.
 	 *
 	 * @type {Ref<boolean>}
 	 */
-	const disableEmail = ref( details.indexOf( 'wpDisableEmail' ) !== -1 );
+	const disableEmail = ref( details.includes( 'wpDisableEmail' ) );
 	/**
 	 * Whether to disable the target's ability to edit their own user talk page.
 	 *
 	 * @type {Ref<boolean>}
 	 */
-	const disableUTEdit = ref( details.indexOf( 'wpDisableUTEdit' ) !== -1 );
+	const disableUTEdit = ref( details.includes( 'wpDisableUTEdit' ) );
 	const additionalDetails = mw.config.get( 'blockAdditionalDetailsPreset' ) || [];
 	/**
 	 * Whether to autoblock IP addresses used by the target.
@@ -116,33 +108,40 @@ module.exports = exports = defineStore( 'block', () => {
 	 * @type {Ref<boolean>}
 	 * @see https://www.mediawiki.org/wiki/Autoblock
 	 */
-	const autoBlock = ref( additionalDetails.indexOf( 'wpAutoBlock' ) !== -1 );
+	const autoBlock = ref( additionalDetails.includes( 'wpAutoBlock' ) );
 	/**
 	 * Whether to impose a "suppressed" block, hiding the target's username
 	 * from block log, the active block list, and the user list.
 	 *
 	 * @type {Ref<boolean>}
 	 */
-	const hideUser = ref( additionalDetails.indexOf( 'wpHideUser' ) !== -1 );
+	const hideUser = ref( additionalDetails.includes( 'wpHideUser' ) );
 	/**
 	 * Whether to watch the target's user page and talk page.
 	 *
 	 * @type {Ref<boolean>}
 	 */
-	const watchUser = ref( additionalDetails.indexOf( 'wpWatch' ) !== -1 );
+	const watchUser = ref( additionalDetails.includes( 'wpWatch' ) );
 	/**
 	 * Whether to apply a hard block, blocking accounts using the same IP address.
 	 *
 	 * @type {Ref<boolean>}
 	 */
-	const hardBlock = ref( additionalDetails.indexOf( 'wpHardBlock' ) !== -1 );
-	/*
+	const hardBlock = ref( additionalDetails.includes( 'wpHardBlock' ) );
+	/**
 	 * The removal reason, used in the remove-block confirmation dialog.
 	 * Note that the target and watchuser values in that form are shared with the main form.
 	 *
 	 * @type {Ref<string>}
 	 */
-	const removalReason = ref( mw.config.get( 'blockRemovalReasonPreset' ) || '' );
+	const removalReason = ref( '' );
+	/**
+	 * Whether the removal confirmation dialog is open.
+	 * This is set in the parent SpecialBlock component.
+	 *
+	 * @type {Ref<boolean>}
+	 */
+	const removalConfirmationOpen = ref( false );
 
 	// Other refs that don't have corresponding form fields.
 
@@ -153,10 +152,13 @@ module.exports = exports = defineStore( 'block', () => {
 	 */
 	const formErrors = ref( mw.config.get( 'blockPreErrors' ) || [] );
 	/**
+	 * Error messages processed from the additional blocks hook mechanism.
+	 * They're generated in the success block of the doBlock call.
+	 */
+	const blocksAdditionalErrors = ref( [] );
+	/**
 	 * Whether the form has been submitted. This is watched by UserLookup
 	 * and ExpiryField to trigger validation on form submission.
-	 * After submission, this remains true until a form field is altered.
-	 * This is to ensure post-submission formErrors are not prematurely cleared.
 	 *
 	 * @type {Ref<boolean>}
 	 */
@@ -169,11 +171,31 @@ module.exports = exports = defineStore( 'block', () => {
 	 */
 	const formVisible = ref( false );
 	/**
-	 * Whether the block was successful.
+	 * Whether changes have been made to any form field.
+	 * This is set by the parent SpecialBlock component, and cleared by resetForm().
 	 *
 	 * @type {Ref<boolean>}
 	 */
-	const success = ref( false );
+	const formDirty = ref( false );
+	/**
+	 * Whether the block was added successfully.
+	 *
+	 * @type {Ref<boolean>}
+	 */
+	const blockAdded = ref( false );
+	/**
+	 * The message detailing any additional blocks that were added successfully.
+	 * It's generated in the success block of the doBlock call.
+	 *
+	 * @type {Ref<Array>}
+	 */
+	const additionalBlocksMessage = ref( '' );
+	/**
+	 * Whether the block was removed successfully.
+	 *
+	 * @type {Ref<boolean>}
+	 */
+	const blockRemoved = ref( false );
 	/**
 	 * Whether the target user is already blocked. This is set
 	 * after fetching block log data from the API.
@@ -194,6 +216,12 @@ module.exports = exports = defineStore( 'block', () => {
 	 * @type {Ref<string>}
 	 */
 	const confirmationMessage = ref( '' );
+	/**
+	 * Whether the target user exists. This is set by the UserLookup component.
+	 *
+	 * @type {Ref<boolean>}
+	 */
+	const targetExists = ref( !!mw.config.get( 'blockTargetExists' ) );
 
 	// ** Getters (computed properties) **
 
@@ -221,7 +249,7 @@ module.exports = exports = defineStore( 'block', () => {
 	const disableUTEditVisible = computed( () => {
 		const isVisibleByConfig = mw.config.get( 'blockDisableUTEditVisible' ) || false;
 		const isPartial = type.value === 'partial';
-		const blocksUT = namespaces.value.indexOf( mw.config.get( 'wgNamespaceIds' ).user_talk ) !== -1;
+		const blocksUT = namespaces.value.includes( mw.config.get( 'wgNamespaceIds' ).user_talk );
 		return isVisibleByConfig && ( !isPartial || ( isPartial && blocksUT ) );
 	} );
 	/**
@@ -230,6 +258,11 @@ module.exports = exports = defineStore( 'block', () => {
 	 * @type {ComputedRef<boolean>}
 	 */
 	const confirmationNeeded = computed( () => !!confirmationMessage.value );
+	/**
+	 * Whether the target is an IP address.
+	 */
+	const showIPTempBlockMessage = computed( () => mw.config.get( 'wgAutoCreateTempUserEnabled' ) &&
+		mw.util.isIPAddress( targetUser.value, true ) );
 
 	// ** Watchers **
 
@@ -248,6 +281,35 @@ module.exports = exports = defineStore( 'block', () => {
 		},
 		// Ensure confirmationMessage is set on initial load.
 		{ immediate: true }
+	);
+
+	/**
+	 * Update wgRelevantUserName and the URL path with the target user, and set the query string parameters:
+	 * - id: The block ID of the block to modify
+	 * - remove: Whether to remove the block (opens the dialog)
+	 */
+	watch(
+		computed( () => [ targetUser.value, blockId.value, removalConfirmationOpen.value ] ),
+		() => {
+			mw.config.set( 'wgRelevantUserName', targetUser.value );
+			const params = new URLSearchParams( window.location.search );
+			if ( blockId.value ) {
+				params.set( 'id', blockId.value );
+			} else {
+				params.delete( 'id' );
+			}
+			if ( removalConfirmationOpen.value ) {
+				params.set( 'remove', '1' );
+			} else {
+				params.delete( 'remove' );
+			}
+			// Remove title= if present
+			params.delete( 'title' );
+			// Trim off the trailing slash and any target user from the page name.
+			const pageName = mw.config.get( 'wgPageName' ).replace( /\/(?:[^/]+)?$/, '' );
+			const newUrl = mw.util.getUrl( pageName + ( targetUser.value ? '/' + targetUser.value : '' ) );
+			window.history.replaceState( {}, '', `${ newUrl }?${ params }`.replace( /\?$/, '' ) );
+		}
 	);
 
 	// Hide the form and clear form-related refs when the target user changes.
@@ -271,12 +333,12 @@ module.exports = exports = defineStore( 'block', () => {
 	 * Load block data from an action=blocks API response.
 	 *
 	 * @param {Object} blockData The block's item from the API.
-	 * @param {boolean} [loadingFromParam=false] Whether the data is being loaded from URL parameters.
+	 * @param {boolean} [setTarget=false] Whether to set the `targetUser`, thereby firing
+	 *   off associated watchers.
 	 */
-	function loadFromData( blockData, loadingFromParam = false ) {
-		if ( loadingFromParam ) {
+	function loadFromData( blockData, setTarget = false ) {
+		if ( setTarget ) {
 			targetUser.value = blockData.user;
-			formVisible.value = true;
 		}
 		blockId.value = blockData.id;
 		type.value = blockData.partial ? 'partial' : 'sitewide';
@@ -284,19 +346,7 @@ module.exports = exports = defineStore( 'block', () => {
 		namespaces.value = blockData.restrictions.namespaces || [];
 		expiry.value = blockData.expiry;
 		partialOptions.value = ( blockData.restrictions.actions || [] ).map( ( i ) => 'ipb-action-' + i );
-		// The reason is a single string that possibly starts with one of the predefined reasons,
-		// and can have an 'other' value separated by a colon.
-		// Here we replicate what's done in PHP in HTMLSelectAndOtherField at https://w.wiki/CPMs
-		reason.value = 'other';
-		reasonOther.value = blockData.reason;
-		for ( const opt of mw.config.get( 'blockReasonOptions' ) ) {
-			const possPrefix = opt.value + mw.msg( 'colon-separator' );
-			if ( reasonOther.value.startsWith( possPrefix ) ) {
-				reason.value = opt.value;
-				reasonOther.value = reasonOther.value.slice( possPrefix.length );
-				break;
-			}
-		}
+		reason.value = blockData.reason;
 		createAccount.value = blockData.nocreate;
 		disableEmail.value = blockData.noemail;
 		disableUTEdit.value = !blockData.allowusertalk;
@@ -307,18 +357,21 @@ module.exports = exports = defineStore( 'block', () => {
 	}
 
 	/**
-	 * Reset the form to default values, optionally clearing the target user.
-	 * The values here should be the defaults set on the OOUI elements in SpecialBlock.php.
+	 * Reset the form to default values, optionally clearing the target user and behavioural refs.
+	 * The values here should be the defaults set on the elements in SpecialBlock.php.
 	 * These are not the same as the *preset* values fetched from URL parameters.
 	 *
-	 * @param {boolean} [full=false] Whether to clear the target user.
+	 * @param {boolean} [user=false] Whether to clear the target user.
+	 * @param {boolean} [internal=true] Whether to also reset internal refs not tied to a specific
+	 *   form field, such as `formErrors`, `formVisible` and `alreadyBlocked`.
 	 * @todo Infuse default values once we have Codex PHP (T377529).
 	 *   Until then this needs to be manually kept in sync with the PHP defaults.
 	 */
-	function resetForm( full = false ) {
+	function resetForm( user = false, internal = true ) {
 		// Form fields
-		if ( full ) {
+		if ( user ) {
 			targetUser.value = '';
+			targetExists.value = false;
 		}
 		blockId.value = null;
 		type.value = 'sitewide';
@@ -326,8 +379,7 @@ module.exports = exports = defineStore( 'block', () => {
 		namespaces.value = [];
 		partialOptions.value = [];
 		expiry.value = '';
-		reason.value = 'other';
-		reasonOther.value = '';
+		reason.value = '';
 		createAccount.value = true;
 		disableEmail.value = false;
 		disableUTEdit.value = false;
@@ -336,7 +388,11 @@ module.exports = exports = defineStore( 'block', () => {
 		watchUser.value = false;
 		hardBlock.value = false;
 		// Other refs
-		resetFormInternal();
+		if ( internal ) {
+			resetFormInternal();
+		}
+
+		mw.hook( 'mw.special.block.formReset' ).fire();
 	}
 
 	/**
@@ -345,11 +401,15 @@ module.exports = exports = defineStore( 'block', () => {
 	 * @internal
 	 */
 	function resetFormInternal() {
+		blockId.value = null;
 		formErrors.value = [];
 		formSubmitted.value = false;
 		formVisible.value = false;
-		success.value = false;
-		alreadyBlocked.value = false;
+		formDirty.value = false;
+		blockAdded.value = false;
+		blockRemoved.value = false;
+		additionalBlocksMessage.value = '';
+		blocksAdditionalErrors.value = '';
 		promises.value.clear();
 	}
 
@@ -362,9 +422,12 @@ module.exports = exports = defineStore( 'block', () => {
 		const params = {
 			action: 'block',
 			format: 'json',
+			formatversion: 2,
 			user: targetUser.value,
 			expiry: expiry.value,
+			reason: reason.value,
 			// Localize errors
+			errorformat: 'html',
 			uselang: mw.config.get( 'wgUserLanguage' ),
 			errorlang: mw.config.get( 'wgUserLanguage' ),
 			errorsuselocal: true
@@ -383,29 +446,11 @@ module.exports = exports = defineStore( 'block', () => {
 			}
 		}
 
-		// Reason selected concatenated with 'Other' field
-		if ( reason.value === 'other' ) {
-			params.reason = reasonOther.value;
-		} else {
-			params.reason = reason.value + (
-				reasonOther.value ? mw.msg( 'colon-separator' ) + reasonOther.value : ''
-			);
-		}
-
 		if ( type.value === 'partial' ) {
-			const actionRestrictions = [];
 			params.partial = 1;
-			if ( partialOptions.value.indexOf( 'ipb-action-upload' ) !== -1 ) {
-				actionRestrictions.push( 'upload' );
-			}
-			if ( partialOptions.value.indexOf( 'ipb-action-move' ) !== -1 ) {
-				actionRestrictions.push( 'move' );
-			}
-			if ( partialOptions.value.indexOf( 'ipb-action-create' ) !== -1 ) {
-				actionRestrictions.push( 'create' );
-			}
-			params.actionrestrictions = actionRestrictions.join( '|' );
-
+			params.actionrestrictions = Object.keys( partialOptions.value )
+				.map( ( i ) => partialOptions.value[ i ].replace( 'ipb-action-', '' ) )
+				.join( '|' );
 			if ( pages.value.length ) {
 				params.pagerestrictions = pages.value.join( '|' );
 			}
@@ -441,6 +486,10 @@ module.exports = exports = defineStore( 'block', () => {
 		if ( !hardBlock.value && mw.util.isIPAddress( targetUser.value, true ) ) {
 			params.anononly = 1;
 		}
+
+		// Allow other components to update the final block parameters without the store
+		// needing to know about third-party props and without needing to expose the store
+		mw.hook( 'mw.special.block.doBlockParamsReady' ).fire( params );
 
 		// Clear any previous errors.
 		formErrors.value = [];
@@ -485,13 +534,15 @@ module.exports = exports = defineStore( 'block', () => {
 			return blockLogPromise;
 		}
 
+		const target = targetUser.value;
 		const params = {
 			action: 'query',
 			format: 'json',
 			leprop: 'ids|title|type|user|timestamp|parsedcomment|details',
-			letitle: `User:${ targetUser.value }`,
+			letitle: `User:${ target }`,
 			list: 'logevents',
-			formatversion: 2
+			formatversion: 2,
+			uselang: mw.config.get( 'wgUserLanguage' )
 		};
 
 		if ( blockLogType === 'suppress' ) {
@@ -509,14 +560,55 @@ module.exports = exports = defineStore( 'block', () => {
 		params.list = 'logevents|blocks';
 		params.letype = 'block';
 		params.bkprop = 'id|user|by|timestamp|expiry|reason|parsedreason|range|flags|restrictions';
-		params.bkusers = targetUser.value;
+		if ( mw.util.isIPAddress( target, true ) ) {
+			params.bkip = target;
+		} else {
+			params.bkusers = target;
+		}
 
 		const actualPromise = api.get( params );
 		actualPromise.then( ( data ) => {
-			alreadyBlocked.value = data.query.blocks.length > 0;
+			alreadyBlocked.value = isTargetAlreadyBlocked( target, data.query.blocks );
+			// form should be visible if target is not blocked
+			if ( !alreadyBlocked.value ) {
+				formVisible.value = true;
+			}
 		} );
 		blockLogPromise = Promise.all( [ actualPromise ] );
 		return pushPromise( blockLogPromise );
+	}
+
+	/**
+	 * Check if a target is already blocked given a list of blocks.
+	 * If the target is an IP and there is a block on a range that includes
+	 * the target, it is not considered already blocked for the purposes
+	 * of these modules
+	 *
+	 * @param {string} target is expected to be sanitized
+	 * @param {Object[]} blocks
+	 * @return {boolean} true if target is the intended target of the block
+	 */
+	function isTargetAlreadyBlocked( target, blocks ) {
+		// T392049
+		if ( blocks.length === 0 ) {
+			return false;
+		}
+
+		const isIpOrRange = mw.util.isIPAddress( target, true );
+		if ( !isIpOrRange ) {
+			return true;
+		}
+
+		let blockFound = false;
+		blocks.forEach( ( block ) => {
+			if ( block.user === target ) {
+				blockFound = true;
+				return;
+
+			}
+		} );
+
+		return blockFound;
 	}
 
 	/**
@@ -545,8 +637,12 @@ module.exports = exports = defineStore( 'block', () => {
 		formErrors,
 		formSubmitted,
 		formVisible,
+		formDirty,
 		targetUser,
-		success,
+		blockAdded,
+		additionalBlocksMessage,
+		blocksAdditionalErrors,
+		blockRemoved,
 		blockId,
 		alreadyBlocked,
 		type,
@@ -555,7 +651,6 @@ module.exports = exports = defineStore( 'block', () => {
 		pages,
 		namespaces,
 		reason,
-		reasonOther,
 		createAccount,
 		disableEmail,
 		disableUTEdit,
@@ -567,11 +662,14 @@ module.exports = exports = defineStore( 'block', () => {
 		hardBlock,
 		confirmationMessage,
 		confirmationNeeded,
+		showIPTempBlockMessage,
 		removalReason,
+		removalConfirmationOpen,
 		loadFromData,
 		resetForm,
 		doBlock,
 		doRemoveBlock,
-		getBlockLogData
+		getBlockLogData,
+		targetExists
 	};
 } );

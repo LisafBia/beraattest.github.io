@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -75,6 +61,9 @@ class MaintenanceParameters {
 
 	/** @var string[] */
 	private $errors = [];
+
+	/** @var string[] */
+	private $warnings = [];
 
 	/** @var string */
 	private $usagePrefix = 'php maintenance/run.php';
@@ -226,10 +215,10 @@ class MaintenanceParameters {
 
 		foreach ( $this->optionsSequence as $i => [ $opt, ] ) {
 			if ( $opt === $name ) {
-				unset( $this->optionsSequence[$i] );
-				break;
+				$this->optionsSequence[$i] = null;
 			}
 		}
+		$this->optionsSequence = array_values( array_filter( $this->optionsSequence ) );
 	}
 
 	/**
@@ -243,7 +232,6 @@ class MaintenanceParameters {
 
 	/**
 	 * Set a short description of what the script does.
-	 * @param string $text
 	 */
 	public function setDescription( string $text ) {
 		$this->mDescription = $text;
@@ -308,7 +296,7 @@ class MaintenanceParameters {
 
 	/**
 	 * Programmatically set the value of the given option.
-	 * Useful for setting up child scripts, see runChild().
+	 * Useful for setting up child scripts, see createChild().
 	 *
 	 * @param string $name
 	 * @param mixed|null $value
@@ -319,7 +307,7 @@ class MaintenanceParameters {
 
 	/**
 	 * Programmatically set the value of the given argument.
-	 * Useful for setting up child scripts, see runChild().
+	 * Useful for setting up child scripts, see createChild().
 	 *
 	 * @param string|int $argId
 	 * @param string $value
@@ -341,12 +329,11 @@ class MaintenanceParameters {
 		$this->mArgs = [];
 		$this->optionsSequence = [];
 		$this->errors = [];
+		$this->warnings = [];
 	}
 
 	/**
 	 * Merge options declarations from $other into this instance.
-	 *
-	 * @param MaintenanceParameters $other
 	 */
 	public function mergeOptions( MaintenanceParameters $other ) {
 		$this->mOptDefs = $other->mOptDefs + $this->mOptDefs;
@@ -393,11 +380,14 @@ class MaintenanceParameters {
 					if ( $param === false ) {
 						$this->error( "Option --$option needs a value after it!" );
 					}
-
 					$this->setOptionValue( $options, $option, $param );
 				} else {
 					$bits = explode( '=', $option, 2 );
-					$this->setOptionValue( $options, $bits[0], $bits[1] ?? 1 );
+					$opt = $bits[0];
+					if ( isset( $this->mOptDefs[$opt] ) && !$this->mOptDefs[$opt]['withArg'] && isset( $bits[1] ) ) {
+						$this->warning( "Option --$opt should not be assigned a value." );
+					}
+					$this->setOptionValue( $options, $opt, $bits[1] ?? 1 );
 				}
 			} elseif ( $arg == '-' ) {
 				# Lonely "-", often used to indicate stdin or stdout.
@@ -412,10 +402,13 @@ class MaintenanceParameters {
 						$option = $this->mShortOptionMap[$givenShort];
 					}
 
-					if ( isset( $this->mOptDefs[$option]['withArg'] ) && $this->mOptDefs[$option]['withArg'] ) {
+					if ( isset( $this->mOptDefs[$option] ) && $this->mOptDefs[$option]['withArg'] ) {
 						$param = next( $argv );
 						if ( $param === false ) {
 							$this->error( "Option -$givenShort needs a value after it!" );
+						} elseif ( $p !== $argLength - 1 ) {
+							$this->warning( "Short option -$givenShort should be followed directly by a value " .
+								"rather than another short option." );
 						}
 						$this->setOptionValue( $options, $option, $param );
 					} else {
@@ -477,17 +470,33 @@ class MaintenanceParameters {
 
 	/**
 	 * Whether any errors have been recorded so far.
-	 *
-	 * @return bool
 	 */
 	public function hasErrors(): bool {
 		return (bool)$this->errors;
 	}
 
+	private function warning( string $msg ) {
+		$this->warnings[] = $msg;
+	}
+
+	/**
+	 * Get any warnings encountered while processing parameters.
+	 *
+	 * @return string[]
+	 */
+	public function getWarnings(): array {
+		return $this->warnings;
+	}
+
+	/**
+	 * Whether any warnings have been recorded so far.
+	 */
+	public function hasWarnings(): bool {
+		return (bool)$this->warnings;
+	}
+
 	/**
 	 * Set the script name, for use in the help message
-	 *
-	 * @param string $name
 	 */
 	public function setName( string $name ) {
 		$this->mName = $name;
@@ -495,8 +504,6 @@ class MaintenanceParameters {
 
 	/**
 	 * Get the script name, as shown in the help message
-	 *
-	 * @return string
 	 */
 	public function getName(): string {
 		return $this->mName;
@@ -562,8 +569,6 @@ class MaintenanceParameters {
 
 	/**
 	 * Get help text.
-	 *
-	 * @return string
 	 */
 	public function getHelp(): string {
 		$screenWidth = 80; // TODO: Calculate this!
@@ -646,7 +651,7 @@ class MaintenanceParameters {
 		return implode( '', $output );
 	}
 
-	private function formatHelpItems( array $items, $heading, $descWidth, $tab ) {
+	private function formatHelpItems( array $items, string $heading, int $descWidth, string $tab ): string {
 		if ( $items === [] ) {
 			return '';
 		}
@@ -690,7 +695,6 @@ class MaintenanceParameters {
 
 	/**
 	 * Returns any option values
-	 * @return array
 	 */
 	public function getOptions(): array {
 		return $this->mOptions;
@@ -705,18 +709,10 @@ class MaintenanceParameters {
 		return $this->optionsSequence;
 	}
 
-	/**
-	 * @param string $usagePrefix
-	 */
 	public function setUsagePrefix( string $usagePrefix ) {
 		$this->usagePrefix = $usagePrefix;
 	}
 
-	/**
-	 * @param array $argInfo
-	 *
-	 * @return string
-	 */
 	private function getArgRepresentation( array $argInfo ): string {
 		if ( $argInfo['require'] ) {
 			$rep = '<' . $argInfo['name'] . '>';

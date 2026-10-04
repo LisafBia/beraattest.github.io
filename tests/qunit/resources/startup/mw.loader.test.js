@@ -44,7 +44,7 @@
 	//   (as the case when using `composer serve`), we normalize to trailing slash.
 	const SCRIPT_PATH_URL = new URL(
 		mw.config.get( 'wgScriptPath' ) + '/',
-		mw.config.get( 'wgServer' )
+		new URL( mw.config.get( 'wgServer' ), location.href )
 	).toString();
 
 	mw.loader.addSource( {
@@ -79,7 +79,7 @@
 			$element.css( 'height' );
 			// eslint-disable-next-line no-unused-expressions
 			el.innerHTML;
-			// eslint-disable-next-line no-self-assign, mediawiki/class-doc
+			// eslint-disable-next-line no-self-assign
 			el.className = el.className;
 			// eslint-disable-next-line no-unused-expressions
 			document.documentElement.clientHeight;
@@ -179,6 +179,7 @@
 				source: data.source
 			} );
 		} );
+		this.suppressWarnings(); // Skipped unavailable module
 
 		mw.loader.load( 'test.load.circleC' );
 		assert.deepEqual(
@@ -202,6 +203,7 @@
 				source: data.source
 			} );
 		} );
+		this.suppressWarnings(); // Skipped unavailable module
 
 		mw.loader.load( 'test.load.circleDirect' );
 		assert.deepEqual(
@@ -246,6 +248,7 @@
 				source: data.source
 			} );
 		} );
+		this.suppressWarnings(); // Skipped unavailable module
 
 		mw.loader.register( [
 			[ 'test.load.missingdep1', '0', [ 'test.load.missingdep2' ] ],
@@ -386,7 +389,7 @@
 			},
 			{
 				// @import always works in the first stylesheet.
-				// Test with at least two stylesheets to excercise the special
+				// Test with at least two stylesheets to exercise the special
 				// condition in addEmbeddedCSS to support @import (end the batch
 				// earlier than normal).
 				css: [
@@ -753,7 +756,7 @@
 				throw new Error( 'Success fired despite missing dependency' );
 			},
 			( e, dependencies ) => {
-				assert.strictEqual( Array.isArray( dependencies ), true, 'Expected array of dependencies' );
+				assert.true( Array.isArray( dependencies ), 'Expected array of dependencies' );
 				assert.deepEqual(
 					dependencies,
 					[ 'jquery', 'mediawiki.base', 'test.module7' ],
@@ -765,7 +768,7 @@
 				throw new Error( 'Success fired despite missing dependency' );
 			},
 			( e, dependencies ) => {
-				assert.strictEqual( Array.isArray( dependencies ), true, 'Expected array of dependencies' );
+				assert.true( Array.isArray( dependencies ), 'Expected array of dependencies' );
 				dependencies.sort();
 				assert.deepEqual(
 					dependencies,
@@ -805,7 +808,7 @@
 		);
 	} );
 
-	// Regresion test for T68598
+	// Regression test for T68598
 	QUnit.test( 'Network failure', function ( assert ) {
 		// Modules named "test.*Dump" always exist via load.mock.php (testloader)
 		mw.loader.register( [
@@ -873,7 +876,7 @@
 		let target = SCRIPT_PATH_URL + 'tests/qunit/data/mwLoaderTestCallback.js';
 		// Use a protocol-relative URL for this test
 		target = target.replace( /https?:/, '' );
-		assert.strictEqual( target.slice( 0, 2 ), '//', 'URL is protocol-relative' );
+		assert.true( target.startsWith( '//' ), 'URL is protocol-relative' );
 
 		mw.loader.testCallback = function () {
 			// Ensure once, delete now
@@ -937,7 +940,7 @@
 		} );
 
 		return mw.loader.using( '', () => {
-			assert.strictEqual( done, true, 'script ran' );
+			assert.true( done, 'script ran' );
 			assert.strictEqual( mw.loader.moduleRegistry[ '' ].state, 'ready', 'State after' );
 		} );
 	} );
@@ -962,7 +965,7 @@
 
 		mw.loader.load( [ 'testRaceRedHerring', 'testRaceLoadMe' ] );
 		return mw.loader.using( 'testRaceLoadMe', () => {
-			assert.strictEqual( done, true, 'script ran' );
+			assert.true( done, 'script ran' );
 			assert.strictEqual( mw.loader.getState( 'testRaceLoadMe' ), 'ready', 'state' );
 		} );
 	} );
@@ -979,7 +982,7 @@
 		} );
 
 		mw.loader.register( 'test.stale', 'v2' );
-		assert.strictEqual( mw.loader.store.get( 'test.stale' ), false, 'Not in store' );
+		assert.false( mw.loader.store.get( 'test.stale' ), 'Not in store' );
 
 		mw.loader.impl( () => [
 			'test.stale@v1',
@@ -1004,7 +1007,7 @@
 
 				// Module was stored correctly as v1
 				// On future navigations, it will be ignored until evicted
-				assert.strictEqual( mw.loader.store.get( 'test.stale' ), false, 'Not in store' );
+				assert.false( mw.loader.store.get( 'test.stale' ), 'Not in store' );
 			} );
 	} );
 
@@ -1022,12 +1025,12 @@
 
 		// See ResourceLoader\StartUpModule::$groupIds
 		mw.loader.register( name, 'x', [], 1 );
-		assert.strictEqual( mw.loader.store.get( name ), false, 'Not in store' );
+		assert.false( mw.loader.store.get( name ), 'Not in store' );
 
 		mw.loader.implement( name, () => {} );
 		return mw.loader.using( name ).then( () => {
 			assert.strictEqual( mw.loader.getState( name ), 'ready' );
-			assert.strictEqual( mw.loader.store.get( name ), false, 'Still not in store' );
+			assert.false( mw.loader.store.get( name ), 'Still not in store' );
 		} );
 	} );
 
@@ -1045,12 +1048,12 @@
 
 		// See ResourceLoader\StartUpModule::$groupIds
 		mw.loader.register( name, 'y', [], 0 );
-		assert.strictEqual( mw.loader.store.get( name ), false, 'Not in store' );
+		assert.false( mw.loader.store.get( name ), 'Not in store' );
 
 		mw.loader.implement( name, () => {} );
 		return mw.loader.using( name ).then( () => {
 			assert.strictEqual( mw.loader.getState( name ), 'ready' );
-			assert.strictEqual( mw.loader.store.get( name ), false, 'Still not in store' );
+			assert.false( mw.loader.store.get( name ), 'Still not in store' );
 		} );
 	} );
 
@@ -1168,11 +1171,18 @@
 			// Must use try-catch because cb.later() will throw if require is undefined,
 			// which doesn't work well inside Deferred.then() when using jQuery 1.x with QUnit
 			try {
-				assert.strictEqual( cb.later(), 'Defined.', 'require works asynchrously in debug mode' );
+				assert.strictEqual( cb.later(), 'Defined.', 'require works asynchronously in debug mode' );
 			} catch ( e ) {
-				assert.strictEqual( String( e ), null, 'require works asynchrously in debug mode' );
+				assert.strictEqual( String( e ), null, 'require works asynchronously in debug mode' );
 			}
 		} );
+	} );
+
+	QUnit.test( '.require() relative file without packageFiles', ( assert ) => {
+		// T386833
+		assert.throws( () => {
+			mw.loader.require( './hello.js' );
+		}, /Module names cannot start with ".\/" or "..\/"/ );
 	} );
 
 	QUnit.test( 'Implicit dependencies', ( assert ) => {
@@ -1210,7 +1220,7 @@
 
 		return mw.loader.getScript( scriptUrl ).then(
 			() => {
-				assert.strictEqual( mw.getScriptExampleScriptLoaded, true, 'Data attached to a global object is available' );
+				assert.true( mw.getScriptExampleScriptLoaded, 'Data attached to a global object is available' );
 			}
 		);
 	} );

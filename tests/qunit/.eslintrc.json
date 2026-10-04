@@ -1,8 +1,8 @@
 {
 	"root": true,
 	"extends": [
-		"wikimedia/client-common",
-		"wikimedia/language/es2020",
+		"wikimedia/client/common",
+		"wikimedia/language/es2021",
 		"wikimedia/jquery",
 		"wikimedia/mediawiki",
 		"wikimedia/qunit"
@@ -13,9 +13,17 @@
 	"rules": {
 		"compat/compat": [ "error", "last 2 chrome versions, last 2 firefox versions" ],
 		"max-len": "off",
+		"mediawiki/no-storage": "off",
+		"no-shadow": [ "error", { "allow": [ "hooks" ] } ],
+		"no-jquery/no-done-fail": "off",
 		"no-jquery/no-global-selector": "off",
 		"no-jquery/no-parse-html-literal": "off",
-		"no-shadow": [ "error", { "allow": [ "hooks" ] } ],
 		"qunit/resolve-async": "off"
-	}
+	},
+	"overrides": [
+		{
+			"files": [ "coverage-runner.js" ],
+			"extends": [ "wikimedia/server" ]
+		}
+	]
 }

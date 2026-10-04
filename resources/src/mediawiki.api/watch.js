@@ -42,19 +42,20 @@
 		 * Convenience method for `action=watch`.
 		 *
 		 * @method
-		 * @since 1.35 - expiry parameter can be passed when
-		 * Watchlist Expiry is enabled
+		 * @since 1.35 - expiry parameter can be passed when Watchlist Expiry is enabled
 		 * @param {string|mw.Title|string[]|mw.Title[]} pages Full page name or instance of mw.Title, or an
 		 *  array thereof. If an array is passed, the return value passed to the promise will also be an
 		 *  array of appropriate objects.
 		 * @param {string} [expiry] When the page should expire from the watchlist. If omitted, the
 		 *  page will not expire.
+		 * @param {number[]|string[]} [labels] Array of integer watchlist label IDs for labels to apply to the watched
+		 *  pages. If the page is already watched, this will replace any existing labels.
 		 * @return {jQuery.Promise<mw.Api.WatchedPage|mw.Api.WatchedPage[]>} A promise that resolves
 		 *  with an object (or array of objects) describing each page that was passed in and its
 		 *  current watched/unwatched status.
 		 */
-		watch: function ( pages, expiry ) {
-			return doWatchInternal.call( this, pages, { expiry: expiry } );
+		watch: function ( pages, expiry, labels ) {
+			return doWatchInternal.call( this, pages, { expiry, labels } );
 		},
 
 		/**

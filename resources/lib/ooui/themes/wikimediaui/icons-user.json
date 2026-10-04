@@ -18,13 +18,19 @@
 			"color": "#d73333"
 		},
 		"warning": {
-			"color": "#edab00"
+			"color": "#ab7f2a"
 		},
 		"success": {
 			"color": "#14866d"
 		}
 	},
 	"images": {
+		"bookmarkList": {
+			"file": {
+				"ltr": "images/icons/bookmarkList-ltr.svg",
+				"rtl": "images/icons/bookmarkList-rtl.svg"
+			}
+		},
 		"userAdd": {
 			"file": {
 				"ltr": "images/icons/userAdd-ltr.svg",
@@ -40,6 +46,15 @@
 		"userAvatarOutline": {
 			"file": "images/icons/userAvatarOutline.svg"
 		},
+		"userBlocked": {
+			"file": "images/icons/userBlocked.svg"
+		},
+		"userChat": {
+			"file": {
+				"ltr": "images/icons/userChat-ltr.svg",
+				"rtl": "images/icons/userChat-rtl.svg"
+			}
+		},
 		"userContributions": {
 			"file": {
 				"ltr": "images/icons/userContributions-ltr.svg",
@@ -50,6 +65,18 @@
 			"file": {
 				"ltr": "images/icons/userGroup-ltr.svg",
 				"rtl": "images/icons/userGroup-rtl.svg"
+			}
+		},
+		"userMentor": {
+			"file": {
+				"ltr": "images/icons/userMentor-ltr.svg",
+				"rtl": "images/icons/userMentor-rtl.svg"
+			}
+		},
+		"userPages": {
+			"file": {
+				"ltr": "images/icons/userPages-ltr.svg",
+				"rtl": "images/icons/userPages-rtl.svg"
 			}
 		},
 		"userRights": {
@@ -68,6 +95,12 @@
 			"file": {
 				"ltr": "images/icons/userTemporary-ltr.svg",
 				"rtl": "images/icons/userTemporary-rtl.svg"
+			}
+		},
+		"userTemporaryLocation": {
+			"file": {
+				"ltr": "images/icons/userTemporaryLocation-ltr.svg",
+				"rtl": "images/icons/userTemporaryLocation-rtl.svg"
 			}
 		},
 		"watchlist": {

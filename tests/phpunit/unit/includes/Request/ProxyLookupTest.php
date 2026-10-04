@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -23,22 +9,21 @@ namespace MediaWiki\Tests\Unit;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\Request\ProxyLookup;
 use MediaWikiUnitTestCase;
+use Wikimedia\ObjectCache\BagOStuff;
+use Wikimedia\ObjectCache\HashBagOStuff;
 
 /**
  * @author DannyS712
  *
- * @coversDefaultClass \MediaWiki\Request\ProxyLookup
+ * @covers \MediaWiki\Request\ProxyLookup
  */
 class ProxyLookupTest extends MediaWikiUnitTestCase {
-
-	/**
-	 * @covers ::__construct
-	 */
 	public function testConstruct() {
 		$proxyLookup = new ProxyLookup(
 			[],
 			[],
-			$this->createNoOpMock( HookContainer::class )
+			$this->createNoOpMock( HookContainer::class ),
+			new HashBagOStuff()
 		);
 		$this->assertInstanceOf( ProxyLookup::class, $proxyLookup, 'No errors' );
 	}
@@ -54,7 +39,6 @@ class ProxyLookupTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
-	 * @covers ::isConfiguredProxy
 	 * @dataProvider provideIsConfiguredProxy
 	 */
 	public function testIsConfiguredProxy( string $ip, bool $expected ) {
@@ -72,7 +56,8 @@ class ProxyLookupTest extends MediaWikiUnitTestCase {
 				'127.0.0.0/24',
 				'255.0.0.0/24',
 			],
-			$hookContainer
+			$hookContainer,
+			new HashBagOStuff()
 		);
 
 		$this->assertSame( $expected, $proxyLookup->isConfiguredProxy( $ip ) );
@@ -87,7 +72,6 @@ class ProxyLookupTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
-	 * @covers ::isTrustedProxy
 	 * @dataProvider provideIsTrustedProxy
 	 */
 	public function testIsTrustedProxy(
@@ -113,11 +97,59 @@ class ProxyLookupTest extends MediaWikiUnitTestCase {
 		$proxyLookup = new ProxyLookup(
 			[ '1.1.1.1' ],
 			[],
-			$hookContainer
+			$hookContainer,
+			new HashBagOStuff()
 		);
 
 		$this->assertSame( $hookResult, $proxyLookup->isTrustedProxy( $ip ) );
 		$this->assertTrue( $hookCalled );
+	}
+
+	public function testCaching() {
+		$hookContainer = $this->createNoOpMock( HookContainer::class );
+
+		$cache = $this->createMock( BagOStuff::class );
+		$cacheData = [];
+		$cache->method( 'makeGlobalKey' )
+			->willReturn( 'test-key' );
+		$cache->method( 'get' )
+			->willReturnCallback( static function ( $key ) use ( &$cacheData ) {
+				return $cacheData[$key] ?? false;
+			} );
+
+		$cache->expects( $this->once() )
+			->method( 'set' )
+			->willReturnCallback( static function ( $key, $value ) use ( &$cacheData ) {
+				$cacheData[$key] = $value;
+				return true;
+			} );
+
+		// First ProxyLookup instance should create IPSet and cache it
+		$proxyLookup1 = new ProxyLookup(
+			[],
+			[ '127.0.0.0/24' ],
+			$hookContainer,
+			$cache
+		);
+		$this->assertTrue( $proxyLookup1->isConfiguredProxy( '127.0.0.1' ) );
+
+		// Second ProxyLookup instance should use cached IPSet
+		$cache2 = $this->createMock( BagOStuff::class );
+		$cache2->method( 'makeGlobalKey' )
+			->willReturn( 'test-key' );
+		$cache2->expects( $this->once() )
+			->method( 'get' )
+			->willReturn( $cacheData[array_key_first( $cacheData )] );
+		$cache2->expects( $this->never() )
+			->method( 'set' );
+
+		$proxyLookup2 = new ProxyLookup(
+			[],
+			[ '127.0.0.0/24' ],
+			$hookContainer,
+			$cache2
+		);
+		$this->assertTrue( $proxyLookup2->isConfiguredProxy( '127.0.0.1' ) );
 	}
 
 }

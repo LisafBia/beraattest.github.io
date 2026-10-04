@@ -3,6 +3,8 @@
 namespace MediaWiki\Rest\Validator;
 
 use MediaWiki\ParamValidator\TypeDef\ArrayDef;
+use MediaWiki\ParamValidator\TypeDef\NamespaceDef;
+use MediaWiki\ParamValidator\TypeDef\TagsDef;
 use MediaWiki\ParamValidator\TypeDef\TitleDef;
 use MediaWiki\ParamValidator\TypeDef\UserDef;
 use MediaWiki\Permissions\Authority;
@@ -45,7 +47,7 @@ class Validator {
 	 *
 	 * @since 1.42
 	 */
-	public const KNOWN_PARAM_SOURCES = [ 'path', 'query', 'body', 'post' ];
+	public const KNOWN_PARAM_SOURCES = [ 'path', 'query', 'body', 'post', 'header' ];
 
 	/**
 	 * (string) ParamValidator constant for use as a key in a param settings array
@@ -58,6 +60,15 @@ class Validator {
 	 * Parameter description to use in generated documentation
 	 */
 	public const PARAM_DESCRIPTION = 'rest-param-description';
+
+	/**
+	 * Parameter example to use in generated OpenAPI documentation.
+	 * Note: This constant maps to the singular OpenAPI `example` keyword.
+	 * The plural `examples` object map is intentionally out of scope.
+	 *
+	 * @since 1.47
+	 */
+	public const PARAM_EXAMPLE = 'rest-param-example';
 
 	/** @var array Type defs for ParamValidator */
 	private const TYPE_DEFS = [
@@ -77,6 +88,10 @@ class Validator {
 		'timestamp' => [ 'class' => TimestampDef::class ],
 		'upload' => [ 'class' => UploadDef::class ],
 		'expiry' => [ 'class' => ExpiryDef::class ],
+		'namespace' => [
+			'class' => NamespaceDef::class,
+			'services' => [ 'NamespaceInfo' ],
+		],
 		'title' => [
 			'class' => TitleDef::class,
 			'services' => [ 'TitleFactory' ],
@@ -84,6 +99,10 @@ class Validator {
 		'user' => [
 			'class' => UserDef::class,
 			'services' => [ 'UserIdentityLookup', 'TitleParser', 'UserNameUtils' ]
+		],
+		'tags' => [
+			'class' => TagsDef::class,
+			'services' => [ 'ChangeTagsStore' ],
 		],
 		'array' => [
 			'class' => ArrayDef::class,
@@ -109,15 +128,12 @@ class Validator {
 	private ParamValidator $paramValidator;
 
 	/**
-	 * @param ObjectFactory $objectFactory
-	 * @param RequestInterface $request
-	 * @param Authority $authority
 	 * @internal
 	 */
 	public function __construct(
 		ObjectFactory $objectFactory,
 		RequestInterface $request,
-		Authority $authority
+		Authority $authority,
 	) {
 		$this->paramValidator = new ParamValidator(
 			new ParamValidatorCallbacks( $request, $authority ),
@@ -147,8 +163,10 @@ class Validator {
 					continue;
 				}
 
+				$type = $settings[ParamValidator::PARAM_TYPE] ?? 'unspecified';
 				$validatedParams[$name] = $this->paramValidator->getValue( $name, $settings, [
 					'source' => $source,
+					'type' => $type
 				] );
 			} catch ( ValidationException $e ) {
 				// NOTE: error data structure must match the one used by validateBodyParams
@@ -321,6 +339,7 @@ class Validator {
 	}
 
 	private const PARAM_TYPE_SCHEMAS = [
+		'anything' => [ 'description' => 'anything' ], // NOTE: empty arrays get serialized as lists.
 		'boolean-param' => [ 'type' => 'boolean' ],
 		'enum-param' => [ 'type' => 'string' ],
 		'integer-param' => [ 'type' => 'integer' ],
@@ -332,9 +351,11 @@ class Validator {
 		'timestamp-param' => [ 'type' => 'string', 'format' => 'mw-timestamp' ],
 		'upload-param' => [ 'type' => 'string', 'format' => 'mw-upload' ],
 		'expiry-param' => [ 'type' => 'string', 'format' => 'mw-expiry' ],
+		'namespace-param' => [ 'type' => 'integer' ],
 		'title-param' => [ 'type' => 'string', 'format' => 'mw-title' ],
 		'user-param' => [ 'type' => 'string', 'format' => 'mw-user' ],
 		'array-param' => [ 'type' => 'object' ],
+		'tags-param' => [ 'type' => 'string' ],
 	];
 
 	/**
@@ -369,8 +390,21 @@ class Validator {
 			'name' => $name,
 			'description' => $paramSetting[ self::PARAM_DESCRIPTION ] ?? "$name parameter",
 			'in' => $location,
-			'schema' => $schema
 		];
+
+		// Lift the example from the schema to the OpenAPI Parameter Object level.
+		// In OpenAPI 3.0, providing the same example at both the parameter level and
+		// the inner schema level is redundant and can trigger linting warnings.
+		// By lifting the example, we ensure path / query / header parameters get the example
+		// at the root level.  Meanwhile, body parameters bypass this function
+		// and rely solely on the injection in getParameterSchema(), keeping their
+		// examples nested safely inside their schema properties.
+		if ( array_key_exists( 'example', $schema ) ) {
+			$param['example'] = $schema['example'];
+			unset( $schema['example'] );
+		}
+
+		$param['schema'] = $schema;
 
 		// TODO: generate a warning if required is false for a pth param
 		$param['required'] = $location === 'path'
@@ -390,23 +424,43 @@ class Validator {
 	public static function getParameterSchema( array $paramSetting ): array {
 		$type = $paramSetting[ ParamValidator::PARAM_TYPE ] ?? 'string';
 
-		if ( is_array( $type ) ) {
-			if ( $type === [] ) {
-				// Hack for empty enums. In path and query parameters,
-				// the empty string is often the same as "no value".
-				// TODO: generate a warning!
-				$type = [ '' ];
-			}
-
-			$schema = [
-				'type' => 'string',
-				'enum' => $type
-			];
-		} elseif ( isset( $paramSetting[ ArrayDef::PARAM_SCHEMA ] ) ) {
+		if ( isset( $paramSetting[ ArrayDef::PARAM_SCHEMA ] ) ) {
 			$schema = $paramSetting[ ArrayDef::PARAM_SCHEMA ];
 		} else {
-			// TODO: multi-value params?!
-			$schema = self::PARAM_TYPE_SCHEMAS["{$type}-param"] ?? [];
+			if ( is_array( $type ) ) {
+				if ( $type === [] ) {
+					// Hack for empty enums. In path and query parameters,
+					// the empty string is often the same as "no value".
+					// TODO: generate a warning!
+					$type = [ '' ];
+				}
+
+				$schema = [
+					'type' => 'string',
+					'enum' => $type
+				];
+			} else {
+				$schema = self::PARAM_TYPE_SCHEMAS["{$type}-param"]
+					?? self::PARAM_TYPE_SCHEMAS["anything"];
+			}
+
+			if ( $paramSetting[ ParamValidator::PARAM_ISMULTI ] ?? false ) {
+				$item = $schema;
+				$schema = [
+					'oneOf' => [
+						$item,
+						[ 'type' => 'array', 'items' => $item ],
+					],
+				];
+			}
+		}
+
+		if ( isset( $paramSetting[ ParamValidator::PARAM_DEFAULT ] ) ) {
+			$schema['default'] = $paramSetting[ ParamValidator::PARAM_DEFAULT ];
+		}
+
+		if ( array_key_exists( self::PARAM_EXAMPLE, $paramSetting ) ) {
+			$schema['example'] = $paramSetting[ self::PARAM_EXAMPLE ];
 		}
 
 		return $schema;

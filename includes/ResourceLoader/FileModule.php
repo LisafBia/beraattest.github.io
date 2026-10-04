@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @author Trevor Parscal
  * @author Roan Kattouw
@@ -23,18 +9,19 @@
 namespace MediaWiki\ResourceLoader;
 
 use CSSJanus;
-use Exception;
-use FileContentsHasher;
 use InvalidArgumentException;
 use LogicException;
-use MediaWiki\Languages\LanguageFallback;
+use MediaWiki\Language\LanguageFallbackMode;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Output\OutputPage;
 use MediaWiki\Registration\ExtensionRegistry;
+use MediaWiki\Utils\FileContentsHasher;
 use RuntimeException;
 use Wikimedia\Minify\CSSMin;
-use Wikimedia\RequestTimeout\TimeoutException;
+
+// Per https://phabricator.wikimedia.org/T241091
+// phpcs:disable MediaWiki.Commenting.FunctionAnnotations.UnrecognizedAnnotation
 
 /**
  * Module based on local JavaScript/CSS files.
@@ -154,10 +141,8 @@ class FileModule extends Module {
 	 */
 	protected $missingLocalFileRefs = [];
 
-	/**
-	 * @var VueComponentParser|null Lazy-created by getVueComponentParser()
-	 */
-	protected $vueComponentParser = null;
+	/** @var string[] Message keys */
+	protected array $lessMessages = [];
 
 	/**
 	 * Construct a new module from an options array.
@@ -220,6 +205,7 @@ class FileModule extends Module {
 				// Lists of strings
 				case 'dependencies':
 				case 'messages':
+				case 'lessMessages':
 					// Normalise
 					$option = array_values( array_unique( (array)$option ) );
 					sort( $option );
@@ -304,6 +290,10 @@ class FileModule extends Module {
 			$remoteBasePath = (string)$options['remoteBasePath'];
 		}
 
+		if ( $localBasePath === null ) {
+			$localBasePath = MW_INSTALL_PATH;
+		}
+
 		if ( $remoteBasePath === '' ) {
 			// If MediaWiki is installed at the document root (not recommended),
 			// then wgScriptPath is set to the empty string by the installer to
@@ -316,47 +306,34 @@ class FileModule extends Module {
 			$remoteBasePath = '/';
 		}
 
-		return [ $localBasePath ?? MW_INSTALL_PATH, $remoteBasePath ];
+		return [ $localBasePath, $remoteBasePath ];
 	}
 
+	/** @inheritDoc */
 	public function getScript( Context $context ) {
 		$packageFiles = $this->getPackageFiles( $context );
 		if ( $packageFiles !== null ) {
-			foreach ( $packageFiles['files'] as &$file ) {
-				if ( $file['type'] === 'script+style' ) {
-					$file['content'] = $file['content']['script'];
-					$file['type'] = 'script';
-				}
-			}
+			// T402278: use array_map() to avoid &references here
+			$packageFiles['files'] = array_map(
+				static function ( array $file ): array {
+					if ( $file['type'] === 'script+style' ) {
+						$file['content'] = $file['content']['script'];
+						$file['type'] = 'script';
+					}
+					return $file;
+				},
+				$packageFiles['files']
+			);
 			return $packageFiles;
 		}
 
 		$files = $this->getScriptFiles( $context );
-		foreach ( $files as &$file ) {
-			$this->readFileInfo( $context, $file );
-		}
+		// T402278: use array_map() to avoid &references here
+		$files = array_map(
+			fn ( $file ) => $this->readFileInfo( $context, $file ),
+			$files
+		);
 		return [ 'plainScripts' => $files ];
-	}
-
-	/**
-	 * @param Context $context
-	 * @return string[] URLs
-	 */
-	public function getScriptURLsForDebug( Context $context ) {
-		$rl = $context->getResourceLoader();
-		$config = $this->getConfig();
-		$server = $config->get( MainConfigNames::Server );
-
-		$urls = [];
-		foreach ( $this->getScriptFiles( $context ) as $file ) {
-			if ( isset( $file['filePath'] ) ) {
-				$url = OutputPage::transformResourcePath( $config, $this->getRemotePath( $file['filePath'] ) );
-				// Expand debug URL in case we are another wiki's module source (T255367)
-				$url = $rl->expandUrl( $server, $url );
-				$urls[] = $url;
-			}
-		}
-		return $urls;
 	}
 
 	/**
@@ -374,6 +351,7 @@ class FileModule extends Module {
 			&& !$this->hasGeneratedScripts();
 	}
 
+	/** @inheritDoc */
 	public function shouldSkipStructureTest() {
 		return $this->skipStructureTest || parent::shouldSkipStructureTest();
 	}
@@ -464,7 +442,99 @@ class FileModule extends Module {
 	 * @return string[] List of message keys
 	 */
 	public function getMessages() {
-		return $this->messages;
+		return array_merge( $this->messages, $this->lessMessages );
+	}
+
+	/**
+	 * Return a subset of messages from a JSON string representation.
+	 *
+	 * @param string|null $blob JSON, or null if module has no declared messages
+	 * @param string[] $allowed
+	 * @return array
+	 */
+	private function pluckFromMessageBlob( $blob, array $allowed ): array {
+		$data = $blob ? json_decode( $blob, true ) : [];
+		// Keep only the messages intended for script or Less export
+		// (opposite of getMessages essentially).
+		return array_intersect_key( $data, array_fill_keys( $allowed, true ) );
+	}
+
+	/**
+	 * @inheritDoc
+	 */
+	protected function getMessageBlob( Context $context ) {
+		$blob = parent::getMessageBlob( $context );
+		if ( !$blob ) {
+			// If module has no blob, preserve null to avoid needless WAN cache allocation
+			// client output for modules without messages.
+			return $blob;
+		}
+
+		// T409619: Support for lessMessages should not break getMessages subclassing
+		//
+		// Avoid array_diff because it removes all matches instead of just one,
+		// whereas we allow a getMessage() subclass to add the same message in lessMessages.
+		$reducedMessages = $this->getMessages();
+		foreach ( $this->lessMessages as $messageKey ) {
+			$i = array_search( $messageKey, $reducedMessages );
+			if ( $i !== false ) {
+				unset( $reducedMessages[$i] );
+			}
+		}
+		return json_encode( (object)$this->pluckFromMessageBlob( $blob, $reducedMessages ) );
+	}
+
+	// phpcs:disable MediaWiki.Commenting.DocComment.SpacingDocTag, Squiz.WhiteSpace.FunctionSpacing.Before
+	/**
+	 * Escape and wrap a message value as literal string for LESS.
+	 *
+	 * This mostly lets CSSMin escape it and wrap it, but also escape single quotes
+	 * for compatibility with LESS's feature of variable interpolation into other strings.
+	 * This is relatively rare for most use of LESS, but for messages it is quite common.
+	 *
+	 * Example:
+	 *
+	 * @code
+	 *     @x: "foo's";
+	 *     .eg { content: 'Value is @{x}'; }
+	 * @endcode
+	 *
+	 * Produces output: `.eg { content: 'Value is foo's'; }`.
+	 * (Tested in less.php 1.8.1, and Less.js 2.7)
+	 *
+	 * @param string $msg
+	 * @return string wrapped LESS variable value
+	 */
+	private static function wrapAndEscapeMessage( $msg ) {
+		return str_replace( "'", "\'", CSSMin::serializeStringValue( $msg ) );
+	}
+
+	// phpcs:enable
+
+	/**
+	 * Get language-specific LESS variables for this module.
+	 *
+	 * @param Context $context
+	 * @return array LESS variables
+	 */
+	protected function getLessVars( Context $context ) {
+		$vars = parent::getLessVars( $context );
+
+		if ( $this->lessMessages ) {
+			$blob = parent::getMessageBlob( $context );
+			$messages = $this->pluckFromMessageBlob( $blob, $this->lessMessages );
+
+			// It is important that we iterate the declared list from $this->lessMessages,
+			// and not $messages since in the case of undefined messages, the key is
+			// omitted entirely from the blob. This emits a log warning for developers,
+			// but we must still carry on and produce a valid LESS variable declaration,
+			// to avoid a LESS syntax error (T267785).
+			foreach ( $this->lessMessages as $msgKey ) {
+				$vars['msg-' . $msgKey] = self::wrapAndEscapeMessage( $messages[$msgKey] ?? "⧼{$msgKey}⧽" );
+			}
+		}
+
+		return $vars;
 	}
 
 	/**
@@ -511,6 +581,7 @@ class FileModule extends Module {
 		return $this->getFileContents( $localPath, 'skip function' );
 	}
 
+	/** @inheritDoc */
 	public function requiresES6() {
 		return true;
 	}
@@ -548,9 +619,8 @@ class FileModule extends Module {
 		$expandedPackageFiles = $this->expandPackageFiles( $context );
 		if ( $expandedPackageFiles ) {
 			foreach ( $expandedPackageFiles['files'] as $fileInfo ) {
-				if ( isset( $fileInfo['filePath'] ) ) {
-					/** @var FilePath $filePath */
-					$filePath = $fileInfo['filePath'];
+				$filePath = $fileInfo['filePath'] ?? $fileInfo['versionFilePath'] ?? null;
+				if ( $filePath instanceof FilePath ) {
 					$files[] = $filePath->getLocalPath();
 				}
 			}
@@ -574,8 +644,8 @@ class FileModule extends Module {
 		}
 
 		// Add any lazily discovered file dependencies from previous module builds.
-		// These are already absolute paths.
-		foreach ( $this->getFileDependencies( $context ) as $file ) {
+		// These are saved as relative paths.
+		foreach ( Module::expandRelativePaths( $this->getFileDependencies( $context ) ) as $file ) {
 			$files[] = $file;
 		}
 
@@ -619,6 +689,7 @@ class FileModule extends Module {
 
 		$packageFiles = $this->expandPackageFiles( $context );
 		$packageSummaries = [];
+		$packageMain = null;
 		if ( $packageFiles ) {
 			// Extract the minimum needed:
 			// - The 'main' pointer (included as-is).
@@ -628,6 +699,7 @@ class FileModule extends Module {
 			//   'getFileHashes' method tracks their content already.
 			//   It is important that the keys of the $packageFiles['files'] array
 			//   are preserved, as they do affect the module output.
+			$packageMain = $packageFiles['main'];
 			foreach ( $packageFiles['files'] as $fileName => $fileInfo ) {
 				$packageSummaries[$fileName] =
 					$fileInfo['definitionSummary'] ?? $fileInfo['content'] ?? null;
@@ -644,6 +716,7 @@ class FileModule extends Module {
 		$summary[] = [
 			'options' => $options,
 			'packageFiles' => $packageSummaries,
+			'packageMain' => $packageMain,
 			'scripts' => $scriptSummaries,
 			'fileHashes' => $this->getFileHashes( $context ),
 			'messageBlob' => $this->getMessageBlob( $context ),
@@ -655,16 +728,6 @@ class FileModule extends Module {
 		}
 
 		return $summary;
-	}
-
-	/**
-	 * @return VueComponentParser
-	 */
-	protected function getVueComponentParser() {
-		if ( $this->vueComponentParser === null ) {
-			$this->vueComponentParser = new VueComponentParser;
-		}
-		return $this->vueComponentParser;
 	}
 
 	/**
@@ -830,7 +893,7 @@ class FileModule extends Module {
 		if ( $this->languageScripts ) {
 			$fallbacks = MediaWikiServices::getInstance()
 				->getLanguageFallback()
-				->getAll( $lang, LanguageFallback::MESSAGES );
+				->getAll( $lang, LanguageFallbackMode::MESSAGES );
 			foreach ( $fallbacks as $lang ) {
 				$scripts = self::tryForKey( $this->languageScripts, $lang );
 				if ( $scripts ) {
@@ -1120,26 +1183,29 @@ class FileModule extends Module {
 		// If we got a cached value, we have to validate it by getting a checksum of all the
 		// files that were loaded by the parser and ensuring it matches the cached entry's.
 		$data = $cache->get( $key );
+		// T425356: Expand here to avoid implicit reliance on global getcwd() matching MW_INSTALL_PATH.
+		$files = $data ? Module::expandRelativePaths( $data['files'] ) : false;
+
 		if (
 			!$data ||
-			$data['hash'] !== FileContentsHasher::getFileContentsHash( $data['files'] )
+			$data['hash'] !== FileContentsHasher::getFileContentsHash( $files )
 		) {
 			$compiler = $context->getResourceLoader()->getLessCompiler( $vars, $importDirs );
 
 			$css = $compiler->parse( $style, $stylePath )->getCss();
-			// T253055: store the implicit dependency paths in a form relative to any install
-			// path so that multiple version of the application can share the cache for identical
-			// less stylesheets. This also avoids churn during application updates.
 			$files = $compiler->getParsedFiles();
 			$data = [
 				'css'   => $css,
 				'files' => Module::getRelativePaths( $files ),
+				// T253055: store the implicit dependency paths in a form relative to any install
+				// path so that multiple version of the application can share the cache for identical
+				// less stylesheets. This also avoids churn during application updates.
 				'hash'  => FileContentsHasher::getFileContentsHash( $files )
 			];
 			$cache->set( $key, $data, $cache::TTL_DAY );
 		}
 
-		foreach ( Module::expandRelativePaths( $data['files'] ) as $path ) {
+		foreach ( $files as $path ) {
 			$this->localFileRefs[] = $path;
 		}
 
@@ -1410,9 +1476,10 @@ class FileModule extends Module {
 		}
 		$expandedPackageFiles = $this->expandPackageFiles( $context ) ?? [];
 
-		foreach ( $expandedPackageFiles['files'] as &$fileInfo ) {
-			$this->readFileInfo( $context, $fileInfo );
-		}
+		// T402278: use array_map() to avoid &references here
+		$expandedPackageFiles['files'] = array_map( function ( array $fileInfo ) use ( $context ): array {
+			return $this->readFileInfo( $context, $fileInfo );
+		}, $expandedPackageFiles['files'] );
 
 		$this->fullyExpandedPackageFiles[ $hash ] = $expandedPackageFiles;
 		return $expandedPackageFiles;
@@ -1420,13 +1487,14 @@ class FileModule extends Module {
 
 	/**
 	 * Given a file info array as returned by expandFileInfo(), expand the file paths and
-	 * remaining callbacks, ensuring that the 'content' element is populated. Modify
-	 * the array by reference, removing intermediate data such as callback parameters.
+	 * remaining callbacks, ensuring that the 'content' element is populated. Return a
+	 * modified copy of the array, removing intermediate data such as callback parameters.
 	 *
 	 * @param Context $context
-	 * @param array &$fileInfo
+	 * @param array $fileInfo
+	 * @return array
 	 */
-	private function readFileInfo( Context $context, array &$fileInfo ) {
+	private function readFileInfo( Context $context, array $fileInfo ): array {
 		// Turn any 'filePath' or 'callback' key into actual 'content',
 		// and remove the key after that. The callback could return a
 		// FilePath object; if that happens, fall through to the 'filePath'
@@ -1460,34 +1528,13 @@ class FileModule extends Module {
 		}
 		if ( $fileInfo['type'] === 'script-vue' ) {
 			try {
-				$parsedComponent = $this->getVueComponentParser()->parse(
-				// @phan-suppress-next-line PhanTypePossiblyInvalidDimOffset False positive
-					$fileInfo['content'],
-					[ 'minifyTemplate' => !$context->getDebug() ]
-				);
-			} catch ( TimeoutException $e ) {
-				throw $e;
-			} catch ( Exception $e ) {
+				$fileInfo[ 'content' ] = $this->parseVueContent( $context, $fileInfo[ 'content' ] );
+			} catch ( InvalidArgumentException $e ) {
 				$msg = "Error parsing file '{$fileInfo['name']}' in module '{$this->getName()}': " .
-					$e->getMessage();
+					"{$e->getMessage()}";
 				$this->getLogger()->error( $msg );
 				throw new RuntimeException( $msg );
 			}
-			$encodedTemplate = json_encode( $parsedComponent['template'] );
-			if ( $context->getDebug() ) {
-				// Replace \n (backslash-n) with space + backslash-n + backslash-newline in debug mode
-				// The \n has to be preserved to prevent Vue parser issues (T351771)
-				// We only replace \n if not preceded by a backslash, to avoid breaking '\\n'
-				$encodedTemplate = preg_replace( '/(?<!\\\\)\\\\n/', " \\n\\\n", $encodedTemplate );
-				// Expand \t to real tabs in debug mode
-				$encodedTemplate = strtr( $encodedTemplate, [ "\\t" => "\t" ] );
-			}
-			$fileInfo['content'] = [
-				'script' => $parsedComponent['script'] .
-					";\nmodule.exports.template = $encodedTemplate;",
-				'style' => $parsedComponent['style'] ?? '',
-				'styleLang' => $parsedComponent['styleLang'] ?? 'css'
-			];
 			$fileInfo['type'] = 'script+style';
 		}
 		if ( !isset( $fileInfo['content'] ) ) {
@@ -1501,6 +1548,8 @@ class FileModule extends Module {
 		unset( $fileInfo['definitionSummary'] );
 		// Not needed for client response, used by callbacks only.
 		unset( $fileInfo['callbackParam'] );
+
+		return $fileInfo;
 	}
 
 	/**
@@ -1520,3 +1569,10 @@ class FileModule extends Module {
 		return $input;
 	}
 }
+
+/**
+ * NOTE: This is kept as a stable class alias, intentionally not deprecated (T398827).
+ *
+ * @since 1.32
+ */
+class_alias( FileModule::class, 'MediaWiki\ResourceLoader\LessVarFileModule' );

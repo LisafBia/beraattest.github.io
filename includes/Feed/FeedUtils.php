@@ -2,21 +2,7 @@
 /**
  * Helper functions for feeds.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Feed
  */
@@ -30,10 +16,12 @@ use MediaWiki\Html\Html;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Output\OutputPage;
+use MediaWiki\RecentChanges\RecentChange;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Title\Title;
 use UtfNormal;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Helper functions for feeds
@@ -46,19 +34,12 @@ class FeedUtils {
 	 * Check whether feeds can be used and that $type is a valid feed type
 	 *
 	 * @param string $type Feed type, as requested by the user
-	 * @param OutputPage|null $output Null falls back to $wgOut
-	 * @return bool
+	 * @param OutputPage $output
 	 * @since 1.36 $output parameter added
-	 *
 	 */
-	public static function checkFeedOutput( $type, $output = null ) {
+	public static function checkFeedOutput( $type, $output ): bool {
 		$feed = MediaWikiServices::getInstance()->getMainConfig()->get( MainConfigNames::Feed );
 		$feedClasses = MediaWikiServices::getInstance()->getMainConfig()->get( MainConfigNames::FeedClasses );
-		if ( $output === null ) {
-			// Todo update GoogleNewsSitemap and deprecate
-			global $wgOut;
-			$output = $wgOut;
-		}
 
 		if ( !$feed ) {
 			$output->addWikiMsg( 'feed-unavailable' );
@@ -84,9 +65,9 @@ class FeedUtils {
 	 */
 	public static function formatDiff( $row, $formattedComment = null ) {
 		$titleObj = Title::makeTitle( $row->rc_namespace, $row->rc_title );
-		$timestamp = wfTimestamp( TS_MW, $row->rc_timestamp );
+		$timestamp = wfTimestamp( TS::MW, $row->rc_timestamp );
 		$actiontext = '';
-		if ( $row->rc_type == RC_LOG ) {
+		if ( $row->rc_source === RecentChange::SRC_LOG ) {
 			$rcRow = (array)$row; // newFromRow() only accepts arrays for RC rows
 			$actiontext = MediaWikiServices::getInstance()->getLogFormatterFactory()
 				->newFromRow( $rcRow )->getActionText();
@@ -117,7 +98,6 @@ class FeedUtils {
 	 * @param string $actiontext Text of the action; in case of log event
 	 * @return string
 	 * @deprecated since 1.38 use formatDiffRow2
-	 *
 	 */
 	public static function formatDiffRow( $title, $oldid, $newid, $timestamp,
 		$comment, $actiontext = ''
@@ -133,7 +113,7 @@ class FeedUtils {
 	 * except with preformatted comments.
 	 *
 	 * @param Title $title
-	 * @param int $oldid Old revision's id
+	 * @param int|null $oldid Old revision's id
 	 * @param int $newid New revision's id
 	 * @param string $timestamp New revision's timestamp
 	 * @param string $formattedComment New revision's comment in HTML format
@@ -206,7 +186,7 @@ class FeedUtils {
 				$diffText = self::getDiffLink( $title, $newid, $oldid );
 			} elseif ( $diffText === false ) {
 				// Error in diff engine, probably a missing revision
-				$diffText = Html::rawElement(
+				$diffText = Html::element(
 					'p',
 					[],
 					"Can't load revision $newid"
@@ -251,7 +231,7 @@ class FeedUtils {
 				$diffText = Html::rawElement(
 					'p',
 					[],
-					Html::rawElement( 'b', [], wfMessage( 'newpage' )->text() )
+					Html::element( 'b', [], wfMessage( 'newpage' )->text() )
 				);
 				$diffText .= Html::rawElement( 'div', [], $html );
 			}
@@ -318,6 +298,3 @@ class FeedUtils {
 	}
 
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( FeedUtils::class, 'FeedUtils' );

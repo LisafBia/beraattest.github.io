@@ -18,7 +18,7 @@ class EnumDefTest extends TypeDefTestCase {
 		return new EnumDef( $callbacks, $options );
 	}
 
-	public function provideValidate() {
+	public static function provideValidate() {
 		$settings = [
 			ParamValidator::PARAM_TYPE => [ 'a', 'b', 'c', 'd', 'e' ],
 			EnumDef::PARAM_DEPRECATED_VALUES => [
@@ -74,7 +74,7 @@ class EnumDefTest extends TypeDefTestCase {
 		];
 	}
 
-	public function provideCheckSettings() {
+	public static function provideCheckSettings() {
 		return [
 			'Basic test' => [
 				[
@@ -83,7 +83,7 @@ class EnumDefTest extends TypeDefTestCase {
 				self::STDRET,
 				[
 					'issues' => [ 'X' ],
-					'allowedKeys' => [ 'Y', EnumDef::PARAM_DEPRECATED_VALUES ],
+					'allowedKeys' => [ 'Y', EnumDef::PARAM_DEPRECATED_VALUES, EnumDef::PARAM_INTERNAL_VALUES ],
 					'messages' => [],
 				],
 			],
@@ -98,7 +98,7 @@ class EnumDefTest extends TypeDefTestCase {
 						'X',
 						EnumDef::PARAM_DEPRECATED_VALUES => 'PARAM_DEPRECATED_VALUES must be an array, got boolean',
 					],
-					'allowedKeys' => [ 'Y', EnumDef::PARAM_DEPRECATED_VALUES ],
+					'allowedKeys' => [ 'Y', EnumDef::PARAM_DEPRECATED_VALUES, EnumDef::PARAM_INTERNAL_VALUES ],
 					'messages' => [],
 				],
 			],
@@ -111,7 +111,7 @@ class EnumDefTest extends TypeDefTestCase {
 						'd' => true,
 						'e' => MessageValue::new( 'e' ),
 						'f' => 'f',
-						'g' => $this,
+						'g' => new \stdClass,
 						0 => true,
 						1 => true,
 						'x' => null,
@@ -121,22 +121,64 @@ class EnumDefTest extends TypeDefTestCase {
 				[
 					'issues' => [
 						'X',
-						'Values in PARAM_DEPRECATED_VALUES must be null, true, or MessageValue, but value for "c" is false',
-						'Values in PARAM_DEPRECATED_VALUES must be null, true, or MessageValue, but value for "f" is string',
-						'Values in PARAM_DEPRECATED_VALUES must be null, true, or MessageValue, but value for "g" is ' . static::class,
+						'Values in PARAM_DEPRECATED_VALUES has bad type for "c": bool',
+						'Values in PARAM_DEPRECATED_VALUES has bad type for "f": string',
+						'Values in PARAM_DEPRECATED_VALUES has bad type for "g": ' . \stdClass::class,
 						// phpcs:enable
 						'PARAM_DEPRECATED_VALUES contains "x", which is not one of the enumerated values',
 					],
-					'allowedKeys' => [ 'Y', EnumDef::PARAM_DEPRECATED_VALUES ],
+					'allowedKeys' => [ 'Y', EnumDef::PARAM_DEPRECATED_VALUES, EnumDef::PARAM_INTERNAL_VALUES ],
 					'messages' => [
 						MessageValue::new( 'e' ),
 					],
 				],
 			],
+			'Bad type for PARAM_INTERNAL_VALUES' => [
+				[
+					ParamValidator::PARAM_TYPE => [ 'a', 'b', 'c', 'd', 'e' ],
+					EnumDef::PARAM_INTERNAL_VALUES => false,
+				],
+				self::STDRET,
+				[
+					'issues' => [
+						'X',
+						EnumDef::PARAM_INTERNAL_VALUES => 'PARAM_INTERNAL_VALUES must be an array, got boolean',
+					],
+					'allowedKeys' => [ 'Y', EnumDef::PARAM_DEPRECATED_VALUES, EnumDef::PARAM_INTERNAL_VALUES ],
+					'messages' => [],
+				],
+			],
+			'PARAM_INTERNAL_VALUES value errors' => [
+				[
+					ParamValidator::PARAM_TYPE => [ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 0, '1' ],
+					EnumDef::PARAM_INTERNAL_VALUES => [
+						'b' => null,
+						'c' => false,
+						'd' => true,
+						'f' => 'f',
+						'g' => new \stdClass,
+						0 => true,
+						1 => true,
+						'x' => null,
+					],
+				],
+				self::STDRET,
+				[
+					'issues' => [
+						'X',
+						'Values in PARAM_INTERNAL_VALUES has bad type for "b": null',
+						'Values in PARAM_INTERNAL_VALUES has bad type for "f": string',
+						'Values in PARAM_INTERNAL_VALUES has bad type for "g": ' . \stdClass::class,
+						'PARAM_INTERNAL_VALUES contains "x", which is not one of the enumerated values',
+					],
+					'allowedKeys' => [ 'Y', EnumDef::PARAM_DEPRECATED_VALUES, EnumDef::PARAM_INTERNAL_VALUES ],
+					'messages' => [],
+				],
+			],
 		];
 	}
 
-	public function provideGetEnumValues() {
+	public static function provideGetEnumValues() {
 		return [
 			'Basic test' => [
 				[ ParamValidator::PARAM_TYPE => [ 'a', 'b', 'c', 'd' ] ],
@@ -145,7 +187,7 @@ class EnumDefTest extends TypeDefTestCase {
 		];
 	}
 
-	public function provideStringifyValue() {
+	public static function provideStringifyValue() {
 		return [
 			'Basic test' => [ 123, '123' ],
 			'Array' => [ [ 1, 2, 3 ], '1|2|3' ],
@@ -153,7 +195,7 @@ class EnumDefTest extends TypeDefTestCase {
 		];
 	}
 
-	public function provideGetInfo() {
+	public static function provideGetInfo() {
 		return [
 			'Non-multi' => [
 				[
@@ -198,6 +240,33 @@ class EnumDefTest extends TypeDefTestCase {
 				[
 					ParamValidator::PARAM_TYPE => [ 'a', 'b', 'c', 'd' ],
 					EnumDef::PARAM_DEPRECATED_VALUES => [ 'x' => true ],
+				],
+				[
+					'type' => [ 'a', 'b', 'c', 'd' ],
+				],
+				[
+					ParamValidator::PARAM_TYPE => '<message key="paramvalidator-help-type-enum"><text>1</text><list listType="comma"><text>a</text><text>b</text><text>c</text><text>d</text></list><num>4</num></message>',
+					ParamValidator::PARAM_ISMULTI => null,
+				],
+			],
+			'Internal values' => [
+				[
+					ParamValidator::PARAM_TYPE => [ 'a', 'b', 'c', 'd' ],
+					EnumDef::PARAM_INTERNAL_VALUES => [ 'b' => true, 'c' => null, 'x' => true ],
+				],
+				[
+					'type' => [ 'a', 'b', 'c', 'd' ],
+					'internalvalues' => [ 'b', 'c' ],
+				],
+				[
+					ParamValidator::PARAM_TYPE => '<message key="paramvalidator-help-type-enum"><text>1</text><list listType="comma"><text>a</text><text>b</text><text>c</text><text>d</text></list><num>4</num></message>',
+					ParamValidator::PARAM_ISMULTI => null,
+				],
+			],
+			'Internal values are all not allowed values' => [
+				[
+					ParamValidator::PARAM_TYPE => [ 'a', 'b', 'c', 'd' ],
+					EnumDef::PARAM_INTERNAL_VALUES => [ 'x' => true ],
 				],
 				[
 					'type' => [ 'a', 'b', 'c', 'd' ],

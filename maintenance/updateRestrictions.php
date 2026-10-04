@@ -5,26 +5,12 @@
  * schema change. All remaining page_restriction column values are moved
  * to the new table.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
-use MediaWiki\Maintenance\Maintenance;
+namespace MediaWiki\Maintenance;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -36,14 +22,15 @@ require_once __DIR__ . '/Maintenance.php';
  *
  * @ingroup Maintenance
  */
-class UpdateRestrictions extends Maintenance {
+class UpdateRestrictions extends LoggedUpdateMaintenance {
 	public function __construct() {
 		parent::__construct();
 		$this->addDescription( 'Updates page_restrictions table from old page_restriction column' );
 		$this->setBatchSize( 1000 );
 	}
 
-	public function execute() {
+	/** @inheritDoc */
+	public function doDBUpdates() {
 		$dbw = $this->getDB( DB_PRIMARY );
 		$batchSize = $this->getBatchSize();
 
@@ -106,7 +93,7 @@ class UpdateRestrictions extends Maintenance {
 				}
 			}
 
-			$this->beginTransaction( $dbw, __METHOD__ );
+			$this->beginTransactionRound( __METHOD__ );
 
 			// Insert new format protection settings for the pages in the current batch.
 			// Use INSERT IGNORE to ignore conflicts with new format settings that might exist for the page
@@ -117,14 +104,15 @@ class UpdateRestrictions extends Maintenance {
 				->caller( __METHOD__ )->execute();
 
 			// Clear out the legacy page.page_restrictions blob for this batch
-			$dbw->newUpdateQueryBuilder()
+			$update = $dbw->newUpdateQueryBuilder()
 				->update( 'page' )
 				->set( [ 'page_restrictions' => '' ] )
 				->where( [ 'page_id' => $pageIds ] )
-				->caller( __METHOD__ )
-				->execute();
+				->caller( __METHOD__ );
+			$update->execute();
+			$this->getServiceContainer()->getLinkWriteDuplicator()->duplicate( $update );
 
-			$this->commitTransaction( $dbw, __METHOD__ );
+			$this->commitTransactionRound( __METHOD__ );
 
 			$batchMinPageId = $batchMaxPageId;
 		} while ( $batchMaxPageId < $maxPageId );
@@ -163,6 +151,11 @@ class UpdateRestrictions extends Maintenance {
 		}
 
 		return $oldRestrictions;
+	}
+
+	/** @inheritDoc */
+	protected function getUpdateKey() {
+		return __CLASS__;
 	}
 }
 

@@ -2,15 +2,14 @@
 
 namespace MediaWiki\Rest\Handler;
 
-use File;
-use MediaFileTrait;
+use MediaWiki\FileRepo\File\File;
+use MediaWiki\FileRepo\RepoGroup;
 use MediaWiki\Page\ExistingPageRecord;
 use MediaWiki\Page\PageLookup;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\Response;
 use MediaWiki\Rest\SimpleHandler;
-use RepoGroup;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
 
@@ -18,10 +17,7 @@ use Wikimedia\ParamValidator\ParamValidator;
  * Handler class for media meta-data
  */
 class MediaFileHandler extends SimpleHandler {
-	use MediaFileTrait;
-
-	private RepoGroup $repoGroup;
-	private PageLookup $pageLookup;
+	use \MediaWiki\FileRepo\File\MediaFileTrait;
 
 	/**
 	 * @var ExistingPageRecord|false|null
@@ -34,16 +30,11 @@ class MediaFileHandler extends SimpleHandler {
 	private $file = false;
 
 	public function __construct(
-		RepoGroup $repoGroup,
-		PageLookup $pageLookup
+		private readonly RepoGroup $repoGroup,
+		private readonly PageLookup $pageLookup,
 	) {
-		$this->repoGroup = $repoGroup;
-		$this->pageLookup = $pageLookup;
 	}
 
-	/**
-	 * @return ExistingPageRecord|null
-	 */
 	private function getPage(): ?ExistingPageRecord {
 		if ( $this->page === false ) {
 			$this->page = $this->pageLookup->getExistingPageByText(
@@ -53,9 +44,6 @@ class MediaFileHandler extends SimpleHandler {
 		return $this->page;
 	}
 
-	/**
-	 * @return File|null
-	 */
 	private function getFile(): ?File {
 		if ( $this->file === false ) {
 			$page = $this->getPage();
@@ -111,24 +99,30 @@ class MediaFileHandler extends SimpleHandler {
 		[ $maxThumbWidth, $maxThumbHeight ] = self::getImageLimitsFromOption(
 			$this->getAuthority()->getUser(), 'thumbsize'
 		);
+
+		// Normalize thumbnail sizes
+		[ $maxNormalizedWidth, $maxNormalizedHeight ] = self::getNormalizedThumbLimits( $maxThumbWidth );
+
 		$transforms = [
 			'preferred' => [
 				'maxWidth' => $maxWidth,
 				'maxHeight' => $maxHeight
 			],
 			'thumbnail' => [
-				'maxWidth' => $maxThumbWidth,
-				'maxHeight' => $maxThumbHeight
+				'maxWidth' => $maxNormalizedWidth,
+				'maxHeight' => $maxNormalizedHeight
 			]
 		];
 
 		return $this->getFileInfo( $file, $this->getAuthority(), $transforms );
 	}
 
+	/** @inheritDoc */
 	public function needsWriteAccess() {
 		return false;
 	}
 
+	/** @inheritDoc */
 	public function getParamSettings() {
 		return [
 			'title' => [
@@ -136,6 +130,7 @@ class MediaFileHandler extends SimpleHandler {
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-media-file-title' ),
+				Handler::PARAM_EXAMPLE => 'File:Fennec_Fox.jpg',
 			],
 		];
 	}
@@ -175,6 +170,6 @@ class MediaFileHandler extends SimpleHandler {
 	}
 
 	public function getResponseBodySchemaFileName( string $method ): ?string {
-		return 'includes/Rest/Handler/Schema/MediaFile.json';
+		return __DIR__ . '/Schema/MediaFile.json';
 	}
 }

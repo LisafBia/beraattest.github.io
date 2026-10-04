@@ -3,28 +3,14 @@
  * Remove unused user accounts from the database
  * An unused account is one which has made no edits
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  * @author Rob Church <robchur@gmail.com>
  */
 
 use MediaWiki\Maintenance\Maintenance;
-use MediaWiki\User\UserIdentity;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -75,8 +61,8 @@ class RemoveUnusedAccounts extends Maintenance {
 			$instance = $userFactory->newFromId( $row->user_id );
 			if ( count(
 				array_intersect( $userGroupManager->getUserEffectiveGroups( $instance ), $excludedGroups ) ) == 0
-				&& $this->isInactiveAccount( $instance, $row->actor_id ?? null, true )
-				&& wfTimestamp( TS_UNIX, $row->user_touched ) < wfTimestamp( TS_UNIX, time() - $touchedSeconds
+				&& $this->isInactiveAccount( $row->actor_id ?? null, true )
+				&& wfTimestamp( TS::UNIX, $row->user_touched ) < wfTimestamp( TS::UNIX, time() - $touchedSeconds
 				)
 			) {
 				# Inactive; print out the name and flag it
@@ -110,14 +96,6 @@ class RemoveUnusedAccounts extends Maintenance {
 					->deleteFrom( 'actor' )
 					->where( [ 'actor_id' => $del ] )
 					->caller( __METHOD__ )->execute();
-			}
-			if ( $keep ) {
-				$dbw->newUpdateQueryBuilder()
-					->update( 'actor' )
-					->set( [ 'actor_user' => null ] )
-					->where( [ 'actor_id' => $keep ] )
-					->caller( __METHOD__ )
-					->execute();
 			}
 			$dbw->newDeleteQueryBuilder()
 				->deleteFrom( 'user_groups' )
@@ -161,12 +139,11 @@ class RemoveUnusedAccounts extends Maintenance {
 	 * Could the specified user account be deemed inactive?
 	 * (No edits, no deleted edits, no log entries, no current/old uploads)
 	 *
-	 * @param UserIdentity $user
 	 * @param int|null $actor User's actor ID
 	 * @param bool $primary Perform checking on the primary DB
 	 * @return bool
 	 */
-	private function isInactiveAccount( $user, $actor, $primary = false ) {
+	private function isInactiveAccount( $actor, $primary = false ) {
 		if ( $actor === null ) {
 			// There's no longer a way for a user to be active in any of
 			// these tables without having an actor ID. The only way to link
@@ -184,7 +161,7 @@ class RemoveUnusedAccounts extends Maintenance {
 		];
 		$count = 0;
 
-		$this->beginTransaction( $dbo, __METHOD__ );
+		$this->beginTransactionRound( __METHOD__ );
 		foreach ( $checks as $table => $prefix ) {
 			$count += (int)$dbo->newSelectQueryBuilder()
 				->select( 'COUNT(*)' )
@@ -200,7 +177,7 @@ class RemoveUnusedAccounts extends Maintenance {
 			->where( [ 'log_actor' => $actor, $dbo->expr( 'log_type', '!=', 'newusers' ) ] )
 			->caller( __METHOD__ )->fetchField();
 
-		$this->commitTransaction( $dbo, __METHOD__ );
+		$this->commitTransactionRound( __METHOD__ );
 
 		return $count == 0;
 	}

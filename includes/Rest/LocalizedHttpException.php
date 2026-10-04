@@ -3,38 +3,48 @@
 namespace MediaWiki\Rest;
 
 use Wikimedia\Message\DataMessageValue;
+use Wikimedia\Message\MessageSpecifier;
 use Wikimedia\Message\MessageValue;
 
 /**
  * @newable
  */
 class LocalizedHttpException extends HttpException {
-	private MessageValue $messageValue;
-	private string $errorKey;
+	private readonly string $errorKey;
 
 	/**
 	 * @stable to call
-	 *
-	 * @param MessageValue $messageValue
+	 * @param MessageSpecifier $messageSpecifier Prior to MediaWiki 1.47 this had to be a MessageValue
 	 * @param int $code
 	 * @param array $errorData
 	 */
-	public function __construct( MessageValue $messageValue, $code = 500, $errorData = [] ) {
-		if ( $messageValue instanceof DataMessageValue ) {
-			$errorKey = $messageValue->getCode();
-			$errorData += $messageValue->getData() ?? [];
+	public function __construct(
+		private readonly MessageSpecifier $messageSpecifier,
+		int $code = 500,
+		array $errorData = [],
+	) {
+		if ( $messageSpecifier instanceof DataMessageValue ) {
+			$errorKey = $messageSpecifier->getCode();
+			$errorData += $messageSpecifier->getData() ?? [];
 		} else {
-			$errorKey = $messageValue->getKey();
+			$errorKey = $messageSpecifier->getKey();
 		}
 		parent::__construct(
-			'Localized exception with key ' . $messageValue->getKey(), $code, $errorData
+			'Localized exception with key ' . $messageSpecifier->getKey(), $code, $errorData
 		);
-		$this->messageValue = $messageValue;
 		$this->errorKey = $errorKey;
 	}
 
 	public function getMessageValue(): MessageValue {
-		return $this->messageValue;
+		return MessageValue::newFromSpecifier( $this->messageSpecifier );
+	}
+
+	/**
+	 * @since 1.47
+	 * @return MessageSpecifier
+	 */
+	public function getMessageSpecifier(): MessageSpecifier {
+		return $this->messageSpecifier;
 	}
 
 	public function getErrorKey(): string {

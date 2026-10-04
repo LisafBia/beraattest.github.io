@@ -18,7 +18,7 @@
 			"color": "#d73333"
 		},
 		"warning": {
-			"color": "#edab00"
+			"color": "#ab7f2a"
 		},
 		"success": {
 			"color": "#14866d"
@@ -33,6 +33,10 @@
 		},
 		"block": {
 			"file": "images/icons/block.svg",
+			"variants": [ "destructive" ]
+		},
+		"blockOutline": {
+			"file": "images/icons/blockOutline.svg",
 			"variants": [ "destructive" ]
 		},
 		"unBlock": {
@@ -85,6 +89,9 @@
 				"ltr": "images/icons/ongoingConversation-ltr.svg",
 				"rtl": "images/icons/ongoingConversation-rtl.svg"
 			}
+		},
+		"suggestedInvestigations": {
+			"file": "images/icons/suggestedInvestigations.svg"
 		}
 	}
 }

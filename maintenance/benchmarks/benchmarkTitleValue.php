@@ -2,22 +2,10 @@
 /**
  * Copyright (C) 2018 Kunal Mehta <legoktm@debian.org>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
+ * @license GPL-2.0-or-later
  */
 
+use MediaWiki\Maintenance\Benchmarker;
 use MediaWiki\Title\Title;
 use MediaWiki\Title\TitleFormatter;
 use MediaWiki\Title\TitleParser;
@@ -114,29 +102,29 @@ class BenchmarkTitleValue extends Benchmarker {
 		$this->dbKey = ucfirst( wfRandomString( 10 ) );
 	}
 
-	protected function constructTitleValue() {
+	protected function constructTitleValue(): TitleValue {
 		return new TitleValue( NS_CATEGORY, $this->dbKey );
 	}
 
-	protected function constructTitle() {
+	protected function constructTitle(): Title {
 		return Title::makeTitle( NS_CATEGORY, $this->dbKey );
 	}
 
-	protected function constructTitleSafe() {
+	protected function constructTitleSafe(): Title {
 		return Title::makeTitleSafe( NS_CATEGORY, $this->dbKey );
 	}
 
-	protected function getPrefixedTextTitleValue() {
-		// This is really showing TitleFormatter aka MediaWikiTitleCodec perf
+	protected function getPrefixedTextTitleValue(): string {
+		// This is really showing TitleFormatter perf
 		return $this->titleFormatter->getPrefixedText( $this->titleValue );
 	}
 
-	protected function getPrefixedTextTitle() {
+	protected function getPrefixedTextTitle(): string {
 		return $this->title->getPrefixedText();
 	}
 
 	protected function parseTitleValue() {
-		// This is really showing TitleParser aka MediaWikiTitleCodec perf
+		// This is really showing TitleParser perf
 		$this->titleParser->parseTitle( 'Category:' . $this->dbKey, NS_MAIN );
 	}
 

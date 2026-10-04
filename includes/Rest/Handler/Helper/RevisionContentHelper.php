@@ -10,6 +10,7 @@ use MediaWiki\Rest\ResponseInterface;
 use MediaWiki\Revision\RevisionRecord;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * @internal for use by core REST infrastructure
@@ -32,9 +33,6 @@ class RevisionContentHelper extends PageContentHelper {
 			: null;
 	}
 
-	/**
-	 * @return ExistingPageRecord|null
-	 */
 	public function getPage(): ?ExistingPageRecord {
 		$revision = $this->getTargetRevision();
 		return $revision ? $this->pageLookup->getPageByReference( $revision->getPage() ) : null;
@@ -55,9 +53,6 @@ class RevisionContentHelper extends PageContentHelper {
 		return $this->targetRevision;
 	}
 
-	/**
-	 * @return bool
-	 */
 	public function isAccessible(): bool {
 		if ( !parent::isAccessible() ) {
 			return false;
@@ -76,11 +71,16 @@ class RevisionContentHelper extends PageContentHelper {
 		return true;
 	}
 
-	/**
-	 * @return bool
-	 */
 	public function hasContent(): bool {
 		return (bool)$this->getTargetRevision();
+	}
+
+	/**
+	 * Always false: a page can be shadowed, a revision cannot. A shadow page has
+	 * no stored content, so there is no revision of it to address.
+	 */
+	public function useShadowContent(): bool {
+		return false;
 	}
 
 	public function setCacheControl( ResponseInterface $response, ?int $expiry = null ) {
@@ -94,9 +94,6 @@ class RevisionContentHelper extends PageContentHelper {
 		parent::setCacheControl( $response, $expiry );
 	}
 
-	/**
-	 * @return array
-	 */
 	public function constructMetadata(): array {
 		$page = $this->getPage();
 		$revision = $this->getTargetRevision();
@@ -105,7 +102,7 @@ class RevisionContentHelper extends PageContentHelper {
 			'id' => $revision->getId(),
 			'size' => $revision->getSize(),
 			'minor' => $revision->isMinor(),
-			'timestamp' => wfTimestampOrNull( TS_ISO_8601, $revision->getTimestamp() ),
+			'timestamp' => wfTimestampOrNull( TS::ISO_8601, $revision->getTimestamp() ),
 			'content_model' => $revision->getMainContentModel(),
 			'page' => [
 				'id' => $page->getId(),
@@ -154,15 +151,21 @@ class RevisionContentHelper extends PageContentHelper {
 				Handler::PARAM_SOURCE => 'path',
 				ParamValidator::PARAM_TYPE => 'integer',
 				ParamValidator::PARAM_REQUIRED => true,
-				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-revision-id' )
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-revision-id' ),
+				Handler::PARAM_EXAMPLE => 764138197,
 			],
 		];
 	}
 
 	/**
+	 * Combined 404/403 check for a revision, reporting revision specific messages.
+	 * The page side has no equivalent: its handlers call checkHasContent() and
+	 * checkAccessPermission() separately, since a redirect may have to be
+	 * generated between the two.
+	 *
 	 * @throws LocalizedHttpException if the content is not accessible
 	 */
-	public function checkAccess() {
+	public function checkAccessible() {
 		$revId = $this->getRevisionId() ?? '';
 
 		if ( !$this->hasContent() ) {

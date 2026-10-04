@@ -2,7 +2,7 @@
 
 namespace MediaWiki\Rest\Handler;
 
-use ChangeTags;
+use MediaWiki\ChangeTags\ChangeTags;
 use MediaWiki\Page\ExistingPageRecord;
 use MediaWiki\Page\PageLookup;
 use MediaWiki\Permissions\GroupPermissionsLookup;
@@ -11,6 +11,7 @@ use MediaWiki\Rest\Handler\Helper\PageRedirectHelper;
 use MediaWiki\Rest\Handler\Helper\PageRestHelperFactory;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\Response;
+use MediaWiki\Rest\ResponseHeaders;
 use MediaWiki\Rest\SimpleHandler;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\RevisionStore;
@@ -19,13 +20,12 @@ use MediaWiki\Storage\NameTableStore;
 use MediaWiki\Storage\NameTableStoreFactory;
 use MediaWiki\User\TempUser\TempUserConfig;
 use Wikimedia\Message\MessageValue;
-use Wikimedia\Message\ParamType;
-use Wikimedia\Message\ScalarParam;
 use Wikimedia\ObjectCache\WANObjectCache;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\Rdbms\IConnectionProvider;
 use Wikimedia\Rdbms\IExpression;
 use Wikimedia\Rdbms\RawSQLExpression;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Handler class for Core REST API endpoints that perform operations on revisions
@@ -51,14 +51,7 @@ class PageHistoryCountHandler extends SimpleHandler {
 
 	private const MAX_AGE_200 = 60;
 
-	private RevisionStore $revisionStore;
-	private NameTableStore $changeTagDefStore;
-	private GroupPermissionsLookup $groupPermissionsLookup;
-	private IConnectionProvider $dbProvider;
-	private PageLookup $pageLookup;
-	private WANObjectCache $cache;
-	private PageRestHelperFactory $helperFactory;
-	private TempUserConfig $tempUserConfig;
+	private readonly NameTableStore $changeTagDefStore;
 
 	/** @var RevisionRecord|false|null */
 	private $revision = false;
@@ -69,46 +62,29 @@ class PageHistoryCountHandler extends SimpleHandler {
 	/** @var ExistingPageRecord|false|null */
 	private $page = false;
 
-	/**
-	 * @param RevisionStore $revisionStore
-	 * @param NameTableStoreFactory $nameTableStoreFactory
-	 * @param GroupPermissionsLookup $groupPermissionsLookup
-	 * @param IConnectionProvider $dbProvider
-	 * @param WANObjectCache $cache
-	 * @param PageLookup $pageLookup
-	 * @param PageRestHelperFactory $helperFactory
-	 * @param TempUserConfig $tempUserConfig
-	 */
 	public function __construct(
-		RevisionStore $revisionStore,
+		private readonly RevisionStore $revisionStore,
 		NameTableStoreFactory $nameTableStoreFactory,
-		GroupPermissionsLookup $groupPermissionsLookup,
-		IConnectionProvider $dbProvider,
-		WANObjectCache $cache,
-		PageLookup $pageLookup,
-		PageRestHelperFactory $helperFactory,
-		TempUserConfig $tempUserConfig
+		private readonly GroupPermissionsLookup $groupPermissionsLookup,
+		private readonly IConnectionProvider $dbProvider,
+		private readonly WANObjectCache $cache,
+		private readonly PageLookup $pageLookup,
+		private readonly PageRestHelperFactory $helperFactory,
+		private readonly TempUserConfig $tempUserConfig,
 	) {
-		$this->revisionStore = $revisionStore;
 		$this->changeTagDefStore = $nameTableStoreFactory->getChangeTagDef();
-		$this->groupPermissionsLookup = $groupPermissionsLookup;
-		$this->dbProvider = $dbProvider;
-		$this->cache = $cache;
-		$this->pageLookup = $pageLookup;
-		$this->helperFactory = $helperFactory;
-		$this->tempUserConfig = $tempUserConfig;
 	}
 
 	private function getRedirectHelper(): PageRedirectHelper {
 		return $this->helperFactory->newPageRedirectHelper(
 			$this->getResponseFactory(),
 			$this->getRouter(),
-			$this->getPath(),
+			$this->getRoutePath(),
 			$this->getRequest()
 		);
 	}
 
-	private function normalizeType( $type ) {
+	private function normalizeType( string $type ): string {
 		return self::DEPRECATED_COUNT_TYPES[$type] ?? $type;
 	}
 
@@ -155,18 +131,14 @@ class PageHistoryCountHandler extends SimpleHandler {
 
 		if ( !$page ) {
 			throw new LocalizedHttpException(
-				new MessageValue( 'rest-nonexistent-title',
-					[ new ScalarParam( ParamType::PLAINTEXT, $title ) ]
-				),
+				( new MessageValue( 'rest-nonexistent-title' ) )->plaintextParams( $title ),
 				404
 			);
 		}
 
 		if ( !$this->getAuthority()->authorizeRead( 'read', $page ) ) {
 			throw new LocalizedHttpException(
-				new MessageValue( 'rest-permission-denied-title',
-					[ new ScalarParam( ParamType::PLAINTEXT, $title ) ]
-				),
+				( new MessageValue( 'rest-permission-denied-title' ) )->plaintextParams( $title ),
 				403
 			);
 		}
@@ -187,14 +159,14 @@ class PageHistoryCountHandler extends SimpleHandler {
 				'count' => $count > $countLimit ? $countLimit : $count,
 				'limit' => $count > $countLimit
 		] );
-		$response->setHeader( 'Cache-Control', 'max-age=' . self::MAX_AGE_200 );
+		$response->setHeader( ResponseHeaders::CACHE_CONTROL, 'max-age=' . self::MAX_AGE_200 );
 
 		// Inform clients who use a deprecated "type" value, so they can adjust
 		if ( isset( self::DEPRECATED_COUNT_TYPES[$type] ) ) {
 			$docs = '<https://www.mediawiki.org/wiki/API:REST/History_API' .
 				'#Get_page_history_counts>; rel="deprecation"';
-			$response->setHeader( 'Deprecation', 'version="v1"' );
-			$response->setHeader( 'Link', $docs );
+			$response->setHeader( ResponseHeaders::DEPRECATION, 'version="v1"' );
+			$response->setHeader( ResponseHeaders::LINK, $docs );
 		}
 
 		return $response;
@@ -291,22 +263,21 @@ class PageHistoryCountHandler extends SimpleHandler {
 
 			default:
 				throw new LocalizedHttpException(
-					new MessageValue( 'rest-pagehistorycount-type-unrecognized',
-						[ new ScalarParam( ParamType::PLAINTEXT, $type ) ]
-					),
+					( new MessageValue( 'rest-pagehistorycount-type-unrecognized' ) )
+						->plaintextParams( $type ),
 					500
 				);
 		}
 	}
 
 	/**
-	 * @return RevisionRecord|null current revision or false if unable to retrieve revision
+	 * @return RevisionRecord|null Latest revision or false if unable to retrieve revision
 	 */
-	private function getCurrentRevision(): ?RevisionRecord {
+	private function getLatestRevision(): ?RevisionRecord {
 		if ( $this->revision === false ) {
 			$page = $this->getPage();
 			if ( $page ) {
-				$this->revision = $this->revisionStore->getKnownCurrentRevision( $page ) ?: null;
+				$this->revision = $this->revisionStore->getKnownLatestRevision( $page ) ?: null;
 			} else {
 				$this->revision = null;
 			}
@@ -314,9 +285,6 @@ class PageHistoryCountHandler extends SimpleHandler {
 		return $this->revision;
 	}
 
-	/**
-	 * @return ExistingPageRecord|null
-	 */
 	private function getPage(): ?ExistingPageRecord {
 		if ( $this->page === false ) {
 			$this->page = $this->pageLookup->getExistingPageByText(
@@ -328,7 +296,7 @@ class PageHistoryCountHandler extends SimpleHandler {
 
 	/**
 	 * Returns latest of 2 timestamps:
-	 * 1. Current revision
+	 * 1. Latest revision
 	 * 2. OR entry from the DB logging table for the given page
 	 * @return int|null
 	 */
@@ -342,17 +310,17 @@ class PageHistoryCountHandler extends SimpleHandler {
 
 	/**
 	 * Returns array with 2 timestamps:
-	 * 1. Current revision
+	 * 1. Latest revision
 	 * 2. OR entry from the DB logging table for the given page
 	 * @return array|null
 	 */
 	protected function getLastModifiedTimes() {
-		$currentRev = $this->getCurrentRevision();
+		$currentRev = $this->getLatestRevision();
 		if ( !$currentRev ) {
 			return null;
 		}
 		if ( $this->lastModifiedTimes === null ) {
-			$currentRevTime = (int)wfTimestampOrNull( TS_UNIX, $currentRev->getTimestamp() );
+			$currentRevTime = (int)wfTimestampOrNull( TS::UNIX, $currentRev->getTimestamp() );
 			$loggingTableTime = $this->loggingTableTime( $currentRev->getPageId() );
 			$this->lastModifiedTimes = [
 				'currentRevTS' => $currentRevTime,
@@ -373,7 +341,7 @@ class PageHistoryCountHandler extends SimpleHandler {
 			->from( 'logging' )
 			->where( [ 'log_page' => $pageId ] )
 			->caller( __METHOD__ )->fetchField();
-		return $res ? (int)wfTimestamp( TS_UNIX, $res ) : null;
+		return $res ? (int)wfTimestamp( TS::UNIX, $res ) : null;
 	}
 
 	/**
@@ -403,7 +371,7 @@ class PageHistoryCountHandler extends SimpleHandler {
 			$this->cache->makeKey( 'rest', 'pagehistorycount', $pageId, $type ),
 			WANObjectCache::TTL_WEEK,
 			function ( $oldValue ) use ( $fetchCount ) {
-				$currentRev = $this->getCurrentRevision();
+				$currentRev = $this->getLatestRevision();
 				if ( $oldValue ) {
 					// Last modified timestamp was NOT a dependency change (e.g. revdel)
 					$doIncrementalUpdate = (
@@ -433,9 +401,7 @@ class PageHistoryCountHandler extends SimpleHandler {
 				];
 			},
 			[
-				'touchedCallback' => function (){
-					return $this->getLastModified();
-				},
+				'touchedCallback' => $this->getLastModified( ... ),
 				'version' => 2,
 				'lockTSE' => WANObjectCache::TTL_MINUTE * 5
 			]
@@ -578,7 +544,7 @@ class PageHistoryCountHandler extends SimpleHandler {
 		foreach ( ChangeTags::REVERT_TAGS as $tagName ) {
 			try {
 				$tagIds[] = $this->changeTagDefStore->getId( $tagName );
-			} catch ( NameTableAccessException $e ) {
+			} catch ( NameTableAccessException ) {
 				// If no revisions are tagged with a name, no tag id will be present
 			}
 		}
@@ -692,14 +658,16 @@ class PageHistoryCountHandler extends SimpleHandler {
 		return [ $fromRev, $toRev ];
 	}
 
+	/** @inheritDoc */
 	public function needsWriteAccess() {
 		return false;
 	}
 
 	protected function getResponseBodySchemaFileName( string $method ): ?string {
-		return 'includes/Rest/Handler/Schema/PageHistoryCount.json';
+		return __DIR__ . '/Schema/PageHistoryCount.json';
 	}
 
+	/** @inheritDoc */
 	public function getParamSettings() {
 		return [
 			'title' => [
@@ -707,6 +675,7 @@ class PageHistoryCountHandler extends SimpleHandler {
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-pagehistory-count-title' ),
+				Handler::PARAM_EXAMPLE => 'Jupiter',
 			],
 			'type' => [
 				self::PARAM_SOURCE => 'path',
@@ -716,19 +685,34 @@ class PageHistoryCountHandler extends SimpleHandler {
 				),
 				ParamValidator::PARAM_REQUIRED => true,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-pagehistory-count-type' ),
+				Handler::PARAM_EXAMPLE => 'edits',
 			],
 			'from' => [
 				self::PARAM_SOURCE => 'query',
 				ParamValidator::PARAM_TYPE => 'integer',
 				ParamValidator::PARAM_REQUIRED => false,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-pagehistory-count-from' ),
+				Handler::PARAM_EXAMPLE => 384955912,
 			],
 			'to' => [
 				self::PARAM_SOURCE => 'query',
 				ParamValidator::PARAM_TYPE => 'integer',
 				ParamValidator::PARAM_REQUIRED => false,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-pagehistory-count-to' ),
+				Handler::PARAM_EXAMPLE => 406217369,
 			]
 		];
+	}
+
+	/** @inheritDoc */
+	public function getResponseHeaderSettings(): array {
+		return array_merge(
+			parent::getResponseHeaderSettings(),
+			[
+				ResponseHeaders::LINK => ResponseHeaders::RESPONSE_HEADER_DEFINITIONS[
+					ResponseHeaders::LINK
+				]
+			]
+		);
 	}
 }

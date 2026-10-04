@@ -4,16 +4,16 @@ namespace MediaWiki\Tests\Maintenance;
 
 use DumpBackup;
 use Exception;
-use ManualLogEntry;
+use MediaWiki\Export\WikiExporter;
+use MediaWiki\Logging\ManualLogEntry;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Title\Title;
 use MediaWiki\User\User;
-use WikiExporter;
 
 /**
  * Tests for log dumps of BackupDumper
  *
- * Some of these tests use the old constuctor for TextPassDumper
+ * Some of these tests use the old constructor for TextPassDumper
  * and the dump() function, while others use the new loadWithArgv( $args )
  * function and execute(). This is to ensure both the old and new methods
  * work properly.
@@ -84,7 +84,7 @@ class BackupDumperLoggerTest extends DumpTestCase {
 				$user1, NS_MAIN, "PageA" );
 			$this->assertGreaterThan( 0, $this->logId1 );
 
-			$this->logId2 = $this->addLogEntry( 'supress', 'delete',
+			$this->logId2 = $this->addLogEntry( 'suppression', 'delete',
 				$user2, NS_TALK, "PageB", "SomeComment" );
 			$this->assertGreaterThan( 0, $this->logId2 );
 
@@ -128,7 +128,7 @@ class BackupDumperLoggerTest extends DumpTestCase {
 		$this->assertIsString( $namespace );
 		$this->assertGreaterThan( 0, strlen( $namespace ) );
 		$asserter->assertLogItem( $this->logId2, "BackupDumperLogUserB",
-			$this->userId2, "SomeComment", "supress", "delete",
+			$this->userId2, "SomeComment", "suppression", "delete",
 			$namespace . ":PageB" );
 
 		$asserter->assertLogItem( $this->logId3, "BackupDumperLogUserB",
@@ -157,9 +157,7 @@ class BackupDumperLoggerTest extends DumpTestCase {
 		// to be able to alert (once dumping produces reports) that this test
 		// needs updates.
 		$dumper->stderr = fopen( 'php://output', 'a' );
-		if ( $dumper->stderr === false ) {
-			$this->fail( "Could not open stream for stderr" );
-		}
+		$this->assertNotFalse( $dumper->stderr, "Could not open stream for stderr" );
 
 		// Performing the dump
 		$dumper->execute();
@@ -183,7 +181,7 @@ class BackupDumperLoggerTest extends DumpTestCase {
 		$this->assertIsString( $namespace );
 		$this->assertGreaterThan( 0, strlen( $namespace ) );
 		$asserter->assertLogItem( $this->logId2, "BackupDumperLogUserB",
-			$this->userId2, "SomeComment", "supress", "delete",
+			$this->userId2, "SomeComment", "suppression", "delete",
 			$namespace . ":PageB" );
 
 		$asserter->assertLogItem( $this->logId3, "BackupDumperLogUserB",

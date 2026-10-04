@@ -2,26 +2,13 @@
 /**
  * Resets the page_random field for articles in the provided time range.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
 use MediaWiki\Maintenance\Maintenance;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -49,12 +36,13 @@ class ResetPageRandom extends Maintenance {
 		$this->setBatchSize( 200 );
 	}
 
+	/** @inheritDoc */
 	public function execute() {
 		$batchSize = $this->getBatchSize();
 		$dbw = $this->getPrimaryDB();
 		$dbr = $this->getReplicaDB();
-		$from = wfTimestampOrNull( TS_MW, $this->getOption( 'from' ) );
-		$to = wfTimestampOrNull( TS_MW, $this->getOption( 'to' ) );
+		$from = wfTimestampOrNull( TS::MW, $this->getOption( 'from' ) );
+		$to = wfTimestampOrNull( TS::MW, $this->getOption( 'to' ) );
 
 		if ( $from === null || $to === null ) {
 			$this->output( "--from and --to have to be provided" . PHP_EOL );
@@ -102,13 +90,14 @@ class ResetPageRandom extends Maintenance {
 			$row = null;
 			foreach ( $res as $row ) {
 				if ( !$dry ) {
-					# Update the row...
-					$dbw->newUpdateQueryBuilder()
+					// Update the row...
+					$update = $dbw->newUpdateQueryBuilder()
 						->update( 'page' )
 						->set( [ 'page_random' => wfRandom() ] )
 						->where( [ 'page_id' => $row->page_id ] )
-						->caller( __METHOD__ )
-						->execute();
+						->caller( __METHOD__ );
+					$update->execute();
+					$this->getServiceContainer()->getLinkWriteDuplicator()->duplicate( $update );
 					$changed += $dbw->affectedRows();
 				} else {
 					$changed++;

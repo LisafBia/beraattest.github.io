@@ -1,25 +1,12 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\Tests\Unit\Permissions;
 
+use MediaWiki\Block\AbstractBlock;
 use MediaWiki\Block\Block;
 use MediaWiki\Permissions\PermissionStatus;
 use MediaWikiUnitTestCase;
@@ -48,7 +35,7 @@ class PermissionStatusTest extends MediaWikiUnitTestCase {
 
 		$this->assertSame( $block, $status->getBlock() );
 		$this->assertTrue( $status->isBlocked() );
-		$this->assertFalse( $status->isOK() );
+		$this->assertStatusNotOK( $status );
 	}
 
 	public function testRateLimitExceeded() {
@@ -58,6 +45,29 @@ class PermissionStatusTest extends MediaWikiUnitTestCase {
 
 		$status->setRateLimitExceeded();
 		$this->assertTrue( $status->isRateLimitExceeded() );
+	}
+
+	public function testMerge() {
+		$status1 = PermissionStatus::newEmpty();
+		$status1->setPermission( 'perm1' );
+
+		$status2 = PermissionStatus::newEmpty();
+		$block2 = $this->createMock( AbstractBlock::class );
+		$block2->method( 'getIdentifier' )->willReturn( 2 );
+		$status2->setBlock( $block2 );
+		$status2->setPermission( 'perm2' );
+		$status2->setRateLimitExceeded();
+		$status2->fatal( 'foo' );
+
+		$status1->merge( $status2 );
+		$this->assertStatusNotOK( $status1 );
+		$this->assertStatusError( 'foo', $status1 );
+		$this->assertSame( 'perm1', $status1->getPermission() );
+		$this->assertTrue( $status1->isRateLimitExceeded() );
+		// TODO: Test merging two statuses that both have a block
+		// This is currently not possible in a unit test, because CompositeBlock::createFromBlocks()
+		// causes the CommentStore service to be used
+		$this->assertSame( 2, $status1->getBlock()->getIdentifier() );
 	}
 
 }

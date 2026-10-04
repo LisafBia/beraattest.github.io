@@ -4,21 +4,7 @@
  * Copyright © 2004 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -27,6 +13,8 @@ namespace MediaWiki\Feed;
 use MediaWiki\Html\TemplateParser;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Output\OutputPage;
+use MediaWiki\Request\WebRequest;
 
 /**
  * Class to support the outputting of syndication feeds in Atom and RSS format.
@@ -48,7 +36,6 @@ abstract class ChannelFeed extends FeedItem {
 	 * @param string $date Feed's date
 	 * @param string $author Author's user name
 	 * @param string $comments
-	 *
 	 */
 	public function __construct(
 		$title, $description, $url, $date = '', $author = '', $comments = ''
@@ -59,48 +46,53 @@ abstract class ChannelFeed extends FeedItem {
 
 	/**
 	 * Generate Header of the feed
-	 * @par Example:
-	 * @code
-	 * print "<feed>";
-	 * @endcode
+	 *
+	 * Example: <code>print "<feed>";</code>
+	 * @param OutputPage $output
+	 * @stable to override
+	 * @since 1.46
 	 */
-	abstract public function outHeader();
+	abstract public function outputHeader( $output ): void;
 
 	/**
 	 * Generate an item
-	 * @par Example:
-	 * @code
-	 * print "<item>...</item>";
-	 * @endcode
+	 *
+	 * Example: <code>print "<item>...</item>";</code>
 	 * @param FeedItem $item
+	 * @param OutputPage $output
+	 * @stable to override
+	 * @since 1.46
 	 */
-	abstract public function outItem( $item );
+	abstract public function outputItem( FeedItem $item, $output ): void;
 
 	/**
 	 * Generate Footer of the feed
-	 * @par Example:
-	 * @code
-	 * print "</feed>";
-	 * @endcode
+	 *
+	 * Example: <code>print "</feed>";</code>
+	 * @param OutputPage $output
+	 * @stable to override
+	 * @since 1.46
 	 */
-	abstract public function outFooter();
+	abstract public function outputFooter( $output ): void;
 
 	/**
 	 * Setup and send HTTP headers. Don't send any content;
 	 * content might end up being cached and re-sent with
 	 * these same headers later.
 	 *
-	 * This should be called from the outHeader() method,
-	 * but can also be called separately.
+	 * @param OutputPage $output
+	 * @since 1.46
 	 */
-	public function httpHeaders() {
-		global $wgOut;
+	public function sendHttpHeaders( $output ): void {
 		$varyOnXFP = MediaWikiServices::getInstance()->getMainConfig()
 			->get( MainConfigNames::VaryOnXFP );
 		# We take over from $wgOut, excepting its cache header info
-		$wgOut->disable();
-		$mimetype = $this->contentType();
+		$output->disable();
+		$mimetype = $this->contentType( $output->getRequest() );
 		header( "Content-type: $mimetype; charset=UTF-8" );
+		// @todo Maybe set a CSP header here at some point as defense in depth.
+		// need to figure out how that interacts with browser display of article
+		// snippets.
 
 		// Set a sensible filename
 		$mimeAnalyzer = MediaWikiServices::getInstance()->getMimeAnalyzer();
@@ -108,22 +100,18 @@ abstract class ChannelFeed extends FeedItem {
 		header( "Content-Disposition: inline; filename=\"feed.{$ext}\"" );
 
 		if ( $varyOnXFP ) {
-			$wgOut->addVaryHeader( 'X-Forwarded-Proto' );
+			$output->addVaryHeader( 'X-Forwarded-Proto' );
 		}
-		$wgOut->sendCacheControl();
+		$output->sendCacheControl();
 	}
 
 	/**
 	 * Return an internet media type to be sent in the headers.
 	 *
-	 * @stable to override
-	 *
-	 * @return string
+	 * @param WebRequest $request
 	 */
-	private function contentType() {
-		global $wgRequest;
-
-		$ctype = $wgRequest->getVal( 'ctype', 'application/xml' );
+	private function contentType( $request ): string {
+		$ctype = $request->getVal( 'ctype', 'application/xml' );
 		$allowedctypes = [
 			'application/xml',
 			'text/xml',
@@ -136,12 +124,12 @@ abstract class ChannelFeed extends FeedItem {
 
 	/**
 	 * Output the initial XML headers.
+	 *
+	 * @param OutputPage $output
+	 * @since 1.46
 	 */
-	protected function outXmlHeader() {
-		$this->httpHeaders();
+	protected function outputXmlHeader( $output ): void {
+		$this->sendHttpHeaders( $output );
 		echo '<?xml version="1.0"?>' . "\n";
 	}
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( ChannelFeed::class, 'ChannelFeed' );

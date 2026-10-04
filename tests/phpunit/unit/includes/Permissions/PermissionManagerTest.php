@@ -23,6 +23,8 @@ use MediaWiki\User\UserFactory;
 use MediaWiki\User\UserGroupManager;
 use MediaWiki\User\UserIdentityLookup;
 use MediaWikiUnitTestCase;
+use StatusValue;
+use Wikimedia\Message\MessageValue;
 use Wikimedia\TestingAccessWrapper;
 
 /**
@@ -41,16 +43,17 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 			MainConfigNames::WhitelistReadRegexp => false,
 			MainConfigNames::EmailConfirmToEdit => false,
 			MainConfigNames::BlockDisablesLogin => false,
-			MainConfigNames::EnablePartialActionBlocks => false,
 			MainConfigNames::GroupPermissions => [],
 			MainConfigNames::RevokePermissions => [],
 			MainConfigNames::GroupInheritsPermissions => [],
 			MainConfigNames::AvailableRights => [],
 			MainConfigNames::NamespaceProtection => [ NS_MEDIAWIKI => 'editinterface' ],
+			MainConfigNames::RestrictUserPageEditing => false,
 			MainConfigNames::RestrictionLevels => [ '', 'autoconfirmed', 'sysop' ],
 			MainConfigNames::DeleteRevisionsLimit => false,
 			MainConfigNames::RateLimits => [],
 			MainConfigNames::ImplicitRights => [],
+			MainConfigNames::ReauthenticateForActions => [],
 		];
 		$config = $overrideConfig + $baseConfig;
 
@@ -93,14 +96,14 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 	 * @param array $rights What rights the user should be given
 	 * @param string $action
 	 * @param string|bool $pageType 'css', 'js', 'json', or false for none of those
-	 * @param array $expectedErrors
+	 * @param StatusValue $expectedStatus
 	 */
 	public function testCheckUserConfigPermissions(
 		string $pageTitle,
 		array $rights,
 		string $action,
 		$pageType,
-		array $expectedErrors
+		StatusValue $expectedStatus
 	) {
 		$user = $this->createMock( User::class );
 		$user->method( 'getId' )->willReturn( 123 );
@@ -125,14 +128,14 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 			true, // $short, unused
 			$title
 		);
-		$this->assertEquals( $expectedErrors, $result->toLegacyErrorArray() );
+		$this->assertStatusMessagesExactly( $expectedStatus, $result );
 	}
 
 	public static function provideTestCheckUserConfigPermissions() {
-		yield 'Patrol ignored' => [ 'NameOfActingUser/subpage', [], 'patrol', false, [] ];
-		yield 'Own non-config' => [ 'NameOfActingUser/subpage', [], 'edit', false, [] ];
-		yield 'Other non-config' => [ 'NameOfAnotherUser/subpage', [], 'edit', false, [] ];
-		yield 'Delete other subpage' => [ 'NameOfAnotherUser/subpage', [], 'delete', false, [] ];
+		yield 'Patrol ignored' => [ 'NameOfActingUser/subpage', [], 'patrol', false, StatusValue::newGood() ];
+		yield 'Own non-config' => [ 'NameOfActingUser/subpage', [], 'edit', false, StatusValue::newGood() ];
+		yield 'Other non-config' => [ 'NameOfAnotherUser/subpage', [], 'edit', false, StatusValue::newGood() ];
+		yield 'Delete other subpage' => [ 'NameOfAnotherUser/subpage', [], 'delete', false, StatusValue::newGood() ];
 
 		foreach ( [ 'css', 'json', 'js' ] as $type ) {
 			// User editing their own subpages, everything okay
@@ -142,7 +145,7 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 				[ "editmyuser{$type}", 'editmyuserjsredirect' ],
 				'edit',
 				$type,
-				[]
+				StatusValue::newGood()
 			];
 
 			// Interface admin editing own subpages, everything okay
@@ -151,7 +154,7 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 				[ "edituser{$type}" ],
 				'edit',
 				$type,
-				[]
+				StatusValue::newGood()
 			];
 
 			// User with no rights editing own subpages, problematic
@@ -160,7 +163,7 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 				[],
 				'edit',
 				$type,
-				[ [ "mycustom{$type}protected", 'edit' ] ]
+				StatusValue::newFatal( "mycustom{$type}protected", 'edit' )
 			];
 
 			// Interface admin editing other user's subpages, everything okay
@@ -169,7 +172,7 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 				[ "edituser{$type}" ],
 				'edit',
 				$type,
-				[]
+				StatusValue::newGood()
 			];
 
 			// Normal user editing other user's subpages, problematic
@@ -178,7 +181,7 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 				[],
 				'edit',
 				$type,
-				[ [ "custom{$type}protected", 'edit' ] ]
+				StatusValue::newFatal( "custom{$type}protected", 'edit' )
 			];
 		}
 	}
@@ -238,9 +241,9 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 			true, // $short, unused
 			$title
 		);
-		$this->assertEquals(
-			$expectErrors ? [ [ 'mycustomjsredirectprotected', 'edit' ] ] : [],
-			$result->toLegacyErrorArray()
+		$this->assertStatusMessagesExactly(
+			$expectErrors ? StatusValue::newFatal( 'mycustomjsredirectprotected', 'edit' ) : StatusValue::newGood(),
+			$result
 		);
 	}
 
@@ -260,7 +263,7 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 		array $restrictions,
 		array $rights,
 		bool $cascading,
-		array $expectedErrors
+		StatusValue $expectedStatus
 	) {
 		$user = $this->createMock( User::class );
 		$user->method( 'getId' )->willReturn( 123 );
@@ -293,46 +296,46 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 			true, // $short, unused
 			$title
 		);
-		$this->assertEquals( $expectedErrors, $result->toLegacyErrorArray() );
+		$this->assertStatusMessagesExactly( $expectedStatus, $result );
 	}
 
 	public static function provideTestCheckPageRestrictions() {
-		yield 'No restrictions' => [ 'move', [], [], true, [] ];
-		yield 'Empty string' => [ 'edit', [ '' ], [], true, [] ];
+		yield 'No restrictions' => [ 'move', [], [], true, StatusValue::newGood() ];
+		yield 'Empty string' => [ 'edit', [ '' ], [], true, StatusValue::newGood() ];
 		yield 'Semi-protected, with rights' => [
 			'edit',
 			[ 'autoconfirmed' ],
 			[ 'editsemiprotected' ],
 			false,
-			[]
+			StatusValue::newGood()
 		];
 		yield 'Sysop protected, no rights' => [
 			'edit',
 			[ 'sysop', ],
 			[],
 			false,
-			[ [ 'protectedpagetext', 'editprotected', 'edit' ] ]
+			StatusValue::newFatal( 'protectedpagetext', 'editprotected', 'edit', MessageValue::new( 'restriction-level-sysop' ) )
 		];
 		yield 'Sysop protected and cascading, no protect' => [
 			'edit',
 			[ 'editprotected' ],
 			[ 'editprotected' ],
 			true,
-			[ [ 'protectedpagetext', 'protect', 'edit' ] ]
+			StatusValue::newFatal( 'protectedpagetext', 'protect', 'edit', MessageValue::new( 'restriction-level-editprotected' ) )
 		];
 		yield 'Sysop protected and cascading, with rights' => [
 			'edit',
 			[ 'editprotected' ],
 			[ 'editprotected', 'protect' ],
 			true,
-			[]
+			StatusValue::newGood()
 		];
 	}
 
 	/**
 	 * @dataProvider provideTestCheckQuickPermissionsHook
 	 */
-	public function testCheckQuickPermissionsHook( array $hookErrors, array $expectedResult ) {
+	public function testCheckQuickPermissionsHook( array $hookErrors, StatusValue $expectedStatus ) {
 		$title = $this->createMock( Title::class );
 		$user = $this->createMock( User::class );
 		$action = 'FakeActionGoesHere';
@@ -358,21 +361,30 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 			$user,
 			$result,
 			PermissionManager::RIGOR_QUICK, // unused
-			true, // $short, unused,
+			true, // $short, unused
 			$title
 		);
-		$this->assertEquals(
-			$expectedResult,
-			$result->toLegacyErrorArray()
-		);
+		$this->assertStatusMessagesExactly( $expectedStatus, $result );
 	}
 
-	public function provideTestCheckQuickPermissionsHook() {
-		// test name => [ $result / $errors, $status->toLegacyErrorArray() ]
-		yield 'Hook returns false but no errors' => [ [], [] ];
-		yield 'One error' => [ [ 'error-key' ], [ [ 'error-key' ] ] ];
-		yield 'One error with params as array' => [ [ 'error-key', 'param' ], [ [ 'error-key', 'param' ] ] ];
-		yield 'Multiple errors' => [ [ [ 'error-key' ], [ 'error-key-2' ] ], [ [ 'error-key' ], [ 'error-key-2' ] ] ];
+	public static function provideTestCheckQuickPermissionsHook() {
+		// test name => [ $hookErrors, $expectedStatus ]
+		yield 'Hook returns false but no errors' => [
+			[],
+			StatusValue::newGood()
+		];
+		yield 'One error' => [
+			[ 'error-key' ],
+			StatusValue::newFatal( 'error-key' )
+		];
+		yield 'One error with params as array' => [
+			[ 'error-key', 'param' ],
+			StatusValue::newFatal( 'error-key', 'param' )
+		];
+		yield 'Multiple errors' => [
+			[ [ 'error-key' ], [ 'error-key-2' ] ],
+			( new StatusValue() )->fatal( 'error-key' )->fatal( 'error-key-2' )
+		];
 	}
 
 }

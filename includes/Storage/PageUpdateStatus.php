@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -31,6 +17,8 @@ use MediaWiki\Status\Status;
  * @since 1.40
  * @ingroup Page
  * @author Daniel Kinzler
+ * @extends Status<array>
+ * TODO: Document the exact shape of this array, it's created with different keys in different places
  */
 class PageUpdateStatus extends Status {
 
@@ -62,8 +50,6 @@ class PageUpdateStatus extends Status {
 	 * or because the content didn't change (null edit or derived slot update).
 	 *
 	 * Call isOK() to distinguish these cases.
-	 *
-	 * @return ?RevisionRecord
 	 */
 	public function getNewRevision(): ?RevisionRecord {
 		if ( !$this->isOK() ) {
@@ -78,8 +64,6 @@ class PageUpdateStatus extends Status {
 	 * If this returns false even though isOK() returns true, this means that
 	 * no new revision was created because the content didn't change,
 	 * including updates to derived slots.
-	 *
-	 * @return bool
 	 */
 	public function wasRevisionCreated(): bool {
 		return $this->getNewRevision() !== null;
@@ -87,7 +71,6 @@ class PageUpdateStatus extends Status {
 
 	/**
 	 * Whether the update created the page.
-	 * @return bool
 	 */
 	public function wasPageCreated(): bool {
 		return $this->wasRevisionCreated()
@@ -96,7 +79,6 @@ class PageUpdateStatus extends Status {
 
 	/**
 	 * Whether the update failed because page creation was required, but the page already exists.
-	 * @return bool
 	 */
 	public function failedBecausePageExists(): bool {
 		return !$this->isOK() && $this->hasMessage( 'edit-already-exists' );
@@ -104,7 +86,6 @@ class PageUpdateStatus extends Status {
 
 	/**
 	 * Whether the update failed because page modification was required, but the page does not exist.
-	 * @return bool
 	 */
 	public function failedBecausePageMissing(): bool {
 		return !$this->isOK() && $this->hasMessage( 'edit-gone-missing' );
@@ -112,7 +93,6 @@ class PageUpdateStatus extends Status {
 
 	/**
 	 * Whether the update failed because a conflicting update happened concurrently.
-	 * @return bool
 	 */
 	public function failedBecauseOfConflict(): bool {
 		return !$this->isOK() && $this->hasMessage( 'edit-conflict' );

@@ -1,4 +1,9 @@
-QUnit.module( 'mediawiki.base/track', () => {
+QUnit.module( 'mediawiki.base/track', ( hooks ) => {
+	hooks.beforeEach( () => {
+		// Empty the queue so that trackSubscribe tests can't be confused by
+		// other tests.
+		mw.trackQueue.length = 0;
+	} );
 
 	QUnit.test( 'track', ( assert ) => {
 		const sequence = [];
@@ -68,7 +73,12 @@ QUnit.module( 'mediawiki.base/track', () => {
 	QUnit.test( 'trackError', function ( assert ) {
 		const fn = mw.track;
 		function logError( topic, data ) {
-			assert.step( typeof data === 'string' ? data : JSON.stringify( data ) );
+			if ( typeof data !== 'string' ) {
+				// eslint-disable-next-line no-console
+				console.error( 'trackError test: unexpected non-string data', data );
+				data = JSON.stringify( data );
+			}
+			assert.step( data );
 		}
 		this.sandbox.stub( console, 'log' );
 

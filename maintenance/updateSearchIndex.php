@@ -1,29 +1,17 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\RecentChanges\RecentChange;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Search\SearchUpdate;
 use MediaWiki\Title\Title;
 use MediaWiki\WikiMap\WikiMap;
 use Wikimedia\Rdbms\IDBAccessObject;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -63,6 +51,7 @@ class UpdateSearchIndex extends Maintenance {
 		);
 	}
 
+	/** @inheritDoc */
 	public function getDbType() {
 		return Maintenance::DB_ADMIN;
 	}
@@ -76,7 +65,7 @@ class UpdateSearchIndex extends Maintenance {
 		} elseif ( is_readable( $posFile ) ) {
 			$start = file_get_contents( $posFile );
 		} else {
-			$start = wfTimestamp( TS_MW, time() - 86400 );
+			$start = wfTimestamp( TS::MW, time() - 86400 );
 		}
 
 		$this->doUpdateSearchIndex( $start, $end );
@@ -89,7 +78,7 @@ class UpdateSearchIndex extends Maintenance {
 		}
 	}
 
-	private function doUpdateSearchIndex( $start, $end ) {
+	private function doUpdateSearchIndex( string $start, string $end ) {
 		global $wgDisableSearchUpdate;
 
 		$wgDisableSearchUpdate = false;
@@ -107,7 +96,7 @@ class UpdateSearchIndex extends Maintenance {
 			->from( 'recentchanges' )
 			->join( 'page', null, 'rc_cur_id=page_id AND rc_this_oldid=page_latest' )
 			->where( [
-				$dbw->expr( 'rc_type', '!=', RC_LOG ),
+				$dbw->expr( 'rc_source', '!=', RecentChange::SRC_LOG ),
 				$dbw->expr( 'rc_timestamp', '>=', $start ),
 				$dbw->expr( 'rc_timestamp', '<=', $end ),
 			] )
@@ -131,7 +120,7 @@ class UpdateSearchIndex extends Maintenance {
 			->getRevisionByPageId( $pageId, 0, IDBAccessObject::READ_LATEST );
 		$title = null;
 		if ( $rev ) {
-			$titleObj = Title::newFromLinkTarget( $rev->getPageAsLinkTarget() );
+			$titleObj = Title::newFromPageIdentity( $rev->getPage() );
 			$title = $titleObj->getPrefixedDBkey();
 			$this->output( "$title..." );
 			# Update searchindex

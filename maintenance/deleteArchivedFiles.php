@@ -4,25 +4,13 @@
  *
  * Based on deleteOldRevisions.php by Rob Church.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
+use MediaWiki\FileRepo\File\File;
+use MediaWiki\FileRepo\LocalRepo;
 use MediaWiki\Maintenance\Maintenance;
 
 // @codeCoverageIgnoreStart
@@ -50,7 +38,7 @@ class DeleteArchivedFiles extends Maintenance {
 
 		# Data should come off the master, wrapped in a transaction
 		$dbw = $this->getPrimaryDB();
-		$this->beginTransaction( $dbw, __METHOD__ );
+		$this->beginTransactionRound( __METHOD__ );
 		$repo = $this->getServiceContainer()->getRepoGroup()->getLocalRepo();
 
 		# Get "active" revisions from the filearchive table
@@ -64,7 +52,7 @@ class DeleteArchivedFiles extends Maintenance {
 		$count = 0;
 		foreach ( $res as $row ) {
 			$key = $row->fa_storage_key;
-			if ( !strlen( $key ) ) {
+			if ( $key === '' ) {
 				$this->output( "Entry with ID {$row->fa_id} has empty key, skipping\n" );
 				continue;
 			}
@@ -131,7 +119,7 @@ class DeleteArchivedFiles extends Maintenance {
 			$file->releaseFileLock();
 		}
 
-		$this->commitTransaction( $dbw, __METHOD__ );
+		$this->commitTransactionRound( __METHOD__ );
 		$this->output( "Done! [$count file(s)]\n" );
 	}
 }

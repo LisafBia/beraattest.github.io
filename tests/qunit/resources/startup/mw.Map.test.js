@@ -109,7 +109,7 @@
 		const conf = new mw.Map();
 
 		assert.strictEqual( conf.get( 'constructor' ), null, 'Get unknown "constructor"' );
-		assert.strictEqual( conf.get( 'hasOwnProperty' ), null, 'Get unkonwn "hasOwnProperty"' );
+		assert.strictEqual( conf.get( 'hasOwnProperty' ), null, 'Get unknown "hasOwnProperty"' );
 
 		conf.set(
 			'hasOwnProperty',
@@ -124,7 +124,7 @@
 		);
 		assert.strictEqual( conf.get( 'example' ), 'Foo', 'Use original hasOwnProperty method (negative)' );
 
-		assert.strictEqual( conf.set( 'constructor', 42 ), true, 'Set "constructor"' );
+		assert.true( conf.set( 'constructor', 42 ), 'Set "constructor"' );
 		assert.strictEqual( conf.get( 'constructor' ), 42, 'Get "constructor"' );
 	} );
 }() );

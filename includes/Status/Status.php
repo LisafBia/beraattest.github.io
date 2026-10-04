@@ -2,21 +2,7 @@
 /**
  * Generic operation result.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -25,10 +11,10 @@ namespace MediaWiki\Status;
 use MediaWiki\Context\IContextSource;
 use MediaWiki\Context\RequestContext;
 use MediaWiki\Language\Language;
+use MediaWiki\Language\MessageLocalizer;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Message\Message;
 use MediaWiki\StubObject\StubUserLang;
-use MessageLocalizer;
 use RuntimeException;
 use StatusValue;
 
@@ -50,6 +36,10 @@ use StatusValue;
  * so that a lack of error-handling will be explicit.
  *
  * @newable
+ * @template T Type of the value stored in the status when the operation result is OK.
+ *   May be 'never' to indicate that there's no meaningful value, and that
+ *   this status is only used to keep track of errors and warnings.
+ * @extends StatusValue<T>
  */
 class Status extends StatusValue {
 	/** @var callable|false */
@@ -61,6 +51,12 @@ class Status extends StatusValue {
 	private ?StatusFormatter $formatter = null;
 
 	/**
+	 * @suppress PhanGenericConstructorTypes
+	 */
+	public function __construct() {
+	}
+
+	/**
 	 * Succinct helper method to wrap a StatusValue
 	 *
 	 * This is useful when formatting StatusValue objects:
@@ -68,8 +64,12 @@ class Status extends StatusValue {
 	 *     $this->getOutput()->addHtml( Status::wrap( $sv )->getHTML() );
 	 * @endcode
 	 *
+	 * Note that the contents of the status are copied by reference,
+	 * so that any changes to the inner status will also affect the wrapped status and vice versa.
+	 * If this is not needed, {@link StatusValue::cast()} is usually preferable.
+	 *
 	 * @param StatusValue|Status $sv
-	 * @return Status
+	 * @return static
 	 */
 	public static function wrap( $sv ) {
 		if ( $sv instanceof static ) {
@@ -142,12 +142,10 @@ class Status extends StatusValue {
 
 	private function getFormatter(): StatusFormatter {
 		if ( !$this->formatter ) {
-			$context = RequestContext::getMain();
-
 			// HACK: only works for IContextSource objects.
-			if ( $this->messageLocalizer && $this->messageLocalizer instanceof IContextSource ) {
-				$context = $this->messageLocalizer;
-			}
+			$context = $this->messageLocalizer instanceof IContextSource ?
+				$this->messageLocalizer :
+				RequestContext::getMain();
 
 			$formatterFactory = MediaWikiServices::getInstance()->getFormatterFactory();
 			$this->formatter = $formatterFactory->getStatusFormatter( $context );
@@ -157,25 +155,14 @@ class Status extends StatusValue {
 	}
 
 	/**
-	 * Splits this Status object into two new Status objects, one which contains only
-	 * the error messages, and one that contains the warnings, only. The returned array is
-	 * defined as:
-	 * [
-	 *     0 => object(Status) # The Status with error messages, only
-	 *     1 => object(Status) # The Status with warning messages, only
-	 * ]
-	 *
-	 * @return Status[]
+	 * @inheritDoc
 	 */
 	public function splitByErrorType() {
 		[ $errorsOnlyStatus, $warningsOnlyStatus ] = parent::splitByErrorType();
-		// phan/phan#2133?
-		'@phan-var Status $errorsOnlyStatus';
-		'@phan-var Status $warningsOnlyStatus';
 
 		if ( $this->messageLocalizer ) {
-			$errorsOnlyStatus->setMessageLocalizer = $this->messageLocalizer;
-			$warningsOnlyStatus->setMessageLocalizer = $this->messageLocalizer;
+			$errorsOnlyStatus->setMessageLocalizer( $this->messageLocalizer );
+			$warningsOnlyStatus->setMessageLocalizer( $this->messageLocalizer );
 		}
 
 		if ( $this->formatter ) {
@@ -190,7 +177,7 @@ class Status extends StatusValue {
 
 	/**
 	 * Returns the wrapped StatusValue object
-	 * @return StatusValue
+	 * @return StatusValue<T>
 	 * @since 1.27
 	 */
 	public function getStatusValue() {

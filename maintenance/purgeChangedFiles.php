@@ -2,25 +2,14 @@
 /**
  * Scan the logging table and purge affected files within a timeframe.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
+use MediaWiki\FileRepo\File\LocalFile;
+use MediaWiki\FileRepo\LocalRepo;
+use MediaWiki\Logging\LogEntryBase;
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Title\Title;
 
@@ -191,8 +180,8 @@ class PurgeChangedFiles extends Maintenance {
 					$this->purgeFromArchiveTable( $repo, $file );
 				} elseif ( $logType === 'move' ) {
 					// Purge the target file as well
-
-					$params = unserialize( $row->log_params );
+					// (only handles hard-coded core logs, so no need to pass log type/action here)
+					$params = LogEntryBase::extractParams( $row->log_params, null );
 					if ( isset( $params['4::target'] ) ) {
 						$target = $params['4::target'];
 						$targetFile = $repo->newFile( Title::makeTitle( NS_FILE, $target ) );
@@ -241,7 +230,7 @@ class PurgeChangedFiles extends Maintenance {
 		}
 	}
 
-	protected function getDeletedPath( LocalRepo $repo, LocalFile $file ) {
+	protected function getDeletedPath( LocalRepo $repo, LocalFile $file ): string {
 		$hash = $repo->getFileSha1( $file->getPath() );
 		$key = "{$hash}.{$file->getExtension()}";
 

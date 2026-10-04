@@ -6,9 +6,14 @@
 		}
 	},
 	{
+		"method": [ "GET", "POST" ],
 		"path": "/ModuleTest/hello/{name}",
 		"class": "MediaWiki\\Tests\\Rest\\Handler\\HelloHandler",
-		"hello": "hi!"
+		"hello": "hi!",
+		"openApiSpec": {
+			"summary": "hello summary",
+			"description": "hello description"
+		}
 	},
 	{
 		"path": "/ModuleTest/throw",
@@ -25,5 +30,13 @@
 	{
 		"path": "/ModuleTest/throwWrapped",
 		"factory": "MediaWiki\\Tests\\Rest\\MockHandlerFactory::throwWrappedHandlerFactory"
-	}
-]
+	},
+	{
+		"path": "/ModuleTest/deprecated",
+		"class": "MediaWiki\\Tests\\Rest\\Handler\\HelloHandler",
+		"openApiSpec": {
+			"deprecationSettings": {
+				"since": 1735689600
+			}
+		}
+	} ]

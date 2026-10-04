@@ -25,7 +25,6 @@ abstract class ResourceLoaderTestCase extends MediaWikiIntegrationTestCase {
 	/**
 	 * @param array|string $options Language code or options array
 	 * - string 'lang' Language code
-	 * - string 'dir' Language direction (ltr or rtl)
 	 * - string 'modules' Pipe-separated list of module names
 	 * - string|null 'only' "scripts" (unwrapped script), "styles" (stylesheet), or null
 	 *    (mw.loader.implement).
@@ -34,13 +33,11 @@ abstract class ResourceLoaderTestCase extends MediaWikiIntegrationTestCase {
 	 */
 	protected function getResourceLoaderContext( $options = [], ?ResourceLoader $rl = null ) {
 		if ( is_string( $options ) ) {
-			// Back-compat for extension tests
 			$options = [ 'lang' => $options ];
 		}
 		$options += [
 			'debug' => 'true',
 			'lang' => 'en',
-			'dir' => 'ltr',
 			'skin' => 'fallback',
 			'modules' => 'startup',
 			'only' => 'scripts',
@@ -65,12 +62,7 @@ abstract class ResourceLoaderTestCase extends MediaWikiIntegrationTestCase {
 			'sourcemap' => $options['sourcemap'],
 			'target' => 'phpunit',
 		] );
-		$ctx = $this->getMockBuilder( Context::class )
-			->setConstructorArgs( [ $resourceLoader, $request ] )
-			->onlyMethods( [ 'getDirection' ] )
-			->getMock();
-		$ctx->method( 'getDirection' )->willReturn( $options['dir'] );
-		return $ctx;
+		return new Context( $resourceLoader, $request );
 	}
 
 	public static function getSettings() {
@@ -85,7 +77,6 @@ abstract class ResourceLoaderTestCase extends MediaWikiIntegrationTestCase {
 			MainConfigNames::Logos => false,
 			MainConfigNames::Logo => '/logo.png',
 			MainConfigNames::ResourceBasePath => '/w',
-			MainConfigNames::ParserEnableLegacyMediaDOM => true,
 
 			// For ResourceLoader::getSiteConfigSettings and StartUpModule
 			MainConfigNames::Server => 'https://example.org',
@@ -131,8 +122,6 @@ class ResourceLoaderTestModule extends Module {
 	/** @var string|null */
 	protected $skipFunction = null;
 	/** @var bool */
-	protected $isRaw = false;
-	/** @var bool */
 	protected $isKnownEmpty = false;
 	/** @var string */
 	protected $type = Module::LOAD_GENERAL;
@@ -155,7 +144,7 @@ class ResourceLoaderTestModule extends Module {
 			// This enables the validation check that replaces invalid
 			// scripts with a warning message.
 			// Based on $wgResourceLoaderValidateJS
-			return $this->validateScriptFile( 'input', $this->script );
+			return $this->validateScriptFile( 'input.js', $this->script );
 		} else {
 			return $this->script;
 		}
@@ -193,10 +182,6 @@ class ResourceLoaderTestModule extends Module {
 		return true;
 	}
 
-	public function isRaw() {
-		return $this->isRaw;
-	}
-
 	public function isKnownEmpty( Context $context ) {
 		return $this->isKnownEmpty;
 	}
@@ -214,7 +199,7 @@ class ResourceLoaderTestModule extends Module {
  * A more constrained and testable variant of FileModule.
  *
  * - Implements getLessVars() support.
- * - Disables database persistance of discovered file dependencies.
+ * - Disables database persistence of discovered file dependencies.
  */
 class ResourceLoaderFileTestModule extends FileModule {
 	/** @var array */

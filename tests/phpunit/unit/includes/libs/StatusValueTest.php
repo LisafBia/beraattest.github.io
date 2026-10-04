@@ -2,16 +2,25 @@
 
 namespace Wikimedia\Tests\Unit;
 
+use MediaWiki\Json\JsonCodec;
 use MediaWiki\Message\Message;
 use MediaWikiUnitTestCase;
+use PHPUnit\Framework\TestCase;
 use StatusValue;
+use Wikimedia\Assert\Assert;
+use Wikimedia\Message\MessageSpecifier;
+use Wikimedia\Message\MessageValue;
+use Wikimedia\Message\ParamType;
+use Wikimedia\Message\ScalarParam;
+use Wikimedia\Tests\JsonSerializationTestTrait;
 
 /**
  * @covers \StatusValue
  */
 class StatusValueTest extends MediaWikiUnitTestCase {
+	use JsonSerializationTestTrait;
 
-	public function provideToString() {
+	public static function provideToString() {
 		yield [
 			true, null, null,
 			'<OK, no errors detected, no value set>',
@@ -172,10 +181,10 @@ class StatusValueTest extends MediaWikiUnitTestCase {
 	/**
 	 * @dataProvider provideToString
 	 */
-	public function testToString( bool $sucess, $message, $errors, string $expected, string $testExplanation ) {
+	public function testToString( bool $success, $message, $errors, string $expected, string $testExplanation ) {
 		$status = StatusValue::newGood();
 
-		$status->setResult( $sucess, $message );
+		$status->setResult( $success, $message );
 
 		if ( isset( $errors ) ) {
 			foreach ( $errors as $key => $error ) {
@@ -210,4 +219,187 @@ class StatusValueTest extends MediaWikiUnitTestCase {
 		$this->assertEquals( 'warning111', $status->getMessages( 'warning' )[0]->getKey() );
 		$this->assertEquals( 'error111', $status->getMessages( 'error' )[0]->getKey() );
 	}
+
+	public function testCast(): void {
+		$testStatusValue = TestStatusValue::newIntAndString( 1, 'string' );
+		$this->assertInstanceOf( TestStatusValue::class, $testStatusValue );
+		$this->assertSame( 1, $testStatusValue->getAnInt() );
+		$this->assertSame( 'string', $testStatusValue->getAString() );
+
+		$testGenericStatusValue = TestGenericStatusValue::cast( $testStatusValue );
+		$this->assertInstanceOf( TestGenericStatusValue::class, $testGenericStatusValue );
+		$this->assertStringStartsWith( '{"', $testGenericStatusValue->getValueJson() );
+
+		$testStatusValue2 = TestStatusValue::cast( $testGenericStatusValue );
+		$this->assertInstanceOf( TestStatusValue::class, $testStatusValue2 );
+		$this->assertSame( 1, $testStatusValue2->getAnInt() );
+		$this->assertSame( 'string', $testStatusValue2->getAString() );
+	}
+
+	public function testMergeWithStatusData(): void {
+		$status1 = new StatusValue();
+		$status2 = new StatusValue();
+		$status1->statusData = 'foo';
+		$status2->statusData = 'foo';
+		$status1->merge( $status2 );
+		$this->assertSame( 'foo', $status1->statusData );
+	}
+
+	// region   JsonSerializationTestTrait methods
+
+	public static function getClassToTest(): string {
+		return StatusValue::class;
+	}
+
+	public static function getSerializedDataPath(): string {
+		return __DIR__ . '/../../../data/StatusValue';
+	}
+
+	public static function getTestInstancesAndAssertions(): array {
+		$cases = [];
+		$cases['good'] = [
+			'instance' => StatusValue::newGood(),
+			'assertions' => static function ( TestCase $testCase, StatusValue $status ) {
+				$testCase->assertTrue( $status->isGood() );
+			}
+		];
+		$cases['fatal-string-no-params'] = [
+			'instance' => StatusValue::newFatal( 'message1' ),
+			'assertions' => static function ( TestCase $testCase, StatusValue $status ) {
+				$testCase->assertFalse( $status->isOK() );
+				$testCase->assertSame(
+					'<message key="message1"></message>',
+					$status->getMessages()[0]->dump()
+				);
+			}
+		];
+		$cases['fatal-string-string-param'] = [
+			'instance' => StatusValue::newFatal( 'message1', 'param1' ),
+			'assertions' => static function ( TestCase $testCase, StatusValue $status ) {
+				$testCase->assertFalse( $status->isOK() );
+				$testCase->assertSame(
+					'<message key="message1"><text>param1</text></message>',
+					$status->getMessages()[0]->dump()
+				);
+			}
+		];
+		$cases['fatal-string-scalar-param'] = [
+			'instance' => StatusValue::newFatal(
+				'message1',
+				new ScalarParam( ParamType::TEXT, 'param1' )
+			),
+			'assertions' => static function ( TestCase $testCase, StatusValue $status ) {
+				$testCase->assertFalse( $status->isOK() );
+				$testCase->assertSame(
+					'<message key="message1"><text>param1</text></message>',
+					$status->getMessages()[0]->dump()
+				);
+			}
+		];
+
+		$cases['fatal-MessageValue'] = [
+			'instance' => StatusValue::newFatal( new MessageValue(
+				'message1',
+				[ new ScalarParam( ParamType::SIZE, 1234 ) ]
+			) ),
+			'assertions' => static function ( TestCase $testCase, StatusValue $status ) {
+				$testCase->assertFalse( $status->isOK() );
+				$testCase->assertSame(
+					'<message key="message1"><size>1234</size></message>',
+					$status->getMessages()[0]->dump()
+				);
+			}
+		];
+
+		$status = new StatusValue();
+		$status->warning( 'message1' );
+		$status->error( 'message2' );
+		$cases['warning-and-error'] = [
+			'instance' => $status,
+			'assertions' => static function ( TestCase $testCase, StatusValue $status ) {
+				$testCase->assertTrue( $status->isOK() );
+				$testCase->assertSame(
+					'<message key="message1"></message>',
+					$status->getMessages( 'warning' )[0]->dump()
+				);
+				$testCase->assertSame(
+					'<message key="message2"></message>',
+					$status->getMessages( 'error' )[0]->dump()
+				);
+			}
+		];
+
+		$status = new StatusValue;
+		$status->value = 1;
+		$status->success = [ 'a' => 1 ];
+		$status->successCount++;
+		$status->failCount += 2;
+		$status->statusData = 3;
+		$cases['misc-props'] = [
+			'instance' => $status,
+			'assertions' => static function ( TestCase $testCase, StatusValue $status ) {
+				$testCase->assertSame( 1, $status->getValue() );
+				$testCase->assertSame( [ 'a' => 1 ], $status->success );
+				$testCase->assertSame( 1, $status->successCount );
+				$testCase->assertSame( 2, $status->failCount );
+				$testCase->assertSame( 3, $status->statusData );
+			}
+		];
+
+		return $cases;
+	}
+
+	// endregion -- end of JsonSerializationTestTrait methods
+
+	public function testMessageSpecifierLooseRoundTrip() {
+		$message = new class implements MessageSpecifier {
+			public function getKey(): string {
+				return 'key';
+			}
+
+			public function getParams(): array {
+				return [ 'param1' ];
+			}
+		};
+		$status = StatusValue::newFatal( $message );
+		$codec = new JsonCodec();
+		$json = $codec->serialize( $status );
+		$newStatus = $codec->deserialize( $json );
+		$newMessage = $newStatus->getMessages()[0];
+		$this->assertInstanceOf( MessageValue::class, $newMessage );
+		$this->assertSame(
+			'<message key="key"><text>param1</text></message>',
+			$newMessage->dump()
+		);
+	}
+
+}
+
+class TestStatusValue extends StatusValue {
+
+	public static function newIntAndString( int $anInt, string $aString ) {
+		return parent::newGood( [
+			'anInt' => $anInt,
+			'aString' => $aString,
+		] );
+	}
+
+	public function getAnInt(): int {
+		Assert::precondition( $this->isOK(), '$this->isOK()' );
+		return $this->getValue()['anInt'];
+	}
+
+	public function getAString(): string {
+		Assert::precondition( $this->isOK(), '$this->isOK()' );
+		return $this->getValue()['aString'];
+	}
+
+}
+
+class TestGenericStatusValue extends StatusValue {
+
+	public function getValueJson(): string {
+		return json_encode( $this->getValue() );
+	}
+
 }

@@ -121,7 +121,7 @@
 	"underline-always": "Соок",
 	"tog-showhiddencats": "Шӹлтӹмӹ категоривлӓм анжыкташ",
 	"tog-showrollbackconfirmation": "Мӹнгеш пӧртӹлтӓш манын ссылкым темдӓлмӹ годым подтвреждайышы ядмашым анжыкташ",
-	"tog-forcesafemode": "[[mw:Manual:Safemode|Лӱдӹшӓн агыл режимӹм]] воксешок чӱктӓш",
+	"tog-forcesafemode": "[[mw:Special:MyLanguage/Manual:Safemode|Лӱдӹшӓн агыл режимӹм]] воксешок чӱктӓш",
 	"prefs-help-forcesafemode": "Вики-скрипт дон стильвлӓн таблицӹштӹм цӓрӓш.",
 	"prefs-editing": "Тӧрлӓтӹмӓш",
 	"prefs-description-editing": "Тӧрлӓтӹмӓшвлӓм пыртымы, тӹшлӹмӹ дӓ тергӹмӹ йӧнӹм шагалты.",
@@ -199,6 +199,7 @@
 	"prefs-searchmisc": "Цымыр",
 	"searchlimit-help": "Сек кого значени: $1",
 	"prefs-advancedsearchoptions": "Кымдаэмдӹмӹ параметрвлӓ",
+	"prefs-misc": "Шукы йиш",
 	"prefs-reset-confirm": "Ане, мӹнь ӹшкӹмемӹн настройкывлӓэмӹм карангдынем.",
 	"restoreprefs": "Цилӓ настройкым тӹнгӓлтӹшӹш пӧртӹлтӓш"
 }

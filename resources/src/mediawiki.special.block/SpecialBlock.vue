@@ -3,6 +3,13 @@
 	<cdx-message v-if="enableMultiblocks" allow-user-dismiss>
 		{{ $i18n( 'block-multiblocks-new-feature' ) }}
 	</cdx-message>
+	<!-- @todo Remove some time after deprecation -->
+	<cdx-message
+		v-if="wasRedirected"
+		allow-user-dismiss
+	>
+		{{ $i18n( 'block-unblock-redirected' ) }}
+	</cdx-message>
 	<cdx-field
 		class="mw-block-fieldset"
 		:is-fieldset="true"
@@ -10,39 +17,73 @@
 	>
 		<div ref="messagesContainer" class="mw-block-messages">
 			<cdx-message
-				v-if="success"
+				v-if="blockAdded"
 				type="success"
 				:allow-user-dismiss="true"
 				class="mw-block-success"
 			>
-				<p><strong>{{ $i18n( 'blockipsuccesssub' ) }}</strong></p>
-				<!-- eslint-disable-next-line vue/no-v-html -->
-				<p v-html="$i18n( 'block-success', store.targetUser ).parse()"></p>
+				<p><strong>{{ blockSavedMessage }}</strong></p>
+				<p v-i18n-html:block-success="[ store.targetUser ]"></p>
+				<p v-if="additionalBlocksMessage" v-i18n-html="additionalBlocksMessage"></p>
+			</cdx-message>
+			<cdx-message
+				v-if="blockRemoved"
+				type="success"
+				:allow-user-dismiss="true"
+			>
+				<p>{{ $i18n( 'block-removed' ) }}</p>
 			</cdx-message>
 			<cdx-message
 				v-for="( formError, index ) in formErrors"
 				:key="index"
 				type="error"
-				class="mw-block-error"
 				inline
 			>
 				<!-- eslint-disable-next-line vue/no-v-html -->
 				<div v-html="formError"></div>
 			</cdx-message>
+			<cdx-message
+				v-if="blocksAdditionalErrors.length"
+				type="error"
+				:allow-user-dismiss="true"
+				class="mw-block-additional-error"
+			>
+				<p>
+					<strong>
+						{{ $i18n( 'block-additional-error-header-text', blocksAdditionalErrors.length ) }}
+					</strong>
+				</p>
+				<ul>
+					<li
+						v-for="( blocksAdditionalError, index ) in blocksAdditionalErrors"
+						:key="index"
+					>
+						{{ blocksAdditionalError }}
+					</li>
+				</ul>
+			</cdx-message>
 		</div>
 		<user-lookup
 			v-model="store.targetUser"
 		></user-lookup>
+		<div v-if="store.showIPTempBlockMessage" class="mw-block-target-ip-tempuser-info">
+			{{ $i18n( 'block-target-ip-tempuser-info' ) }}
+		</div>
 
 		<div v-if="showBlockLogs">
 			<block-log
 				:key="`${submitCount}-active`"
-				:open="success"
+				:open="blockAdded || blockRemoved"
 				:can-delete-log-entry="false"
 				block-log-type="active"
-				@create-block="onCreateBlock"
 				@edit-block="onEditBlock"
 				@remove-block="onRemoveBlock"
+			></block-log>
+			<block-log
+				v-if="mw.util.isIPAddress( store.targetUser, true )"
+				:key="`${submitCount}-active-ranges`"
+				:can-delete-log-entry="false"
+				block-log-type="active-ranges"
 			></block-log>
 			<block-log
 				:key="`${submitCount}-recent`"
@@ -56,13 +97,15 @@
 				:can-delete-log-entry="canDeleteLogEntry"
 			></block-log>
 
-			<div v-if="showBlockForm" class="mw-block__block-form">
+			<div
+				v-if="formVisible"
+				class="mw-block__block-form"
+				@change="formDirty = true"
+			>
+				<h2>{{ formHeaderText }}</h2>
 				<block-type-field></block-type-field>
 				<expiry-field></expiry-field>
-				<reason-field
-					v-model:selected="store.reason"
-					v-model:other="store.reasonOther"
-				></reason-field>
+				<reason-field v-model="store.reason" :expiry="store.expiry"></reason-field>
 				<block-details-field></block-details-field>
 				<additional-details-field></additional-details-field>
 				<confirmation-dialog
@@ -81,12 +124,32 @@
 				</confirmation-dialog>
 				<hr class="mw-block-hr">
 				<cdx-button
-					action="destructive"
+					action="default"
+					data-test="cancel-edit-button"
+					weight="primary"
+					type="button"
+					@click="onFormCancel"
+				>
+					{{ $i18n( 'block-cancel' ) }}
+				</cdx-button>
+				<cdx-button
+					action="progressive"
 					weight="primary"
 					class="mw-block-submit"
 					@click="onFormSubmission"
 				>
-					{{ submitButtonMessage }}
+					{{ $i18n( 'block-submit' ).text() }}
+				</cdx-button>
+			</div>
+			<div v-else-if="shouldShowAddBlockButton">
+				<cdx-button
+					type="button"
+					action="progressive"
+					weight="primary"
+					class="mw-block__create-button"
+					@click="onCreateBlock"
+				>
+					{{ $i18n( 'block-create' ).text() }}
 				</cdx-button>
 			</div>
 		</div>
@@ -122,7 +185,7 @@
 </template>
 
 <script>
-const { computed, defineComponent, nextTick, ref } = require( 'vue' );
+const { computed, defineComponent, nextTick, onMounted, ref, watch } = require( 'vue' );
 const { storeToRefs } = require( 'pinia' );
 const { CdxButton, CdxTextInput, CdxCheckbox, CdxField, CdxMessage } = require( '@wikimedia/codex' );
 const useBlockStore = require( './stores/block.js' );
@@ -158,40 +221,70 @@ module.exports = exports = defineComponent( {
 	setup() {
 		const store = useBlockStore();
 		const blockShowSuppressLog = mw.config.get( 'blockShowSuppressLog' ) || false;
-		const canDeleteLogEntry = mw.config.get( 'canDeleteLogEntry' ) || false;
-		const { formErrors, formSubmitted, formVisible, success, enableMultiblocks } = storeToRefs( store );
+		const canDeleteLogEntry = mw.config.get( 'blockCanDeleteLogEntry' ) || false;
+		const {
+			alreadyBlocked,
+			formErrors,
+			formSubmitted,
+			formVisible,
+			formDirty,
+			blockAdded,
+			additionalBlocksMessage,
+			blocksAdditionalErrors,
+			blockRemoved,
+			enableMultiblocks,
+			removalConfirmationOpen
+		} = storeToRefs( store );
 		const messagesContainer = ref();
+		const blockSavedMessage = ref( '' );
 		// Value to use for BlockLog component keys, so they reload after saving.
 		const submitCount = ref( 0 );
-		const submitButtonMessage = computed( () => {
+		const formHeaderText = computed( () => {
 			if ( ( !store.enableMultiblocks && store.alreadyBlocked ) ||
 				( store.enableMultiblocks && store.blockId )
 			) {
 				return mw.message( 'block-update' ).text();
 			}
-			return mw.message( 'ipbsubmit' ).text();
+			return mw.message( 'block-create' ).text();
 		} );
+
 		const confirmationOpen = ref( false );
-		const blockId = computed( () => mw.util.getParamValue( 'id' ) );
-		const showBlockLogs = computed( () => store.targetUser || store.blockId );
-		const showBlockForm = computed( () => formVisible.value || blockId.value );
-		const removalConfirmationOpen = ref( false );
+		const showBlockLogs = computed( () => ( store.targetUser && store.targetExists ) || store.blockId );
+
+		// TODO: Remove some time after deprecation
+		// T382539: Check if we've been redirected from Special:Unblock
+		const wasRedirected = mw.util.getParamValue( 'redirected' );
+
 		let initialLoad = true;
 
-		if ( blockId.value ) {
-			loadFromIdParam().then( ( data ) => {
-				if ( data && data.blocks.length ) {
-					// Load the block form content.
-					const block = data.blocks[ 0 ];
-					store.loadFromData( block, true );
-					formVisible.value = true;
-					scrollToForm();
-				} else {
-					// If the block ID is invalid, show an error message.
-					formErrors.value = [ mw.msg( 'block-invalid-id' ) ];
-				}
+		onMounted( () => {
+			// Prevent the window from being closed as long as we have the form open
+			mw.confirmCloseWindow( {
+				test: () => formVisible.value && formDirty.value
 			} );
-		}
+
+			// If we're editing or removing via an id URL parameter, check that the block exists.
+			if ( store.blockId ) {
+				loadFromId( store.blockId ).then( ( data ) => {
+					if ( data && data.blocks.length ) {
+						if ( mw.util.getParamValue( 'remove' ) === '1' ) {
+							// Fire the remove click handler manually.
+							onRemoveBlock( store.blockId );
+						} else {
+							// Load the block form content.
+							const block = data.blocks[ 0 ];
+							store.loadFromData( block, true );
+							formVisible.value = true;
+							scrollToForm();
+						}
+					} else {
+						// If the block ID is invalid, show an error message.
+						formErrors.value = [ mw.msg( 'block-invalid-id' ) ];
+						store.blockId = null;
+					}
+				} );
+			}
+		} );
 
 		/**
 		 * Show the form for a new block.
@@ -217,6 +310,7 @@ module.exports = exports = defineComponent( {
 			store.loadFromData( blockData, false );
 			formVisible.value = true;
 			scrollToForm();
+			initialLoad = false;
 		}
 
 		/**
@@ -225,8 +319,9 @@ module.exports = exports = defineComponent( {
 		 * @param {number} currentBlockId
 		 */
 		function onRemoveBlock( currentBlockId ) {
+			formVisible.value = false;
 			store.blockId = currentBlockId;
-			store.removalReason = '';
+			store.removalReason = mw.config.get( 'blockRemovalReasonPreset' ) || '';
 			store.watchUser = false;
 			removalConfirmationOpen.value = true;
 		}
@@ -239,12 +334,14 @@ module.exports = exports = defineComponent( {
 				.then( () => {
 					removalConfirmationOpen.value = false;
 					submitCount.value++;
+					blockRemoved.value = true;
+					formErrors.value = [];
 				} )
 				.fail( ( _, errorObj ) => {
 					formErrors.value = [ errorObj.error.info ];
 				} )
 				.always( () => {
-					success.value = false;
+					blockAdded.value = false;
 					formSubmitted.value = false;
 				} );
 		}
@@ -271,7 +368,7 @@ module.exports = exports = defineComponent( {
 		function onFormSubmission( event ) {
 			event.preventDefault();
 			formSubmitted.value = true;
-			success.value = false;
+			blockAdded.value = false;
 
 			// checkValidity() executes browser form validation, which triggers automatic
 			// validation states on applicable components (e.g. fields with `required` attr).
@@ -280,6 +377,7 @@ module.exports = exports = defineComponent( {
 					confirmationOpen.value = true;
 					return;
 				}
+
 				doBlock();
 			} else {
 				// nextTick() needed to ensure error messages are rendered before scrolling.
@@ -288,23 +386,42 @@ module.exports = exports = defineComponent( {
 					// Scrolling to `cdx-message--error` is merely future-proofing to
 					// ensure the user sees the error message, wherever it may be.
 					// Actual validation logic should live in the respective component.
-					document.querySelector( '.cdx-message--error' )
-						.scrollIntoView( { behavior: 'smooth' } );
+					const firstError = document.querySelector( '.cdx-message--error' );
+					if ( firstError ) {
+						// Guard against there not being any parent fieldset.
+						const firstErrorFieldset = firstError.closest( 'fieldset' );
+						( firstErrorFieldset || firstError ).scrollIntoView( { behavior: 'smooth' } );
+					}
 					formSubmitted.value = false;
 				} );
 			}
 		}
 
 		/**
-		 * Load the block form content from the 'id' URL parameter.
+		 * Handle form cancel button.
 		 *
+		 * @param {Event} event
+		 */
+		function onFormCancel( event ) {
+			event.preventDefault();
+			store.resetForm();
+			formVisible.value = false;
+			nextTick( () => {
+				messagesContainer.value.scrollIntoView( { behavior: 'smooth' } );
+			} );
+		}
+
+		/**
+		 * Load data for a given block.
+		 *
+		 * @param {string} id The block ID to load.
 		 * @return {Promise<Object>} A promise that resolves to the block query response.
 		 */
-		function loadFromIdParam() {
+		function loadFromId( id ) {
 			const params = {
 				action: 'query',
 				list: 'blocks',
-				bkids: mw.util.getParamValue( 'id' ),
+				bkids: id,
 				formatversion: 2,
 				format: 'json',
 				bkprop: 'id|user|by|timestamp|expiry|reason|range|flags|restrictions'
@@ -325,31 +442,104 @@ module.exports = exports = defineComponent( {
 					if ( result.block && result.block.user ) {
 						store.targetUser = result.block.user;
 					}
-					success.value = true;
+					// Add the success message.
+					if ( store.blockId ) {
+						blockSavedMessage.value = mw.message( 'block-updated-message' ).text();
+					} else {
+						blockSavedMessage.value = mw.message( 'block-added-message' ).text();
+					}
+					blockAdded.value = true;
+
+					if ( result.block.additionalBlocksStatuses ) {
+						// Capture all successful blocks, which return no messages, as target names
+						const additionalBlocks = Object.entries( result.block.additionalBlocksStatuses )
+							.filter( ( obj ) => !obj[ 1 ].length );
+						if ( additionalBlocks.length ) {
+							// From the target names of successful blocks, generate the copy describing the blocks made
+							const userLinks = additionalBlocks.map(
+								( target ) => mw.message( 'block-target-link', target ).parse()
+							);
+							const $listOfUserLinks = $( $.parseHTML( mw.language.listToText( userLinks ) ) );
+							additionalBlocksMessage.value =
+								mw.message( 'block-additional-success-text', $listOfUserLinks, userLinks.length );
+						}
+
+						// Capture existing messages, which are all errors pre-parsed by the hook responder
+						blocksAdditionalErrors.value = [].concat(
+							...Object.values( result.block.additionalBlocksStatuses )
+						);
+					}
+
 					formErrors.value = [];
 					// Bump the submitCount (to re-render the logs) after scrolling
 					// because the log tables may change the length of the page.
 					submitCount.value++;
 					// Hide the form if the block was successful.
 					formVisible.value = false;
+					// Reset the form so no block data leaks into the next block (T384822).
+					store.resetForm( false, false );
+					// Fire clientside hook for scripts that want to do stuff post-blocking.
+					// This is documented in init.js since JSDoc doesn't parse Vue files (T360456).
+					mw.hook( 'SpecialBlock.block' ).fire( result.block );
 				} )
 				.fail( ( _, errorObj ) => {
-					formErrors.value = [ errorObj.error.info ];
-					success.value = false;
+					formErrors.value = errorObj.errors.map( ( e ) => e.html );
+					blockAdded.value = false;
 				} )
 				.always( () => {
 					formSubmitted.value = false;
+					blockRemoved.value = false;
 					messagesContainer.value.scrollIntoView( { behavior: 'smooth' } );
 				} );
 		}
+
+		// We need to reset the form so no block data is set.
+		watch( removalConfirmationOpen, ( newValue ) => {
+			if ( !newValue ) {
+				store.resetForm();
+			}
+		} );
+
+		watch( formVisible, ( newValue ) => {
+			// Notify scripts that the form visibility changed. Documented in init.js.
+			mw.hook( 'SpecialBlock.form' ).fire( newValue, store.targetUser, store.blockId );
+
+			// Submit the form if form is visible and 'Enter' is pressed
+			if ( newValue ) {
+				nextTick( () => {
+					const blockForm = document.querySelector( '.mw-block__block-form' );
+					blockForm.addEventListener( 'keypress', ( event ) => {
+						if ( event.key === 'Enter' ) {
+							onFormSubmission( event );
+						}
+					} );
+				} );
+			}
+		} );
+
+		// Show the 'Add block' button if:
+		// * the target user exists AND EITHER
+		//   * multiblocks is enabled, OR
+		//   * multiblocks is disabled AND the user is not already blocked
+		const shouldShowAddBlockButton = computed(
+			() => store.targetExists && (
+				store.enableMultiblocks || !alreadyBlocked.value
+			)
+		);
 
 		return {
 			store,
 			messagesContainer,
 			formErrors,
-			success,
+			formDirty,
+			blockAdded,
+			blockRemoved,
+			shouldShowAddBlockButton,
 			submitCount,
-			submitButtonMessage,
+			blockSavedMessage,
+			additionalBlocksMessage,
+			blocksAdditionalErrors,
+			formHeaderText,
 			enableMultiblocks,
 			blockShowSuppressLog,
 			canDeleteLogEntry,
@@ -357,12 +547,15 @@ module.exports = exports = defineComponent( {
 			removalConfirmationOpen,
 			onCreateBlock,
 			onEditBlock,
+			onFormCancel,
 			onFormSubmission,
 			doBlock,
 			onRemoveBlock,
 			doRemoveBlock,
 			showBlockLogs,
-			showBlockForm
+			formVisible,
+			wasRedirected,
+			mw
 		};
 	}
 } );
@@ -384,8 +577,14 @@ module.exports = exports = defineComponent( {
 
 // HACK: CdxMessage doesn't support v-html, so we need an inner div,
 // and apply the expected styling to the contents therein.
-.mw-block-messages .cdx-message__content > div > :first-child {
-	margin-top: 0;
+.mw-block-messages .cdx-message__content > div {
+	> :first-child {
+		margin-top: 0;
+	}
+
+	> :last-child {
+		margin-bottom: 0;
+	}
 }
 
 .mw-block-hideuser .cdx-checkbox__label .cdx-label__label__text {
@@ -396,22 +595,13 @@ module.exports = exports = defineComponent( {
 	margin-top: @spacing-200;
 }
 
-.mw-block-submit.cdx-button {
-	margin-top: @spacing-100;
-}
-
-.mw-block-error {
-	margin-left: @spacing-75;
-}
-
 .mw-block-confirm {
 	font-weight: @font-weight-normal;
 }
 
-// Hide the log and convenience links showing at the bottom of page.
-.mw-ipb-conveniencelinks,
-.mw-warning-with-logexcerpt {
-	display: none;
+.cdx-button.mw-block-submit,
+.cdx-button.mw-block__create-button {
+	margin-top: @spacing-100;
 }
 
 // Lower opacity and remove pointer events from accordions while the disabled state is active.
@@ -425,11 +615,24 @@ module.exports = exports = defineComponent( {
 .mw-block-fieldset {
 	min-width: unset;
 
-	// Uset font-size until T377902 is resolved.
+	// Unset font-size until T377902 is resolved.
 	font-size: unset;
 
 	legend {
-		font-size: unset;
+		// Match font-size of accordion labels. T383921.
+		font-size: @font-size-medium;
+		font-weight: inherit;
+	}
+
+	legend .cdx-label__label,
+	legend .cdx-label__description {
+		margin-bottom: @spacing-50;
+	}
+
+	// We need :is-fieldset="true" on the outer <fieldset> for disabled state to propagate
+	// to children. :is-fieldset="true" forces a <legend> which we don't want.
+	& > legend:first-of-type {
+		display: none;
 	}
 }
 </style>

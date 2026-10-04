@@ -136,7 +136,7 @@
 	"underline-always": "Kaiken",
 	"tog-showhiddencats": "Ozuta peittud kategorijad",
 	"tog-showrollbackconfirmation": "Ozuta, midä pidab vahvištoitta, konz minä tahtoin heitta tehtud azjad",
-	"tog-forcesafemode": "Tege kaiken [[mw:Manual:Safemode|varumatomaks režimaks]]",
+	"tog-forcesafemode": "Tege kaiken [[mw:Special:MyLanguage/Manual:Safemode|varumatomaks režimaks]]",
 	"prefs-help-forcesafemode": "Saupta viki-skriptad da stiliden lugetišed.",
 	"prefs-editing": "Vajehtamine",
 	"prefs-description-editing": "Ladi, kut sinä teged, tarkištad da kacud vajehtusid.",
@@ -220,6 +220,7 @@
 	"search-thumbnail-extra-namespaces-label": "Ozuta kuvaižed eriližes erištos: Ecind radpöudol",
 	"search-thumbnail-extra-namespaces-message": "Ozutab kuvaižiden $1 {{PLURAL:$2|nimiavaruden|nimiavaruziden}} satusid {{#special:search}} lehtpolel",
 	"prefs-advancedsearchoptions": "Ližaopcijad",
+	"prefs-misc": "Toine",
 	"prefs-reset-intro": "Sinä void kävutada necidä lehtpol't, miše udištada saitan valičused sanumata.\nNecidä ei sa heitta.",
 	"prefs-reset-confirm": "Ka, minä tahtoin heitta minun valičusid.",
 	"restoreprefs": "Udištoita sanumata kaik vajehtused"

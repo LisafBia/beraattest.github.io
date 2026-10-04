@@ -66,17 +66,14 @@
 		 * @return {jQuery.Promise}
 		 */
 		loadMessagesIfMissing: function ( messages, options ) {
-			messages = Array.isArray( messages ) ? messages : [ messages ];
-			const missing = messages.filter(
-				// eslint-disable-next-line mediawiki/msg-doc
-				( msg ) => !mw.message( msg ).exists()
-			);
-
-			if ( missing.length === 0 ) {
-				return $.Deferred().resolve();
+			if ( !Array.isArray( messages ) ) {
+				messages = [ messages ];
 			}
+			const missing = messages.filter(
 
-			return this.loadMessages( missing, options );
+				( msg ) => msg && !mw.message( msg ).exists()
+			);
+			return missing.length ? this.loadMessages( missing, options ) : $.Deferred().resolve();
 		}
 	} );
 

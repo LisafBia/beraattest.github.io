@@ -4,21 +4,7 @@
  *
  * Copyright © 2005, Ævar Arnfjörð Bjarmason
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @author Ævar Arnfjörð Bjarmason <avarab@gmail.com>
  * @ingroup Maintenance
@@ -28,6 +14,7 @@
 require_once __DIR__ . '/Maintenance.php';
 // @codeCoverageIgnoreEnd
 
+use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\Maintenance\Maintenance;
 
 /**
@@ -43,6 +30,7 @@ class ChangePassword extends Maintenance {
 		$this->addOption( "password", "The password to use", false, true );
 		// phpcs:ignore Generic.Files.LineLength.TooLong
 		$this->addOption( "passwordstdin", "Makes the script read the password from stdin instead. Cannot be used alongside --password", false, false );
+		$this->addOption( 'reason', 'Reason for the password change (ticket number etc)', false, true );
 		$this->addDescription( "Change a user's password" );
 	}
 
@@ -57,6 +45,17 @@ class ChangePassword extends Maintenance {
 		] );
 		if ( $status->isGood() ) {
 			$this->output( "Password set for " . $user->getName() . "\n" );
+
+			LoggerFactory::getInstance( 'authentication' )->info(
+				'Password for {user} changed via changePassword.php', [
+					'user' => $user->getName(),
+					'reason' => $this->getOption( 'reason', '' ),
+				]
+			);
+
+			$invalidator = $this->createChild( InvalidateUserSessions::class );
+			$invalidator->setOption( 'user', $user->getName() );
+			$invalidator->execute();
 		} else {
 			$this->fatalError( $status );
 		}

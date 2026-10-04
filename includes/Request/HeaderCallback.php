@@ -2,7 +2,9 @@
 
 namespace MediaWiki\Request;
 
+use MediaWiki\Debug\MWDebug;
 use MediaWiki\Http\Telemetry;
+use MediaWiki\Logger\LoggerFactory;
 use RuntimeException;
 
 /**
@@ -22,15 +24,20 @@ class HeaderCallback {
 	 * @since 1.29
 	 */
 	public static function register() {
-		// T261260 load the WebRequest class, which will be needed in callback().
-		// Autoloading seems unreliable in header callbacks, and in the case of a web
-		// request (ie. in all cases where the request might be performance-sensitive)
-		// it will have to be loaded at some point anyway.
-		// This can be removed once we require PHP 8.0+.
-		class_exists( WebRequest::class );
-		class_exists( Telemetry::class );
+		if ( version_compare( PHP_VERSION, '8.6', '<' ) ) {
+			// This bug has been fixed in PHP 8.6:
+			// https://github.com/php/php-src/issues/20619#issuecomment-3828242097
 
-		header_register_callback( [ __CLASS__, 'callback' ] );
+			// T261260 load some classes which will be needed in callback().
+			// Autoloading seems unreliable in header callbacks, and in the case of a web
+			// request (ie. in all cases where the request might be performance-sensitive)
+			// these classes will have to be loaded at some point anyway.
+			class_exists( WebRequest::class );
+			class_exists( LoggerFactory::class );
+			class_exists( Telemetry::class );
+		}
+
+		header_register_callback( self::callback( ... ) );
 	}
 
 	/**
@@ -60,7 +67,7 @@ class HeaderCallback {
 			) {
 				header( 'Expires: Thu, 01 Jan 1970 00:00:00 GMT' );
 				header( 'Cache-Control: private, max-age=0, s-maxage=0' );
-				\MediaWiki\Logger\LoggerFactory::getInstance( 'cache-cookies' )->warning(
+				LoggerFactory::getInstance( 'cache-cookies' )->warning(
 					'Cookies set on {url} with Cache-Control "{cache-control}"', [
 						'url' => WebRequest::getGlobalRequestURL(),
 						'set-cookie' => self::sanitizeSetCookie( $headers['set-cookie'] ),
@@ -90,12 +97,12 @@ class HeaderCallback {
 	 * @since 1.29
 	 */
 	public static function warnIfHeadersSent() {
-		if ( headers_sent() && !self::$messageSent ) {
+		if ( !self::$messageSent && headers_sent( $filename, $line ) ) {
 			self::$messageSent = true;
-			\MediaWiki\Debug\MWDebug::warning( 'Headers already sent, should send headers earlier than ' .
+			MWDebug::warning( 'Headers already sent, should send headers earlier than ' .
 				wfGetCaller( 3 ) );
-			$logger = \MediaWiki\Logger\LoggerFactory::getInstance( 'headers-sent' );
-			$logger->error( 'Warning: headers were already sent from the location below', [
+			$logger = LoggerFactory::getInstance( 'headers-sent' );
+			$logger->error( 'Warning: headers were already sent (output started at ' . $filename . ':' . $line . ')', [
 				'exception' => self::$headersSentException,
 				'detection-trace' => new RuntimeException( 'Detected here' ),
 			] );
@@ -122,6 +129,3 @@ class HeaderCallback {
 		return implode( "\n", $sanitizedValues );
 	}
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( HeaderCallback::class, 'MediaWiki\\HeaderCallback' );

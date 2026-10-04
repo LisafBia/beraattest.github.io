@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 namespace MediaWiki\Rest\Handler\Helper;
@@ -24,6 +10,7 @@ use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\ResponseInterface;
 use Wikimedia\Bcp47Code\Bcp47Code;
 use Wikimedia\Parsoid\Core\ClientError;
+use Wikimedia\Parsoid\Core\HtmlPageBundle;
 
 /**
  * @since 1.40
@@ -45,6 +32,20 @@ interface HtmlOutputHelper {
 	 * @throws ClientError
 	 */
 	public function getHtml(): ParserOutput;
+
+	/**
+	 * Fetch the rendering of a given page as a full-document HtmlPageBundle.
+	 *
+	 * Unlike getHtml() (whose ParserOutput carries body-only content), the
+	 * returned bundle always carries the full document (`<html><head>…</head>
+	 * <body>…</body></html>`). Use this when emitting a full document to a
+	 * client.
+	 *
+	 * @return HtmlPageBundle
+	 * @throws LocalizedHttpException
+	 * @throws ClientError
+	 */
+	public function getPageBundle(): HtmlPageBundle;
 
 	/**
 	 * Returns an ETag uniquely identifying the HTML output.

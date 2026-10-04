@@ -14,9 +14,6 @@ class BagOStuffStatsStore implements StatsStore {
 	/** @var BagOStuff */
 	private $cache;
 
-	/**
-	 * @param BagOStuff $cache
-	 */
 	public function __construct( BagOStuff $cache ) {
 		$this->cache = $cache;
 	}
@@ -35,6 +32,7 @@ class BagOStuffStatsStore implements StatsStore {
 		}
 	}
 
+	/** @inheritDoc */
 	public function incr( array $values, $ttl ) {
 		foreach ( $values as $key => $value ) {
 			$this->cache->incrWithInit(
@@ -51,6 +49,7 @@ class BagOStuffStatsStore implements StatsStore {
 		$this->cache->deleteMulti( $keys, BagOStuff::WRITE_BACKGROUND );
 	}
 
+	/** @inheritDoc */
 	public function query( array $keys ) {
 		return $this->cache->getMulti( $keys );
 	}

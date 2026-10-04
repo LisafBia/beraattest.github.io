@@ -90,8 +90,8 @@ TagItemWidget.prototype.updateUiBasedOnState = function () {
 	if ( labelMsg ) {
 		this.setLabel(
 			$( '<bdi>' ).append(
-				// eslint-disable-next-line mediawiki/msg-doc
-				mw.message( labelMsg, mw.html.escape( this.itemModel.getLabel() ) ).parseDom()
+
+				mw.message( labelMsg, this.itemModel.getLabel() ).parseDom()
 			)
 		);
 	} else {

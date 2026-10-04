@@ -2,13 +2,13 @@
 
 namespace MediaWiki\Tests\Maintenance;
 
-use BaseDump;
+use MediaWiki\Export\BaseDump;
 use MediaWiki\Revision\SlotRecord;
 use MediaWikiIntegrationTestCase;
 
 /**
  * @group Dump
- * @covers \BaseDump
+ * @covers \MediaWiki\Export\BaseDump
  */
 class BaseDumpTest extends MediaWikiIntegrationTestCase {
 
@@ -32,7 +32,7 @@ class BaseDumpTest extends MediaWikiIntegrationTestCase {
 	/**
 	 * asserts that a prefetch yields an expected string
 	 *
-	 * @param string|null $expected The exepcted result of the prefetch
+	 * @param string|null $expected The expected result of the prefetch
 	 * @param int $page The page number to prefetch the text for
 	 * @param int $revision The revision number to prefetch the text for
 	 * @param string $slot The role name of the slot to fetch

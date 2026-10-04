@@ -6,7 +6,7 @@
 	 *
 	 * A simple example:
 	 * ```
-	 * var file = new OO.ui.SelectFileWidget(),
+	 * var file = new OO.ui.SelectFileInputWidget(),
 	 *   button = new OO.ui.ButtonWidget( { label: 'Save' } ),
 	 *   upload = new mw.Upload;
 	 *
@@ -50,9 +50,15 @@
 
 		this.watchlist = false;
 		this.text = '';
+		this.autotext = false;
 		this.comment = '';
+		this.license = '';
+		this.copyStatus = '';
+		this.source = '';
 		this.filename = null;
 		this.file = null;
+		this.ignoreWarnings = false;
+		this.chunkSize = 5 * 1024 * 1024;
 		this.setState( Upload.State.NEW );
 
 		this.imageinfo = undefined;
@@ -80,6 +86,18 @@
 	 */
 	UP.setText = function ( text ) {
 		this.text = text;
+	};
+
+	/**
+	 * Set whether the file page wikitext should be generated server-side from
+	 * the comment, license, copyright status and source, overriding the text.
+	 *
+	 * @name mw.Upload.prototype.setAutoText
+	 * @method
+	 * @param {boolean} autotext
+	 */
+	UP.setAutoText = function ( autotext ) {
+		this.autotext = autotext;
 	};
 
 	/**
@@ -162,6 +180,61 @@
 	};
 
 	/**
+	 * Set the license template for the upload.
+	 *
+	 * @name mw.Upload.prototype.setLicense
+	 * @method
+	 * @param {string} license
+	 */
+	UP.setLicense = function ( license ) {
+		this.license = license;
+	};
+
+	/**
+	 * Set the copyright status for the upload.
+	 *
+	 * @name mw.Upload.prototype.setCopyStatus
+	 * @method
+	 * @param {string} copyStatus
+	 */
+	UP.setCopyStatus = function ( copyStatus ) {
+		this.copyStatus = copyStatus;
+	};
+
+	/**
+	 * Set the source for the upload.
+	 *
+	 * @name mw.Upload.prototype.setSource
+	 * @method
+	 * @param {string} source
+	 */
+	UP.setSource = function ( source ) {
+		this.source = source;
+	};
+
+	/**
+	 * Set whether to ignore upload warnings when publishing.
+	 *
+	 * @name mw.Upload.prototype.setIgnoreWarnings
+	 * @method
+	 * @param {boolean} ignoreWarnings
+	 */
+	UP.setIgnoreWarnings = function ( ignoreWarnings ) {
+		this.ignoreWarnings = ignoreWarnings;
+	};
+
+	/**
+	 * Set the chunk size used for chunked uploads, in bytes.
+	 *
+	 * @name mw.Upload.prototype.setChunkSize
+	 * @method
+	 * @param {number} chunkSize
+	 */
+	UP.setChunkSize = function ( chunkSize ) {
+		this.chunkSize = chunkSize;
+	};
+
+	/**
 	 * Get the text of the file page, to be created on file upload.
 	 *
 	 * @name mw.Upload.prototype.getText
@@ -170,6 +243,17 @@
 	 */
 	UP.getText = function () {
 		return this.text;
+	};
+
+	/**
+	 * Get whether the file page wikitext should be generated server-side.
+	 *
+	 * @name mw.Upload.prototype.getAutoText
+	 * @method
+	 * @return {boolean}
+	 */
+	UP.getAutoText = function () {
+		return this.autotext;
 	};
 
 	/**
@@ -214,6 +298,61 @@
 	 */
 	UP.getComment = function () {
 		return this.comment;
+	};
+
+	/**
+	 * Get the license for the upload.
+	 *
+	 * @name mw.Upload.prototype.getLicense
+	 * @method
+	 * @return {string}
+	 */
+	UP.getLicense = function () {
+		return this.license;
+	};
+
+	/**
+	 * Get the copyright status for the upload.
+	 *
+	 * @name mw.Upload.prototype.getCopyStatus
+	 * @method
+	 * @return {string}
+	 */
+	UP.getCopyStatus = function () {
+		return this.copyStatus;
+	};
+
+	/**
+	 * Get the source for the upload.
+	 *
+	 * @name mw.Upload.prototype.getSource
+	 * @method
+	 * @return {string}
+	 */
+	UP.getSource = function () {
+		return this.source;
+	};
+
+	/**
+	 * Check if upload warnings will be ignored when publishing.
+	 *
+	 * @name mw.Upload.prototype.getIgnoreWarnings
+	 * @method
+	 * @return {boolean}
+	 */
+	UP.getIgnoreWarnings = function () {
+		return this.ignoreWarnings;
+	};
+
+	/**
+	 * Get the chunk size used for chunked uploads, in bytes.
+	 *
+	 * @name mw.Upload.prototype.getChunkSize
+	 * @method
+	 * @return {number}
+	 */
+	UP.getChunkSize = function () {
+		return this.chunkSize;
 	};
 
 	/**
@@ -306,11 +445,12 @@
 		this.setState( Upload.State.UPLOADING );
 
 		return this.api.chunkedUpload( this.getFile(), {
-			watchlist: ( this.getWatchlist() ) ? 1 : undefined,
+			watchlist: ( this.getWatchlist() ) ? 'watch' : undefined,
+			ignorewarnings: this.getIgnoreWarnings(),
 			comment: this.getComment(),
 			filename: this.getFilename(),
 			text: this.getText()
-		} ).then( ( result ) => {
+		}, this.getChunkSize() ).then( ( result ) => {
 			this.setState( Upload.State.UPLOADED );
 			this.imageinfo = result.upload.imageinfo;
 			return result;
@@ -345,7 +485,7 @@
 		this.stashPromise = this.api.chunkedUploadToStash( this.getFile(), {
 			ignorewarnings: true,
 			filename: this.getFilename()
-		} ).then( ( finishStash ) => {
+		}, this.getChunkSize() ).then( ( finishStash ) => {
 			this.setState( Upload.State.STASHED );
 			return finishStash;
 		}, ( errorCode, result ) => {
@@ -355,7 +495,9 @@
 				this.setState( Upload.State.ERROR, result );
 			}
 			return $.Deferred().reject( errorCode, result );
-		} );
+		},
+		// jQuery's .then() only relays progress notifications with a filter.
+		( progressValue ) => progressValue );
 
 		return this.stashPromise;
 	};
@@ -376,11 +518,15 @@
 			this.setState( Upload.State.UPLOADING );
 
 			return finishStash( {
-				ignorewarnings: false,
-				watchlist: ( this.getWatchlist() ) ? 1 : undefined,
+				watchlist: ( this.getWatchlist() ) ? 'watch' : undefined,
+				ignorewarnings: this.getIgnoreWarnings(),
 				comment: this.getComment(),
 				filename: this.getFilename(),
-				text: this.getText()
+				text: this.getText(),
+				license: this.getLicense(),
+				copystatus: this.getCopyStatus(),
+				source: this.getSource(),
+				autotext: this.getAutoText()
 			} ).then( ( result ) => {
 				this.setState( Upload.State.UPLOADED );
 				this.imageinfo = result.upload.imageinfo;

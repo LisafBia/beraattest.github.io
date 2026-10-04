@@ -83,7 +83,6 @@ class ClientHtmlTest extends TestCase {
 				],
 			],
 			'styleDeprecations' => [
-				// phpcs:ignore Generic.Files.LineLength.TooLong
 				"This page is using the deprecated ResourceLoader module \"test.styles.deprecated\".\nDeprecation message."
 			],
 		];
@@ -129,21 +128,6 @@ class ClientHtmlTest extends TestCase {
 	}
 
 	/**
-	 * Confirm that 'target' is passed down to the startup module's load url.
-	 */
-	public function testGetHeadHtmlWithTarget() {
-		$client = new ClientHtml(
-			self::makeContext(),
-			[ 'target' => 'example' ]
-		);
-		$expected = '<script>document.documentElement.className="client-js";</script>' . "\n"
-			. '<script async="" src="/w/load.php?lang=nl&amp;modules=startup&amp;only=scripts&amp;raw=1&amp;target=example"></script>';
-		// phpcs:enable
-
-		$this->assertSame( $expected, (string)$client->getHeadHtml() );
-	}
-
-	/**
 	 * Confirm that 'safemode' is passed down to startup.
 	 */
 	public function testGetHeadHtmlWithSafemode() {
@@ -153,21 +137,6 @@ class ClientHtmlTest extends TestCase {
 		);
 		$expected = '<script>document.documentElement.className="client-js";</script>' . "\n"
 			. '<script async="" src="/w/load.php?lang=nl&amp;modules=startup&amp;only=scripts&amp;raw=1&amp;safemode=1"></script>';
-		// phpcs:enable
-
-		$this->assertSame( $expected, (string)$client->getHeadHtml() );
-	}
-
-	/**
-	 * Confirm that a null 'target' is the same as no target.
-	 */
-	public function testGetHeadHtmlWithNullTarget() {
-		$client = new ClientHtml(
-			self::makeContext(),
-			[ 'target' => null ]
-		);
-		$expected = '<script>document.documentElement.className="client-js";</script>' . "\n"
-			. '<script async="" src="/w/load.php?lang=nl&amp;modules=startup&amp;only=scripts&amp;raw=1"></script>';
 		// phpcs:enable
 
 		$this->assertSame( $expected, (string)$client->getHeadHtml() );
@@ -244,8 +213,8 @@ class ClientHtmlTest extends TestCase {
 				'modules' => [ 'test.styles.pure', 'test.styles.mixed' ],
 				'only' => Module::TYPE_STYLES,
 				'extra' => [],
-				'output' => '<link rel="stylesheet" href="/w/load.php?debug=1&amp;lang=nl&amp;modules=test.styles.mixed&amp;only=styles">' . "\n"
-					. '<link rel="stylesheet" href="/w/load.php?debug=1&amp;lang=nl&amp;modules=test.styles.pure&amp;only=styles">',
+				'output' => '<link rel="stylesheet" href="/w/load.php?debug=2&amp;lang=nl&amp;modules=test.styles.mixed&amp;only=styles">' . "\n"
+					. '<link rel="stylesheet" href="/w/load.php?debug=2&amp;lang=nl&amp;modules=test.styles.pure&amp;only=styles">',
 			],
 			[
 				'context' => [ 'debug' => 'false' ],
@@ -319,16 +288,16 @@ class ClientHtmlTest extends TestCase {
 	 * @covers \MediaWiki\ResourceLoader\ResourceLoader
 	 */
 	public function testMakeLoad(
-		array $contextQuery,
+		array $context,
 		array $modules,
-		$type,
-		array $extraQuery,
-		$expected
+		$only,
+		array $extra,
+		$output
 	) {
-		$context = self::makeContext( $contextQuery );
-		$context->getResourceLoader()->register( self::makeSampleModules() );
-		$actual = ClientHtml::makeLoad( $context, $modules, $type, $extraQuery, false );
-		$expected = self::expandVariables( $expected );
+		$contextObj = self::makeContext( $context );
+		$contextObj->getResourceLoader()->register( self::makeSampleModules() );
+		$actual = ClientHtml::makeLoad( $contextObj, $modules, $only, $extra, false );
+		$expected = self::expandVariables( $output );
 		$this->assertSame( $expected, (string)$actual );
 	}
 
@@ -354,7 +323,6 @@ class ClientHtmlTest extends TestCase {
 				'lang' => 'nl',
 				'skin' => 'fallback',
 				'user' => 'Example',
-				'target' => 'phpunit',
 			], $extraQuery ) )
 		);
 	}
@@ -412,8 +380,6 @@ class ClientHtmlTest extends TestCase {
 			'test.ordering.d' => [ 'shouldEmbed' => true, 'styles' => '.orderingD{}' ],
 			'test.ordering.e' => [ 'shouldEmbed' => false ],
 		];
-		return array_map( static function ( $options ) {
-			return self::makeModule( $options );
-		}, $modules );
+		return array_map( self::makeModule( ... ), $modules );
 	}
 }

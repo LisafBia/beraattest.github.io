@@ -7,32 +7,37 @@ use MediaWiki\Config\ServiceOptions;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Rest\BasicAccess\StaticBasicAuthorizer;
 use MediaWiki\Rest\CorsUtils;
+use MediaWiki\Rest\ErrorFormatterV1;
+use MediaWiki\Rest\ErrorFormatterV2;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\HttpException;
+use MediaWiki\Rest\Module\ModuleInfo;
+use MediaWiki\Rest\Module\ModuleManager;
+use MediaWiki\Rest\Module\ModuleMode;
+use MediaWiki\Rest\PathTemplateMatcher\ModuleConfigurationException;
 use MediaWiki\Rest\RedirectException;
 use MediaWiki\Rest\Reporter\ErrorReporter;
 use MediaWiki\Rest\RequestData;
 use MediaWiki\Rest\RequestInterface;
 use MediaWiki\Rest\ResponseException;
-use MediaWiki\Rest\ResponseFactory;
+use MediaWiki\Rest\RestbaseCompatErrorFormatter;
 use MediaWiki\Rest\Router;
 use MediaWiki\Rest\StringStream;
 use MediaWiki\Rest\Validator\JsonBodyValidator;
 use MediaWiki\Tests\Rest\Handler\HelloHandler;
 use MediaWiki\User\UserIdentityValue;
+use MediaWiki\Utils\UrlUtils;
 use MediaWikiUnitTestCase;
 use PHPUnit\Framework\Assert;
 use PHPUnit\Framework\MockObject\MockObject;
-use Psr\Log\NullLogger;
 use RuntimeException;
 use Throwable;
-use UDPTransport;
+use UnexpectedValueException;
 use Wikimedia\ObjectCache\HashBagOStuff;
 use Wikimedia\ParamValidator\ParamValidator;
-use Wikimedia\Stats\OutputFormats;
-use Wikimedia\Stats\StatsCache;
 use Wikimedia\Stats\StatsFactory;
 use Wikimedia\TestingAccessWrapper;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 /**
  * @covers \MediaWiki\Rest\Router
@@ -87,23 +92,6 @@ class RouterTest extends MediaWikiUnitTestCase {
 			'errorReporter' => $mockErrorReporter,
 			'basicAuth' => new StaticBasicAuthorizer( $authError ),
 		] );
-	}
-
-	private function createMockStatsFactory( string $expectedValue ): StatsFactory {
-		$statsCache = new StatsCache();
-		$emitter = OutputFormats::getNewEmitter(
-			'mediawiki',
-			$statsCache,
-			OutputFormats::getNewFormatter( OutputFormats::DOGSTATSD )
-		);
-
-		$transport = $this->createMock( UDPTransport::class );
-
-		$transport->expects( $this->once() )->method( "emit" )
-			->with( $this->matchesRegularExpression( $expectedValue ) );
-
-		$emitter = $emitter->withTransport( $transport );
-		return new StatsFactory( $statsCache, $emitter, new NullLogger );
 	}
 
 	public function testEmptyPath() {
@@ -165,7 +153,7 @@ class RouterTest extends MediaWikiUnitTestCase {
 	}
 
 	public function testCorsPreflight() {
-		$cors = $this->getCorsUtils();
+		$cors = $this->getCorsUtils( true );
 
 		$request = new RequestData( [
 			'uri' => new Uri( '/rest/mock/v1/RouterTest/hello' ),
@@ -176,9 +164,66 @@ class RouterTest extends MediaWikiUnitTestCase {
 
 		$response = $router->execute( $request );
 		$this->assertSame( 204, $response->getStatusCode() );
+		// Allow-Methods comes from CorsUtils::createPreflightResponse() (in Module).
 		$this->assertSame(
 			[ 'HEAD', 'GET', ],
 			$response->getHeader( 'Access-Control-Allow-Methods' )
+		);
+		// Allow-Origin comes from CorsUtils::modifyResponse(), applied in
+		// Router::execute(). The preflight response is thrown as a
+		// ResponseException from Module and must still reach modifyResponse().
+		$this->assertSame(
+			'*',
+			$response->getHeaderLine( 'Access-Control-Allow-Origin' ),
+			'Access-Control-Allow-Origin must be present on every response'
+		);
+	}
+
+	public static function provideCorsHeadersApplied() {
+		// Router::execute() must apply CORS headers to every response it
+		// returns, regardless of which layer produced it.
+		yield 'normal handler response (module-level 200)' =>
+			[ '/rest/mock/v1/RouterTest/hello', 'GET', 200 ];
+		yield 'no route match (module-level 404)' =>
+			[ '/rest/bogus', 'GET', 404 ];
+		yield 'wrong method (module-level 405)' =>
+			[ '/rest/mock/v1/RouterTest/hello', 'TRACE', 405 ];
+		// Router-level: splitPath() rejects the prefix before any Module runs.
+		yield 'prefix mismatch (router-level 404)' =>
+			[ '/bogus', 'GET', 404 ];
+		// Router-level: doExecute() redirects the empty path before any Module runs.
+		yield 'empty path redirect (router-level 308)' =>
+			[ '/rest', 'GET', 308 ];
+	}
+
+	/**
+	 * @dataProvider provideCorsHeadersApplied
+	 *
+	 * CORS headers are applied in Router::execute() rather than per-Module, so
+	 * they cover every response path uniformly: module-level responses (success
+	 * and errors) as well as router-level responses (redirects and prefix
+	 * mismatches) that never reach a Module.
+	 */
+	public function testCorsHeadersAppliedToAllResponses(
+		string $uri, string $method, int $expectedStatus
+	) {
+		$request = new RequestData( [ 'uri' => new Uri( $uri ), 'method' => $method ] );
+		$router = $this->createRouter( $request );
+		$router->setCors( $this->getCorsUtils( true ) );
+
+		$response = $router->execute( $request );
+
+		$this->assertSame(
+			$expectedStatus,
+			$response->getStatusCode(),
+			"Status code should match. Body: " . $response->getBody()
+		);
+
+		// The essential assertion: modifyResponse() ran for this response path.
+		$this->assertSame(
+			'*',
+			$response->getHeaderLine( 'Access-Control-Allow-Origin' ),
+			'Access-Control-Allow-Origin must be present on every response'
 		);
 	}
 
@@ -238,20 +283,34 @@ class RouterTest extends MediaWikiUnitTestCase {
 
 	public function testHttpException() {
 		$request = new RequestData( [ 'uri' => new Uri( '/rest/mock/v1/RouterTest/throw' ) ] );
+		$statsHelper = StatsFactory::newUnitTestingHelper();
 		$router = $this->createRouter( $request );
+		$router->setStats( $statsHelper->getStatsFactory() );
 
-		$stats = $this->createMockStatsFactory(
-			"/^mediawiki\.rest_api_errors_total:1\|c\|#path:mock_v1_RouterTest_throw,method:GET,status:555\nmediawiki\.stats_buffered_total:1\|c$/"
-		);
-		$router->setStats( $stats );
-
+		ConvertibleTimestamp::setFakeTime( '20110401090000' );
 		$response = $router->execute( $request );
-		$stats->flush();
-		$this->assertSame( 555, $response->getStatusCode(), (string)$response->getBody() );
 		$body = $response->getBody();
 		$body->rewind();
 		$data = json_decode( $body->getContents(), true );
+		$this->assertSame( 555, $response->getStatusCode(), (string)$response->getBody() );
 		$this->assertSame( 'Mock error', $data['message'] );
+
+		// Metrics
+		$metrics = $statsHelper->consumeAllFormatted();
+		$this->assertSame(
+			'mediawiki.rest_api_errors_total:1|c|#path:mock_v1_RouterTest_throw,method:GET,status:555',
+			$metrics[0]
+		);
+
+		// Handler class is mocked so we need to allow for a dynamic class name
+		$this->assertMatchesRegularExpression(
+			'/mediawiki\.rest_api_modules_hit_total:1|c|#api_type:REST_API,api_module:mock_v1,api_endpoint:MediaWiki_Rest_Handler_anonymous_var_www_html_w_tests_phpunit_unit_includes_Rest_MockHandlerFactory_php_(a-Z0-9_)+,path:mock_v1_RouterTest_throw,method:GET,status:555/',
+			$metrics[1]
+		);
+		$this->assertMatchesRegularExpression(
+			'/mediawiki\.rest_api_modules_latency:1|ms|#api_type:REST_API,api_module:mock_v1,api_endpoint:MediaWiki_Rest_Handler_anonymous_var_www_html_w_tests_phpunit_unit_includes_Rest_MockHandlerFactory_php_(a-Z0-9_)+,path:mock_v1_RouterTest_throw,method:GET,status:555/',
+			$metrics[2]
+		);
 	}
 
 	public function testFatalException() {
@@ -268,18 +327,32 @@ class RouterTest extends MediaWikiUnitTestCase {
 	}
 
 	public function testRedirectException() {
+		ConvertibleTimestamp::setFakeTime( '20110401090000' );
 		$request = new RequestData( [ 'uri' => new Uri( '/rest/mock/v1/RouterTest/throwRedirect' ) ] );
+		$statsHelper = StatsFactory::newUnitTestingHelper();
 		$router = $this->createRouter( $request );
-
-		$stats = $this->createMockStatsFactory(
-			"/^mediawiki\.rest_api_latency_seconds:\d+\.\d+\|ms\|#path:mock_v1_RouterTest_throwRedirect,method:GET,status:301\nmediawiki\.stats_buffered_total:1\|c$/"
-		);
-		$router->setStats( $stats );
+		$router->setStats( $statsHelper->getStatsFactory() );
 
 		$response = $router->execute( $request );
-		$stats->flush();
 		$this->assertSame( 301, $response->getStatusCode(), (string)$response->getBody() );
 		$this->assertSame( 'http://example.com', $response->getHeaderLine( 'Location' ) );
+
+		// Metrics
+		$metrics = $statsHelper->consumeAllFormatted();
+		$this->assertSame(
+			'mediawiki.rest_api_latency_seconds:1|ms|#path:mock_v1_RouterTest_throwRedirect,method:GET,status:301',
+			$metrics[0]
+		);
+
+		// Handler class is mocked so we need to allow for a dynamic class name
+		$this->assertMatchesRegularExpression(
+			'/mediawiki\.rest_api_modules_hit_total:1|c|#api_type:REST_API,api_module:mock_v1,api_endpoint:MediaWiki_Rest_Handler_anonymous_var_www_html_w_tests_phpunit_unit_includes_Rest_MockHandlerFactory_php_(a-Z0-9_)+,path:mock_v1_RouterTest_throwRedirect,method:GET,status:301/',
+			$metrics[1]
+		);
+		$this->assertMatchesRegularExpression(
+			'/mediawiki\.rest_api_modules_latency:1|ms|#api_type:REST_API,api_module:mock_v1,api_endpoint:MediaWiki_Rest_Handler_anonymous_var_www_html_w_tests_phpunit_unit_includes_Rest_MockHandlerFactory_php_(a-Z0-9_)+,path:mock_v1_RouterTest_throwRedirect,method:GET,status:301/',
+			$metrics[2]
+		);
 	}
 
 	public function testRedirectDefinition() {
@@ -292,17 +365,31 @@ class RouterTest extends MediaWikiUnitTestCase {
 	}
 
 	public function testResponseException() {
+		ConvertibleTimestamp::setFakeTime( '20110401090000' );
 		$request = new RequestData( [ 'uri' => new Uri( '/rest/mock/v1/RouterTest/throwWrapped' ) ] );
+		$statsHelper = StatsFactory::newUnitTestingHelper();
 		$router = $this->createRouter( $request );
-
-		$stats = $this->createMockStatsFactory(
-			"/^mediawiki\.rest_api_latency_seconds:\d+\.\d+\|ms\|#path:mock_v1_RouterTest_throwWrapped,method:GET,status:200\nmediawiki\.stats_buffered_total:1\|c$/"
-		);
-		$router->setStats( $stats );
+		$router->setStats( $statsHelper->getStatsFactory() );
 
 		$response = $router->execute( $request );
-		$stats->flush();
 		$this->assertSame( 200, $response->getStatusCode(), (string)$response->getBody() );
+
+		// Metrics
+		$metrics = $statsHelper->consumeAllFormatted();
+		$this->assertSame(
+			'mediawiki.rest_api_latency_seconds:1|ms|#path:mock_v1_RouterTest_throwWrapped,method:GET,status:200',
+			$metrics[0]
+		);
+
+		// Handler class is mocked so we need to allow for a dynamic class name
+		$this->assertMatchesRegularExpression(
+			'/mediawiki\.rest_api_modules_hit_total:1|c|#api_type:REST_API,api_module:mock_v1,api_endpoint:MediaWiki_Rest_Handler_anonymous_var_www_html_w_tests_phpunit_unit_includes_Rest_MockHandlerFactory_php_(a-Z0-9_)+,path:mock_v1_RouterTest_throwWrapped,method:GET,status:200/',
+			$metrics[1]
+		);
+		$this->assertMatchesRegularExpression(
+			'/mediawiki\.rest_api_modules_latency:1|ms|#api_type:REST_API,api_module:mock_v1,api_endpoint:MediaWiki_Rest_Handler_anonymous_var_www_html_w_tests_phpunit_unit_includes_Rest_MockHandlerFactory_php_(a-Z0-9_)+,path:mock_v1_RouterTest_throwWrapped,method:GET,status:200/',
+			$metrics[2]
+		);
 	}
 
 	public function testBasicAccess() {
@@ -356,6 +443,34 @@ class RouterTest extends MediaWikiUnitTestCase {
 			[ '/rest/mock/v1/RouterTest/hello' ],
 			[ '/rest/mock-too/RouterTest/hello/two' ],
 		];
+	}
+
+	public function testDuplicateModuleIdsFromSameFile() {
+		$request = new RequestData( [
+			'uri' => new Uri( '/rest/mock/v1/RouterTest/hello' )
+		] );
+		$router = $this->createRouter(
+			$request,
+			null,
+			[ __DIR__ . '/testRoutes.json', __DIR__ . '/../Rest/testRoutes.json' ]
+		);
+
+		// createRouter will supply a '/' path that ends up with an empty prefix, so we need ''
+		$this->assertSame( [ 'mock/v1', '' ], $router->getModuleIds() );
+	}
+
+	public function testDuplicateModulesIdsFromDifferentFiles() {
+		$request = new RequestData( [
+			'uri' => new Uri( '/rest/mock/v1/RouterTest/hello' )
+		] );
+		$router = $this->createRouter(
+			$request,
+			null,
+			[ __DIR__ . '/testRoutes.json', __DIR__ . '/mock.v1.json' ]
+		);
+
+		$this->expectException( ModuleConfigurationException::class );
+		$this->assertSame( [ 'mock/v1', '' ], $router->getModuleIds() );
 	}
 
 	public static function provideGetRouteUrl() {
@@ -458,7 +573,7 @@ class RouterTest extends MediaWikiUnitTestCase {
 
 	public function testHandlerDisablesBodyParsing() {
 		// This is valid JSON, but not an object.
-		// Automatic parsing will fail, since it re	requires
+		// Automatic parsing will fail, since it requires
 		// an array to be returned.
 		$payload = '"just a test"';
 
@@ -489,7 +604,7 @@ class RouterTest extends MediaWikiUnitTestCase {
 		$this->expectDeprecationAndContinue( '/JsonBodyValidator/' );
 
 		// This is valid JSON, but not an object.
-		// Automatic parsing will fail, since it re	requires
+		// Automatic parsing will fail, since it requires
 		// an array to be returned.
 		$payload = '{ "test": "yes" }';
 
@@ -530,6 +645,7 @@ class RouterTest extends MediaWikiUnitTestCase {
 	 */
 	public static function oldBodyValidatorFactory(): Handler {
 		return new class extends Handler {
+			/** @var bool */
 			private $postValidationSetupCalled = false;
 
 			public function getBodyValidator( $contentType ) {
@@ -644,7 +760,7 @@ class RouterTest extends MediaWikiUnitTestCase {
 		] );
 		$router = $this->createRouter( $request );
 		$response = $router->execute( $request );
-		$this->assertSame( 411, $response->getStatusCode() );
+		$this->assertSame( 400, $response->getStatusCode() );
 	}
 
 	public function testEmptyBodyWithoutContentTypePasses() {
@@ -839,23 +955,110 @@ class RouterTest extends MediaWikiUnitTestCase {
 		$this->assertEquals( 'bar', $validatedParams[ 'pathParam' ], (string)$response->getBody() );
 	}
 
+	public function testGetModuleResponseFactory_missing_schema_version() {
+		$request = new RequestData();
+		$router = $this->newRouter();
+		$wrapper = TestingAccessWrapper::newFromObject( $router );
+
+		// No errorSchemaVersion declared -> reuse the already-injected default ResponseFactory.
+		$rf = $wrapper->getModuleResponseFactory( [], $request );
+		$formatter = TestingAccessWrapper::newFromObject( $rf )->errorFormatter;
+		$this->assertInstanceOf( ErrorFormatterV1::class, $formatter );
+	}
+
+	public static function provideGetModuleResponseFactory_use_schema_version() {
+		yield [ '1.0', ErrorFormatterV1::class ];
+		yield [ '2.0', ErrorFormatterV2::class ];
+		yield [ 'restbase', RestbaseCompatErrorFormatter::class ];
+	}
+
 	/**
-	 * @return CorsUtils
+	 * @dataProvider provideGetModuleResponseFactory_use_schema_version
 	 */
-	private function getCorsUtils(): CorsUtils {
+	public function testGetModuleResponseFactory_use_schema_version( $schemaVersion, $class ) {
+		$router = $this->newRouter();
+		$request = new RequestData();
+		$wrapper = TestingAccessWrapper::newFromObject( $router );
+
+		$rf = $wrapper->getModuleResponseFactory( [ 'errorSchemaVersion' => $schemaVersion ], $request );
+		$formatter = TestingAccessWrapper::newFromObject( $rf )->errorFormatter;
+		$this->assertInstanceOf( $class, $formatter );
+	}
+
+	public function testGetModuleResponseFactory_restbase_compat() {
+		$router = $this->newRouter();
+		$request = new RequestData( [ 'headers' => [ 'x-restbase-compat' => 'true' ] ] );
+		$wrapper = TestingAccessWrapper::newFromObject( $router );
+
+		$rf = $wrapper->getModuleResponseFactory( [], $request );
+		$formatter = TestingAccessWrapper::newFromObject( $rf )->errorFormatter;
+		$this->assertInstanceOf( RestbaseCompatErrorFormatter::class, $formatter );
+	}
+
+	public function testGetModuleResponseFactory_bad_schema_version() {
+		$router = $this->newRouter();
+		$request = new RequestData();
+		$wrapper = TestingAccessWrapper::newFromObject( $router );
+
+		$this->expectException( ModuleConfigurationException::class );
+		$wrapper->getModuleResponseFactory( [ 'errorSchemaVersion' => '99.99' ], $request );
+	}
+
+	public function testGetModuleResponseFactory_V2() {
+		$router = $this->newRouter();
+		$request = new RequestData( [
+			'uri' => new Uri( '/rest/test' ),
+			'method' => 'POST',
+		] );
+		$wrapper = TestingAccessWrapper::newFromObject( $router );
+
+		$rf = $wrapper->getModuleResponseFactory( [ 'errorSchemaVersion' => '2.0' ], $request );
+
+		$body = $rf->createHttpError( 404 )->getBody();
+		$body->rewind();
+		$data = json_decode( $body->getContents(), true );
+
+		$this->assertSame( 'https://wiki.example.com/rest/test', $data['tracing']['url'] );
+	}
+
+	public function testModuleDeclaringSchemaVersionUsesRegisteredFormatter() {
+		$router = $this->newRouter( [
+			'routeFiles' => [ __DIR__ . '/mock-schemaver.v1.json' ],
+		] );
+
+		$request = new RequestData( [ 'uri' => new Uri( '/rest/mockschemaver/v1' ) ] );
+		$module = $router->getModuleForRequest( $request, 'mockschemaver/v1' );
+		$handler = $module->getHandlerForPath( '/test', new RequestData( [] ), true );
+
+		$this->assertNotNull( $module );
+
+		// The module must have been constructed with the ResponseFactory
+		// that uses the formatter registered for its declared schema version.
+		$responseFactory = TestingAccessWrapper::newFromObject( $module )->responseFactory;
+		$formatter = TestingAccessWrapper::newFromObject( $responseFactory )->errorFormatter;
+
+		$this->assertInstanceOf( ErrorFormatterV2::class, $formatter );
+
+		// Response factory test
+		$responseFactory = TestingAccessWrapper::newFromObject( $handler )->responseFactory;
+		$formatter = TestingAccessWrapper::newFromObject( $responseFactory )->errorFormatter;
+
+		$this->assertInstanceOf( ErrorFormatterV2::class, $formatter );
+	}
+
+	private function getCorsUtils( bool $allowCrossOrigin = false ): CorsUtils {
 		$cors = new CorsUtils(
 			new ServiceOptions(
 				CorsUtils::CONSTRUCTOR_OPTIONS,
 				[
 					MainConfigNames::AllowedCorsHeaders => [],
-					MainConfigNames::AllowCrossOrigin => [],
+					MainConfigNames::AllowCrossOrigin => $allowCrossOrigin,
 					MainConfigNames::RestAllowCrossOriginCookieAuth => [],
 					MainConfigNames::CanonicalServer => 'testing',
 					MainConfigNames::CrossSiteAJAXdomains => [],
 					MainConfigNames::CrossSiteAJAXdomainExceptions => [],
 				]
 			),
-			new ResponseFactory( [] ),
 			new UserIdentityValue(
 				1,
 				'Test'
@@ -863,5 +1066,344 @@ class RouterTest extends MediaWikiUnitTestCase {
 		);
 
 		return $cors;
+	}
+
+	/**
+	 * Create a Router instance configured with a mock ModuleManager returning $info.
+	 *
+	 * @param ModuleInfo $info
+	 * @param UrlUtils|null $urlUtils
+	 * @return Router
+	 */
+	private function createRouterWithModuleInfo(
+		ModuleInfo $info,
+		?UrlUtils $urlUtils = null
+	): Router {
+		$moduleManager = $this->createMock( ModuleManager::class );
+		$moduleManager->method( 'getModuleInfo' )
+			->with( $info->getId() )
+			->willReturn( $info );
+
+		$params = [ 'moduleManager' => $moduleManager ];
+		if ( $urlUtils !== null ) {
+			$params['urlUtils'] = $urlUtils;
+		}
+		return $this->newRouter( $params );
+	}
+
+	/**
+	 * Test that `Router::ROUTE_MODULE_SPEC` constant matches the expected route template.
+	 */
+	public function testRouteModuleSpecConstant(): void {
+		$this->assertSame( '/specs/v0/module/{module}', Router::ROUTE_MODULE_SPEC );
+	}
+
+	/**
+	 * Test that `getModuleBaseUrl()` returns an external absolute URL unchanged.
+	 */
+	public function testGetModuleBaseUrlExternalAbsolute(): void {
+		$info = new ModuleInfo(
+			'external/v1',
+			ModuleMode::PUBLISHED,
+			true,
+			'External Module',
+			null,
+			null,
+			null,
+			[],
+			'https://example.com/base',
+			'https://example.com/spec.json'
+		);
+
+		$router = $this->createRouterWithModuleInfo( $info );
+		$this->assertSame( 'https://example.com/base', $router->getModuleBaseUrl( 'external/v1' ) );
+	}
+
+	/**
+	 * Test that `getModuleBaseUrl()` expands an external relative URL using `UrlUtils`.
+	 */
+	public function testGetModuleBaseUrlExternalRelative(): void {
+		$info = new ModuleInfo(
+			'external/v1',
+			ModuleMode::PUBLISHED,
+			true,
+			'External Module',
+			null,
+			null,
+			null,
+			[],
+			'/api/rest_v1/c',
+			'https://example.com/spec.json'
+		);
+
+		$router = $this->createRouterWithModuleInfo( $info );
+		$this->assertSame(
+			'https://wiki.example.com/api/rest_v1/c',
+			$router->getModuleBaseUrl( 'external/v1' )
+		);
+	}
+
+	/**
+	 * Test that `getModuleBaseUrl()` throws `UnexpectedValueException` when an external module
+	 * has no base URL configured.
+	 */
+	public function testGetModuleBaseUrlExternalNull(): void {
+		$info = new ModuleInfo(
+			'external/v1',
+			ModuleMode::PUBLISHED,
+			true,
+			'External Module',
+			null,
+			null,
+			null,
+			[],
+			null,
+			'https://example.com/spec.json'
+		);
+
+		$router = $this->createRouterWithModuleInfo( $info );
+		$this->expectException( UnexpectedValueException::class );
+		$this->expectExceptionMessage( "External module 'external/v1' has no base URL configured" );
+		$router->getModuleBaseUrl( 'external/v1' );
+	}
+
+	/**
+	 * Test that `getModuleBaseUrl()` returns null when `UrlUtils` fails to expand a malformed URL.
+	 */
+	public function testGetModuleBaseUrlExternalUnresolvable(): void {
+		$info = new ModuleInfo(
+			'external/v1',
+			ModuleMode::PUBLISHED,
+			true,
+			'External Module',
+			null,
+			null,
+			null,
+			[],
+			'invalid-relative-url',
+			'https://example.com/spec.json'
+		);
+
+		$urlUtils = $this->createMock( UrlUtils::class );
+		$urlUtils->expects( $this->once() )
+			->method( 'expand' )
+			->with( 'invalid-relative-url' )
+			->willReturn( null );
+
+		$router = $this->createRouterWithModuleInfo( $info, $urlUtils );
+		$this->assertNull( $router->getModuleBaseUrl( 'external/v1' ) );
+	}
+
+	/**
+	 * Test that `getModuleBaseUrl()` for a local module generates the route URL from module ID.
+	 */
+	public function testGetModuleBaseUrlLocal(): void {
+		$info = new ModuleInfo(
+			'local/v1',
+			ModuleMode::PUBLISHED,
+			false,
+			null,
+			null,
+			null,
+			null,
+			[]
+		);
+
+		$router = $this->createRouterWithModuleInfo( $info );
+		$this->assertSame(
+			'https://wiki.example.com/rest/local/v1',
+			$router->getModuleBaseUrl( 'local/v1' )
+		);
+	}
+
+	/**
+	 * Test that `getModuleBaseUrl()` for the prefix-less module ('') generates the root route URL.
+	 */
+	public function testGetModuleBaseUrlPrefixless(): void {
+		$info = new ModuleInfo(
+			'',
+			ModuleMode::PUBLISHED,
+			false,
+			null,
+			null,
+			null,
+			null,
+			[]
+		);
+
+		$router = $this->createRouterWithModuleInfo( $info );
+		$this->assertSame(
+			'https://wiki.example.com/rest/',
+			$router->getModuleBaseUrl( '' )
+		);
+	}
+
+	/**
+	 * Test that `getModuleBaseUrl()` returns null when the module does not exist.
+	 */
+	public function testGetModuleBaseUrlNonExistent(): void {
+		$moduleManager = $this->createMock( ModuleManager::class );
+		$moduleManager->method( 'getModuleInfo' )
+			->with( 'nonexistent' )
+			->willReturn( null );
+
+		$router = $this->newRouter( [ 'moduleManager' => $moduleManager ] );
+		$this->assertNull( $router->getModuleBaseUrl( 'nonexistent' ) );
+	}
+
+	/**
+	 * Test that `getModuleSpecUrl()` returns an external absolute spec URL unchanged.
+	 */
+	public function testGetModuleSpecUrlExternalAbsolute(): void {
+		$info = new ModuleInfo(
+			'external/v1',
+			ModuleMode::PUBLISHED,
+			true,
+			'External Module',
+			null,
+			null,
+			null,
+			[],
+			'https://example.com/base',
+			'https://example.com/spec.json'
+		);
+
+		$router = $this->createRouterWithModuleInfo( $info );
+		$this->assertSame(
+			'https://example.com/spec.json',
+			$router->getModuleSpecUrl( 'external/v1' )
+		);
+	}
+
+	/**
+	 * Test that `getModuleSpecUrl()` expands an external relative spec URL `using UrlUtils`.
+	 */
+	public function testGetModuleSpecUrlExternalRelative(): void {
+		$info = new ModuleInfo(
+			'external/v1',
+			ModuleMode::PUBLISHED,
+			true,
+			'External Module',
+			null,
+			null,
+			null,
+			[],
+			null,
+			'/api/rest_v1/?spec'
+		);
+
+		$router = $this->createRouterWithModuleInfo( $info );
+		$this->assertSame(
+			'https://wiki.example.com/api/rest_v1/?spec',
+			$router->getModuleSpecUrl( 'external/v1' )
+		);
+	}
+
+	/**
+	 * Test that `getModuleSpecUrl()` throws `UnexpectedValueException` when an external module
+	 * has no spec URL configured.
+	 */
+	public function testGetModuleSpecUrlExternalNull(): void {
+		$info = new ModuleInfo(
+			'external/v1',
+			ModuleMode::PUBLISHED,
+			true,
+			'External Module',
+			null,
+			null,
+			null,
+			[],
+			null,
+			null
+		);
+
+		$router = $this->createRouterWithModuleInfo( $info );
+		$this->expectException( UnexpectedValueException::class );
+		$this->expectExceptionMessage( "External module 'external/v1' has no spec URL configured" );
+		$router->getModuleSpecUrl( 'external/v1' );
+	}
+
+	/**
+	 * Test that `getModuleSpecUrl()` returns null when `UrlUtils` fails to expand a malformed URL.
+	 */
+	public function testGetModuleSpecUrlExternalUnresolvable(): void {
+		$info = new ModuleInfo(
+			'external/v1',
+			ModuleMode::PUBLISHED,
+			true,
+			'External Module',
+			null,
+			null,
+			null,
+			[],
+			null,
+			'invalid-spec-url'
+		);
+
+		$urlUtils = $this->createMock( UrlUtils::class );
+		$urlUtils->expects( $this->once() )
+			->method( 'expand' )
+			->with( 'invalid-spec-url' )
+			->willReturn( null );
+
+		$router = $this->createRouterWithModuleInfo( $info, $urlUtils );
+		$this->assertNull( $router->getModuleSpecUrl( 'external/v1' ) );
+	}
+
+	/**
+	 * Test standard local module spec URL generation using `ROUTE_MODULE_SPEC`.
+	 */
+	public function testGetModuleSpecUrlLocalDefault(): void {
+		$info = new ModuleInfo(
+			'local/v1',
+			ModuleMode::PUBLISHED,
+			false,
+			null,
+			null,
+			null,
+			null,
+			[]
+		);
+
+		$router = $this->createRouterWithModuleInfo( $info );
+		$this->assertSame(
+			'https://wiki.example.com/rest/specs/v0/module/local%2Fv1',
+			$router->getModuleSpecUrl( 'local/v1' )
+		);
+	}
+
+	/**
+	 * Test that the prefix-less module ('') generates a spec URL with the '-' placeholder.
+	 */
+	public function testGetModuleSpecUrlPrefixless(): void {
+		$info = new ModuleInfo(
+			'',
+			ModuleMode::PUBLISHED,
+			false,
+			null,
+			null,
+			null,
+			null,
+			[]
+		);
+
+		$router = $this->createRouterWithModuleInfo( $info );
+		$this->assertSame(
+			'https://wiki.example.com/rest/specs/v0/module/-',
+			$router->getModuleSpecUrl( '' )
+		);
+	}
+
+	/**
+	 * Test that `getModuleSpecUrl()` returns null when the module does not exist.
+	 */
+	public function testGetModuleSpecUrlNonExistent(): void {
+		$moduleManager = $this->createMock( ModuleManager::class );
+		$moduleManager->method( 'getModuleInfo' )
+			->with( 'nonexistent' )
+			->willReturn( null );
+
+		$router = $this->newRouter( [ 'moduleManager' => $moduleManager ] );
+		$this->assertNull( $router->getModuleSpecUrl( 'nonexistent' ) );
 	}
 }

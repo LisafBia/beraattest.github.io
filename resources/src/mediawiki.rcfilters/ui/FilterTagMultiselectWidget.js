@@ -19,6 +19,7 @@ const ViewSwitchWidget = require( './ViewSwitchWidget.js' ),
  * @param {jQuery} [config.$wrapper] A jQuery object for the wrapper of the general
  *  system. If not given, falls back to this widget's $element
  * @param {boolean} [config.collapsed] Filter area is collapsed
+ * @param {string} [config.specialPage] Title of the special page on which this widget is getting created
  */
 const FilterTagMultiselectWidget = function MwRcfiltersUiFilterTagMultiselectWidget( controller, model, savedQueriesModel, config ) {
 	const title = new OO.ui.LabelWidget( {
@@ -39,6 +40,7 @@ const FilterTagMultiselectWidget = function MwRcfiltersUiFilterTagMultiselectWid
 	this.currentView = this.model.getCurrentView();
 	this.collapsed = false;
 	this.isMobile = config.isMobile;
+	this.specialPage = config.specialPage;
 
 	// Has to be before the parent constructor, because the parent constructor may call setValue()
 	// which causes the onChangeTags handler to run (T245073)
@@ -70,7 +72,11 @@ const FilterTagMultiselectWidget = function MwRcfiltersUiFilterTagMultiselectWid
 					sticky: false,
 					// View select menu, appears on default view only
 					$element: $( '<div>' )
-						.append( new ViewSwitchWidget( this.controller, this.model ).$element ),
+						.append(
+							new ViewSwitchWidget(
+								this.controller, this.model, { specialPage: this.specialPage }
+							).$element
+						),
 					views: [ 'default' ]
 				}
 			]
@@ -156,7 +162,7 @@ const FilterTagMultiselectWidget = function MwRcfiltersUiFilterTagMultiselectWid
 	} );
 
 	if ( !this.isMobile ) {
-		this.input.connect( this, { change: 'onInputChange' } );
+		this.input.connect( this, { change: 'onInputChange', onBlur: this.onInputBlur } );
 	}
 
 	// The filter list and button should appear side by side regardless of how
@@ -249,6 +255,37 @@ OO.inheritClass( FilterTagMultiselectWidget, OO.ui.MenuTagMultiselectWidget );
  * @return {OO.ui.ButtonGroupWidget}
  */
 FilterTagMultiselectWidget.prototype.createViewsSelectWidget = function () {
+	const items = [
+		new OO.ui.ButtonWidget( {
+			framed: !!this.isMobile,
+			data: 'namespaces',
+			icon: 'article',
+			label: mw.msg( 'namespaces' ),
+			title: mw.msg( 'rcfilters-view-namespaces-tooltip' ),
+			classes: this.isMobile ? [ 'mw-rcfilters-ui-cell' ] : []
+		} ),
+		new OO.ui.ButtonWidget( {
+			framed: !!this.isMobile,
+			data: 'tags',
+			icon: 'tag',
+			label: mw.msg( 'tags-title' ),
+			title: mw.msg( 'rcfilters-view-tags-tooltip' ),
+			classes: this.isMobile ? [ 'mw-rcfilters-ui-cell' ] : []
+		} )
+	];
+	if ( mw.config.get( 'enableWatchlistLabels' ) && this.specialPage === 'Watchlist' ) {
+		items.push(
+
+			new OO.ui.ButtonWidget( {
+				framed: !!this.isMobile,
+				data: 'wllabels',
+				icon: 'folderPlaceholder',
+				label: mw.msg( 'watchlist-filters-labels-title' ),
+				title: mw.msg( 'watchlist-filters-view-labels-tooltip' ),
+				classes: [ 'mw-rcfilters-ui-watchlistlabels' ].concat( this.isMobile ? [ 'mw-rcfilters-ui-cell' ] : [] )
+			} )
+		);
+	}
 	const viewsSelectWidget = new OO.ui.ButtonGroupWidget( {
 		classes: this.isMobile ?
 			[
@@ -258,24 +295,7 @@ FilterTagMultiselectWidget.prototype.createViewsSelectWidget = function () {
 			[
 				'mw-rcfilters-ui-filterTagMultiselectWidget-views-select-widget'
 			],
-		items: [
-			new OO.ui.ButtonWidget( {
-				framed: !!this.isMobile,
-				data: 'namespaces',
-				icon: 'article',
-				label: mw.msg( 'namespaces' ),
-				title: mw.msg( 'rcfilters-view-namespaces-tooltip' ),
-				classes: this.isMobile ? [ 'mw-rcfilters-ui-cell' ] : []
-			} ),
-			new OO.ui.ButtonWidget( {
-				framed: !!this.isMobile,
-				data: 'tags',
-				icon: 'tag',
-				label: mw.msg( 'tags-title' ),
-				title: mw.msg( 'rcfilters-view-tags-tooltip' ),
-				classes: this.isMobile ? [ 'mw-rcfilters-ui-cell' ] : []
-			} )
-		]
+		items: items
 	} );
 
 	viewsSelectWidget.items.forEach( ( item ) => {
@@ -348,6 +368,14 @@ FilterTagMultiselectWidget.prototype.onModelSearchChange = function ( value ) {
  */
 FilterTagMultiselectWidget.prototype.onInputChange = function ( value ) {
 	this.controller.setSearch( value );
+};
+
+/**
+ * Respond to input blur event
+ *
+ */
+FilterTagMultiselectWidget.prototype.onInputBlur = function () {
+	// T389976 noop (override default OOUI MenuTagMultiselectWidget behavior onBlur so that we can click help icons)
 };
 
 /**

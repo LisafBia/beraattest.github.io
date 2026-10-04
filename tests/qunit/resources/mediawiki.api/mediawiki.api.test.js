@@ -1,11 +1,13 @@
 QUnit.module( 'mediawiki.api', ( hooks ) => {
 	const originalFormData = window.FormData;
+	const originalMwVersion = mw.config.get( 'wgVersion' );
 	hooks.beforeEach( function () {
 		this.server = this.sandbox.useFakeServer();
 		this.server.respondImmediately = true;
 	} );
 	hooks.afterEach( () => {
 		window.FormData = originalFormData;
+		mw.config.set( 'wgVersion', originalMwVersion );
 	} );
 
 	function sequence( responses ) {
@@ -50,6 +52,22 @@ QUnit.module( 'mediawiki.api', ( hooks ) => {
 		assert.deepEqual( data, [], 'Simple POST request' );
 	} );
 
+	QUnit.test( 'post() with action sets a GET param (T421288)', async function ( assert ) {
+		const api = new mw.Api();
+
+		this.server.respond( [ 200, { 'Content-Type': 'application/json' }, '[]' ] );
+
+		await api.post( { action: 'foo', another: 'bar' } );
+		assert.true(
+			/action=foo/.test( this.server.requests[ 0 ].url ),
+			'POSTed request URL contains "action" as a GET parameter'
+		);
+		assert.false(
+			/another/.test( this.server.requests[ 0 ].url ),
+			'POSTed request URL does not contain other parameters'
+		);
+	} );
+
 	QUnit.test( 'API error errorformat=bc', async function ( assert ) {
 		const api = new mw.Api();
 
@@ -89,7 +107,6 @@ QUnit.module( 'mediawiki.api', ( hooks ) => {
 
 		await api.post( { action: 'test' }, { contentType: 'multipart/form-data' } );
 
-		assert.strictEqual( request.url, '/FormData/api.php', 'no query string' );
 		assert.true( request.requestBody instanceof FormData, 'Request uses FormData body' );
 	} );
 
@@ -107,7 +124,6 @@ QUnit.module( 'mediawiki.api', ( hooks ) => {
 
 		await api.post( { action: 'test' }, { contentType: 'multipart/form-data' } );
 
-		assert.strictEqual( request.url, '/FormData/api.php', 'no query string' );
 		assert.strictEqual( request.requestBody, 'action=test&format=json', 'Request uses query string body' );
 	} );
 
@@ -197,7 +213,7 @@ QUnit.module( 'mediawiki.api', ( hooks ) => {
 		assert.strictEqual( this.server.requests.length, 1, 'Requests made' );
 	} );
 
-	QUnit.test( 'getToken() - error', async function ( assert ) {
+	QUnit.test( 'getToken() [api error]', async function ( assert ) {
 		const api = new mw.Api();
 
 		this.server.respondWith( /type=testerror/, sequenceBodies( 200, { 'Content-Type': 'application/json' },
@@ -214,7 +230,7 @@ QUnit.module( 'mediawiki.api', ( hooks ) => {
 		assert.strictEqual( token, 'good', 'The token' );
 	} );
 
-	QUnit.test( 'getToken() - no query', async function ( assert ) {
+	QUnit.test( 'getToken() [no query error]', async function ( assert ) {
 		const api = new mw.Api();
 		// Same-origin warning and missing query in response.
 		const serverRsp = {
@@ -235,7 +251,7 @@ QUnit.module( 'mediawiki.api', ( hooks ) => {
 		assert.deepEqual( rspParam, serverRsp, 'response' );
 	} );
 
-	QUnit.test( 'getToken() - deprecated', async function ( assert ) {
+	QUnit.test( 'getToken() [alias]', async function ( assert ) {
 		// Cache API endpoint from default to avoid cachehit in mw.user.tokens
 		const api = new mw.Api( { ajax: { url: '/postWithToken/api.php' } } );
 
@@ -243,14 +259,14 @@ QUnit.module( 'mediawiki.api', ( hooks ) => {
 			'{ "query": { "tokens": { "csrftoken": "csrfgood" } } }'
 		] );
 
-		// Get a token of a type that is in the legacy map.
+		// Try a type aliased by normalizeTokenType().
 		const token = await api.getToken( 'email' );
 		assert.strictEqual( token, 'csrfgood', 'Token' );
 
 		assert.strictEqual( this.server.requests.length, 1, 'Requests made' );
 	} );
 
-	QUnit.test( 'badToken()', async function ( assert ) {
+	QUnit.test( 'badToken() [custom]', async function ( assert ) {
 		const api = new mw.Api();
 
 		this.server.respondWith( /type=testbad/, sequenceBodies( 200, { 'Content-Type': 'application/json' },
@@ -268,7 +284,7 @@ QUnit.module( 'mediawiki.api', ( hooks ) => {
 		assert.strictEqual( this.server.requests.length, 2, 'Requests made' );
 	} );
 
-	QUnit.test( 'badToken( legacy )', async function ( assert ) {
+	QUnit.test( 'badToken() [alias]', async function ( assert ) {
 		const api = new mw.Api( { ajax: { url: '/badTokenLegacy/api.php' } } );
 
 		this.server.respondWith( /type=csrf/, sequenceBodies( 200, { 'Content-Type': 'application/json' },
@@ -515,5 +531,45 @@ QUnit.module( 'mediawiki.api', ( hooks ) => {
 
 		await assert.rejects( promise, isAbortError, 'AbortError instead of error code' );
 		await assertErrorCodeEqualsDetails( assert, promise );
+	} );
+
+	QUnit.test( 'User agent', async function ( assert ) {
+		mw.config.set( 'wgVersion', 'VERSION' );
+
+		new mw.Api().get( {} );
+		new mw.Api( { userAgent: 'foo' } ).get( {} );
+
+		assert.strictEqual( this.server.requests[ 0 ].requestHeaders[ 'Api-User-Agent' ], 'MediaWiki-JS/VERSION', 'Default user agent' );
+		assert.strictEqual( this.server.requests[ 1 ].requestHeaders[ 'Api-User-Agent' ], 'foo', 'Custom user agent' );
+	} );
+
+	QUnit.test( 'getErrorMessage()', async function ( assert ) {
+		// This method should have more tests :)
+
+		const api = new mw.Api();
+
+		this.server.respondWith( /action=query/, [
+			429,
+			{
+				'Retry-After': 1234,
+				'Content-Type': 'application/json'
+			},
+			// Request body is not used by #getErrorMessage. This is a possible error response from
+			// <https://wikitech.wikimedia.org/wiki/REST_Gateway/Rate_limiting>.
+			'{"httpCode":429,"httpReason":"Too Many Requests"}'
+		] );
+
+		const promise = api.get( {} );
+		await assert.rejects( promise, /^http$/, 'HTTP error should reject the deferred' );
+		await promise.catch( ( code, data ) => {
+			const $message = api.getErrorMessage( data );
+			assert.strictEqual(
+				$message.text(),
+				'(api-clientside-error-http-429-retry: (duration-minutes: 20)(and)(word-separator)(duration-seconds: 34))',
+				'Expected error message'
+			);
+		} );
+
+		assert.strictEqual( this.server.requests.length, 1, 'Requests made' );
 	} );
 } );

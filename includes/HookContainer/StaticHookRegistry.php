@@ -7,14 +7,7 @@ namespace MediaWiki\HookContainer;
  * HookContainer in tests and for similar purposes.
  */
 class StaticHookRegistry implements HookRegistry {
-	/** @var array */
-	private $globalHooks;
-
-	/** @var array */
-	private $extensionHooks;
-
-	/** @var DeprecatedHooks */
-	private $deprecatedHooks;
+	private readonly DeprecatedHooks $deprecatedHooks;
 
 	/**
 	 * @param array $globalHooks An array of legacy hooks in the same format as $wgHooks
@@ -25,19 +18,19 @@ class StaticHookRegistry implements HookRegistry {
 	 *   to the core deprecated hooks list which is always present.
 	 */
 	public function __construct(
-		array $globalHooks = [],
-		array $extensionHooks = [],
-		array $deprecatedHooksArray = []
+		private readonly array $globalHooks = [],
+		private readonly array $extensionHooks = [],
+		array $deprecatedHooksArray = [],
 	) {
-		$this->globalHooks = $globalHooks;
-		$this->extensionHooks = $extensionHooks;
 		$this->deprecatedHooks = new DeprecatedHooks( $deprecatedHooksArray );
 	}
 
+	/** @inheritDoc */
 	public function getGlobalHooks() {
 		return $this->globalHooks;
 	}
 
+	/** @inheritDoc */
 	public function getExtensionHooks() {
 		return $this->extensionHooks;
 	}

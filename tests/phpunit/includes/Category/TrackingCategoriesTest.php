@@ -9,8 +9,6 @@ use MediaWiki\Parser\ParserOutput;
 /**
  * @covers \MediaWiki\Parser\ParserOutput
  * @covers \MediaWiki\Parser\CacheTime
- * @group Database
- *        ^--- trigger DB shadowing because we are using Title magic
  */
 class TrackingCategoriesTest extends MediaWikiLangTestCase {
 	/**
@@ -23,6 +21,7 @@ class TrackingCategoriesTest extends MediaWikiLangTestCase {
 				TrackingCategories::CONSTRUCTOR_OPTIONS,
 				$services->getMainConfig()
 			),
+			$services->getExtensionRegistry(),
 			$services->getNamespaceInfo(),
 			$services->getTitleParser(),
 			LoggerFactory::getInstance( 'TrackingCategories' )

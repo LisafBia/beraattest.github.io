@@ -1,32 +1,17 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\Maintenance;
 
 use Closure;
-use DeferredUpdates;
-use ExecutableFinder;
 use Generator;
 use MediaWiki;
 use MediaWiki\Config\Config;
-use MediaWiki\Debug\MWDebug;
+use MediaWiki\Config\ConfigException;
+use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\MainConfigNames;
@@ -36,6 +21,7 @@ use MediaWiki\Registration\ExtensionRegistry;
 use MediaWiki\Settings\SettingsBuilder;
 use MediaWiki\Shell\Shell;
 use MediaWiki\User\User;
+use MediaWiki\Utils\ExecutableFinder;
 use StatusValue;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\ILBFactory;
@@ -196,6 +182,12 @@ abstract class Maintenance {
 	 * @var ILBFactory|null Injected DB connection manager (e.g. LBFactorySingle); null if none
 	 */
 	private ?ILBFactory $lbFactory = null;
+
+	/**
+	 * Convert fatalError() to a throw in order to allow this class to be
+	 * tested.
+	 */
+	private bool $isTesting = false;
 
 	/**
 	 * Default constructor. Children should call this *first* if implementing
@@ -392,7 +384,7 @@ abstract class Maintenance {
 
 	/**
 	 * Programmatically set the value of the given option.
-	 * Useful for setting up child scripts, see runChild().
+	 * Useful for setting up child scripts, see createChild().
 	 *
 	 * @since 1.39
 	 *
@@ -405,7 +397,7 @@ abstract class Maintenance {
 
 	/**
 	 * Programmatically set the value of the given argument.
-	 * Useful for setting up child scripts, see runChild().
+	 * Useful for setting up child scripts, see createChild().
 	 *
 	 * @since 1.39
 	 *
@@ -488,18 +480,14 @@ abstract class Maintenance {
 	 * as we handle all --quiet stuff here
 	 * @stable to override
 	 * @param string $out The text to show to the user
-	 * @param mixed|null $channel Unique identifier for the channel. See function outputChanneled.
+	 * @param string|null $channel Unique identifier for the channel. See function outputChanneled.
 	 */
 	protected function output( $out, $channel = null ) {
 		// This is sometimes called very early, before Setup.php is included.
 		if ( defined( 'MW_SERVICE_BOOTSTRAP_COMPLETE' ) ) {
 			// Flush stats periodically in long-running CLI scripts to avoid OOM (T181385)
-			$stats = $this->getServiceContainer()->getStatsdDataFactory();
 			$statsFactory = $this->getServiceContainer()->getStatsFactory();
-			// FIXME: use sample count from StatsFactory (T381042)
-			if ( $stats->getDataCount() > 1000 ) {
-				MediaWiki::emitBufferedStats( $statsFactory, $stats, $this->getConfig() );
-			}
+			MediaWiki::emitBufferedStats( $statsFactory );
 		}
 
 		if ( $this->mQuiet ) {
@@ -519,13 +507,8 @@ abstract class Maintenance {
 	 * this for non-error output
 	 * @stable to override
 	 * @param string|StatusValue $err The error to display
-	 * @param int $die Deprecated since 1.31, use Maintenance::fatalError() instead
 	 */
-	protected function error( $err, $die = 0 ) {
-		if ( intval( $die ) !== 0 ) {
-			wfDeprecated( __METHOD__ . '( $err, $die )', '1.31' );
-			$this->fatalError( $err, intval( $die ) );
-		}
+	protected function error( $err ) {
 		if ( $err instanceof StatusValue ) {
 			foreach ( [ 'warning' => 'Warning: ', 'error' => 'Error: ' ] as $type => $prefix ) {
 				foreach ( $err->getMessages( $type ) as $msg ) {
@@ -564,8 +547,8 @@ abstract class Maintenance {
 		// If running PHPUnit tests we don't want to call exit, as it will end the test suite early.
 		// Instead, throw an exception that will still cause the relevant test to fail if the ::fatalError
 		// call was not expected.
-		if ( defined( 'MW_PHPUNIT_TEST' ) ) {
-			throw new MaintenanceFatalError( $exitCode );
+		if ( defined( 'MW_PHPUNIT_TEST' ) && $this->isTesting ) {
+			throw new MaintenanceFatalError( (string)$msg, $exitCode );
 		} else {
 			exit( $exitCode );
 		}
@@ -745,24 +728,7 @@ abstract class Maintenance {
 	 *
 	 * Callers are expected to run the returned maintenance script instance by calling {@link Maintenance::execute}
 	 *
-	 * @deprecated Since 1.43. Use {@link Maintenance::createChild} instead. This method is an alias to that method.
-	 * @param string $maintClass A name of a child maintenance class
-	 * @param string|null $classFile Full path of where the child is
-	 * @return Maintenance The created instance, which the caller is expected to run by calling
-	 *   {@link Maintenance::execute} on the returned object.
-	 */
-	public function runChild( $maintClass, $classFile = null ) {
-		MWDebug::detectDeprecatedOverride( $this, __CLASS__, 'runChild', '1.43' );
-		return self::createChild( $maintClass, $classFile );
-	}
-
-	/**
-	 * Returns an instance of the given maintenance script, with all of the current arguments
-	 * passed to it.
-	 *
-	 * Callers are expected to run the returned maintenance script instance by calling {@link Maintenance::execute}
-	 *
-	 * @param string $maintClass A name of a child maintenance class
+	 * @param class-string<Maintenance> $maintClass A name of a child maintenance class
 	 * @param string|null $classFile Full path of where the child is
 	 * @stable to override
 	 * @return Maintenance The created instance, which the caller is expected to run by calling
@@ -807,11 +773,16 @@ abstract class Maintenance {
 	}
 
 	/**
-	 * Normally we disable the memory_limit when running admin scripts.
-	 * Some scripts may wish to actually set a limit, however, to avoid
-	 * blowing up unexpectedly.
+	 * Override memory_limit from php.ini on maintenance scripts.
+	 *
+	 * This defaults to max/unlimited, but some scripts may wish to set a lower limit,
+	 * to avoid blowing up unexpectedly and/or taking available memory for other
+	 * processes.
+	 *
 	 * @stable to override
-	 * @return string
+	 * @return string|int Must be a shorthand string like "50M", or a number of bytes
+	 * (-1 for unlimited) passed to `ini_set( 'memory_limit' )`, or a keyword like "max"
+	 * (alias for -1) or "default" (alias for leaving memory_limit from php.ini unchanged).
 	 */
 	public function memoryLimit() {
 		return 'max';
@@ -850,8 +821,7 @@ abstract class Maintenance {
 		$this->parameters->loadWithArgv( $argv );
 
 		if ( $this->parameters->hasErrors() ) {
-			$errors = "\nERROR: " . implode( "\nERROR: ", $this->parameters->getErrors() ) . "\n";
-			$this->error( $errors );
+			// Show errors and exit
 			$this->maybeHelp( true );
 		}
 
@@ -926,13 +896,20 @@ abstract class Maintenance {
 	 * @param bool $force Whether to force the help to show, default false
 	 */
 	protected function maybeHelp( $force = false ) {
+		if ( $this->parameters->hasWarnings() && !$this->hasOption( 'help' ) ) {
+			foreach ( $this->parameters->getWarnings() as $warning ) {
+				$this->error( "WARNING: " . $warning );
+			}
+		}
+
 		if ( !$force && !$this->hasOption( 'help' ) ) {
 			return;
 		}
 
 		if ( $this->parameters->hasErrors() && !$this->hasOption( 'help' ) ) {
-			$errors = "\nERROR: " . implode( "\nERROR: ", $this->parameters->getErrors() ) . "\n";
-			$this->error( $errors );
+			foreach ( $this->parameters->getErrors() as $error ) {
+				$this->error( "ERROR: " . $error );
+			}
 		}
 
 		$this->showHelp();
@@ -952,14 +929,13 @@ abstract class Maintenance {
 	 * Handle some last-minute setup here.
 	 *
 	 * @stable to override
-	 *
 	 * @param SettingsBuilder $settingsBuilder
 	 */
 	public function finalSetup( SettingsBuilder $settingsBuilder ) {
 		$config = $settingsBuilder->getConfig();
 		$overrides = [];
-		$overrides['DBadminuser'] = $config->get( MainConfigNames::DBadminuser );
-		$overrides['DBadminpassword'] = $config->get( MainConfigNames::DBadminpassword );
+		$overrides[MainConfigNames::DBadminuser] = $config->get( MainConfigNames::DBadminuser );
+		$overrides[MainConfigNames::DBadminpassword] = $config->get( MainConfigNames::DBadminpassword );
 
 		# Turn off output buffering again, it might have been turned on in the settings files
 		if ( ob_get_level() ) {
@@ -968,49 +944,36 @@ abstract class Maintenance {
 
 		# Override $wgServer
 		if ( $this->hasOption( 'server' ) ) {
-			$overrides['Server'] = $this->getOption( 'server', $config->get( MainConfigNames::Server ) );
+			$overrides[MainConfigNames::Server] = $this->getOption( 'server', $config->get( MainConfigNames::Server ) );
 		}
 
 		# If these were passed, use them
 		if ( $this->mDbUser ) {
-			$overrides['DBadminuser'] = $this->mDbUser;
+			$overrides[MainConfigNames::DBadminuser] = $this->mDbUser;
 		}
 		if ( $this->mDbPass ) {
-			$overrides['DBadminpassword'] = $this->mDbPass;
-		}
-		if ( $this->hasOption( 'dbgroupdefault' ) ) {
-			$overrides['DBDefaultGroup'] = $this->getOption( 'dbgroupdefault', null );
-			// TODO: once MediaWikiServices::getInstance() starts throwing exceptions
-			// and not deprecation warnings for premature access to service container,
-			// we can remove this line. This method is called before Setup.php,
-			// so it would be guaranteed DBLoadBalancerFactory is not yet initialized.
-			if ( MediaWikiServices::hasInstance() ) {
-				$service = $this->getServiceContainer()->peekService( 'DBLoadBalancerFactory' );
-				if ( $service ) {
-					$service->destroy();
-				}
-			}
+			$overrides[MainConfigNames::DBadminpassword] = $this->mDbPass;
 		}
 
-		if ( $this->getDbType() == self::DB_ADMIN && isset( $overrides[ 'DBadminuser' ] ) ) {
-			$overrides['DBuser'] = $overrides[ 'DBadminuser' ];
-			$overrides['DBpassword'] = $overrides[ 'DBadminpassword' ];
+		if ( $this->getDbType() == self::DB_ADMIN && isset( $overrides[MainConfigNames::DBadminuser] ) ) {
+			$overrides[MainConfigNames::DBuser] = $overrides[MainConfigNames::DBadminuser];
+			$overrides[MainConfigNames::DBpassword] = $overrides[MainConfigNames::DBadminpassword];
 
 			/** @var array $dbServers */
 			$dbServers = $config->get( MainConfigNames::DBservers );
 			if ( $dbServers ) {
 				foreach ( $dbServers as $i => $server ) {
-					$dbServers[$i]['user'] = $overrides['DBuser'];
-					$dbServers[$i]['password'] = $overrides['DBpassword'];
+					$dbServers[$i]['user'] = $overrides[MainConfigNames::DBuser];
+					$dbServers[$i]['password'] = $overrides[MainConfigNames::DBpassword];
 				}
-				$overrides['DBservers'] = $dbServers;
+				$overrides[MainConfigNames::DBservers] = $dbServers;
 			}
 
 			$lbFactoryConf = $config->get( MainConfigNames::LBFactoryConf );
 			if ( isset( $lbFactoryConf['serverTemplate'] ) ) {
-				$lbFactoryConf['serverTemplate']['user'] = $overrides['DBuser'];
-				$lbFactoryConf['serverTemplate']['password'] = $overrides['DBpassword'];
-				$overrides['LBFactoryConf'] = $lbFactoryConf;
+				$lbFactoryConf['serverTemplate']['user'] = $overrides[MainConfigNames::DBuser];
+				$lbFactoryConf['serverTemplate']['password'] = $overrides[MainConfigNames::DBpassword];
+				$overrides[MainConfigNames::LBFactoryConf] = $lbFactoryConf;
 			}
 
 			// TODO: once MediaWikiServices::getInstance() starts throwing exceptions
@@ -1027,8 +990,8 @@ abstract class Maintenance {
 
 		$this->afterFinalSetup();
 
-		$overrides['ShowExceptionDetails'] = true;
-		$overrides['ShowHostname'] = true;
+		$overrides[MainConfigNames::ShowExceptionDetails] = true;
+		$overrides[MainConfigNames::ShowHostnames] = true;
 
 		ini_set( 'max_execution_time', '0' );
 		$settingsBuilder->putConfigValues( $overrides );
@@ -1047,9 +1010,14 @@ abstract class Maintenance {
 	 * @author Rob Church <robchur@gmail.com>
 	 */
 	public function purgeRedundantText( $delete = true ) {
+		if ( $this->getConfig()->get( MainConfigNames::MiserMode ) ) {
+			// Don't even try to run this on large wikis where it will hang ...
+			$this->output( "Not trying to purge text records on miser-mode wiki.\n" );
+			return;
+		}
 		# Data should come off the master, wrapped in a transaction
 		$dbw = $this->getPrimaryDB();
-		$this->beginTransaction( $dbw, __METHOD__ );
+		$this->beginTransactionRound( __METHOD__ );
 
 		# Get "active" text records via the content table
 		$cur = [];
@@ -1102,7 +1070,7 @@ abstract class Maintenance {
 			$this->output( "done.\n" );
 		}
 
-		$this->commitTransaction( $dbw, __METHOD__ );
+		$this->commitTransactionRound( __METHOD__ );
 	}
 
 	/**
@@ -1116,7 +1084,7 @@ abstract class Maintenance {
 	/**
 	 * Returns a database to be used by current maintenance script.
 	 *
-	 * This uses the main LBFactory instance by default unless overriden via setDB().
+	 * This uses the main LBFactory instance by default unless overridden via setDB().
 	 *
 	 * This function has the same parameters as LoadBalancer::getConnection().
 	 *
@@ -1131,8 +1099,7 @@ abstract class Maintenance {
 	 */
 	protected function getDB( $db, $groups = [], $dbDomain = false ) {
 		if ( $this->mDb === null ) {
-			return $this->getServiceContainer()
-				->getDBLoadBalancerFactory()
+			return $this->getLBFactory()
 				->getMainLB( $dbDomain )
 				->getMaintenanceConnectionRef( $db, $groups, $dbDomain );
 		}
@@ -1151,19 +1118,21 @@ abstract class Maintenance {
 	}
 
 	/**
+	 * @param string|false $virtualDomain
 	 * @return IReadableDatabase
 	 * @since 1.42
 	 */
-	protected function getReplicaDB(): IReadableDatabase {
-		return $this->getLBFactory()->getReplicaDatabase();
+	protected function getReplicaDB( string|false $virtualDomain = false ): IReadableDatabase {
+		return $this->getLBFactory()->getReplicaDatabase( $virtualDomain );
 	}
 
 	/**
+	 * @param string|false $virtualDomain
 	 * @return IDatabase
 	 * @since 1.42
 	 */
-	protected function getPrimaryDB(): IDatabase {
-		return $this->getLBFactory()->getPrimaryDatabase();
+	protected function getPrimaryDB( string|false $virtualDomain = false ): IDatabase {
+		return $this->getLBFactory()->getPrimaryDatabase( $virtualDomain );
 	}
 
 	/**
@@ -1179,7 +1148,14 @@ abstract class Maintenance {
 	 * @return ILBFactory Injected LBFactory, if any, the service instance, otherwise
 	 */
 	private function getLBFactory() {
-		$this->lbFactory ??= $this->getServiceContainer()->getDBLoadBalancerFactory();
+		if ( $this->lbFactory === null ) {
+			$this->lbFactory = $this->getServiceContainer()->getDBLoadBalancerFactory();
+			if ( $this->hasOption( 'dbgroupdefault' ) ) {
+				$this->lbFactory->setDefaultGroupName(
+					$this->getOption( 'dbgroupdefault', '' )
+				);
+			}
+		}
 
 		return $this->lbFactory;
 	}
@@ -1247,6 +1223,28 @@ abstract class Maintenance {
 	}
 
 	/**
+	 * If possible, apply changes to the database configuration.
+	 * The primary use case for this is taking replicas out of rotation.
+	 * Long-running scripts may otherwise keep connections to
+	 * de-pooled database hosts, and may even re-connect to them.
+	 * If no config callback was configured, this has no effect.
+	 */
+	private function autoReconfigure( ILBFactory $lbFactory ): void {
+		static $failedReconfigureCount = 0;
+
+		try {
+			$lbFactory->autoReconfigure();
+			$failedReconfigureCount = 0;
+		} catch ( ConfigException $e ) {
+			$failedReconfigureCount++;
+			if ( $failedReconfigureCount >= 10 ) {
+				throw $e;
+			}
+			// Otherwise, try to keep going with the old config (T346971)
+		}
+	}
+
+	/**
 	 * Wait for replica DB servers to catch up
 	 *
 	 * Use this method after performing a batch of autocommit writes inscripts with direct,
@@ -1266,20 +1264,13 @@ abstract class Maintenance {
 		);
 		$this->lastReplicationWait = microtime( true );
 
-		// If possible, apply changes to the database configuration.
-		// The primary use case for this is taking replicas out of rotation.
-		// Long-running scripts may otherwise keep connections to
-		// de-pooled database hosts, and may even re-connect to them.
-		// If no config callback was configured, this has no effect.
-		$lbFactory->autoReconfigure();
+		$this->autoReconfigure( $lbFactory );
 
 		// Periodically run any deferred updates that accumulate
 		DeferredUpdates::tryOpportunisticExecute();
 		// Flush stats periodically in long-running CLI scripts to avoid OOM (T181385)
 		MediaWikiEntryPoint::emitBufferedStats(
-			$this->getServiceContainer()->getStatsFactory(),
-			$this->getServiceContainer()->getStatsdDataFactory(),
-			$this->getConfig()
+			$this->getServiceContainer()->getStatsFactory()
 		);
 
 		return $waitSucceeded;
@@ -1334,17 +1325,10 @@ abstract class Maintenance {
 		DeferredUpdates::tryOpportunisticExecute();
 		// Flush stats periodically in long-running CLI scripts to avoid OOM (T181385)
 		MediaWikiEntryPoint::emitBufferedStats(
-			$this->getServiceContainer()->getStatsFactory(),
-			$this->getServiceContainer()->getStatsdDataFactory(),
-			$this->getConfig()
+			$this->getServiceContainer()->getStatsFactory()
 		);
 
-		// If possible, apply changes to the database configuration.
-		// The primary use case for this is taking replicas out of rotation.
-		// Long-running scripts may otherwise keep connections to
-		// de-pooled database hosts, and may even re-connect to them.
-		// If no config callback was configured, this has no effect.
-		$lbFactory->autoReconfigure();
+		$this->autoReconfigure( $lbFactory );
 
 		return $waitSucceeded;
 	}
@@ -1652,6 +1636,27 @@ abstract class Maintenance {
 		}
 
 		return $line;
+	}
+
+	/**
+	 * @param string $prompt The prompt to display to the user
+	 * @param bool|null $default The default value to return if the user just presses enter
+	 *
+	 * @return ?bool
+	 *
+	 * @since 1.44
+	 */
+	protected function promptYesNo( $prompt, $default = null ) {
+		$defaultText = $default === null ? '' : ( $default ? 'Y' : 'n' );
+		$line = self::readconsole( $prompt . " (Y/n) [$defaultText]" );
+		if ( $line === false ) {
+			return $default;
+		}
+		if ( $line === '' ) {
+			return $default;
+		}
+
+		return strtolower( $line ) === 'y';
 	}
 }
 

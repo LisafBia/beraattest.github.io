@@ -2,21 +2,7 @@
 /**
  * Page revision base class.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -30,12 +16,12 @@ use MediaWiki\DAO\WikiAwareEntityTrait;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\Page\LegacyArticleIdAccess;
 use MediaWiki\Page\PageIdentity;
+use MediaWiki\Page\WikiPage;
 use MediaWiki\Permissions\Authority;
 use MediaWiki\Title\Title;
 use MediaWiki\Title\TitleValue;
 use MediaWiki\User\UserIdentity;
 use Wikimedia\NonSerializable\NonSerializableTrait;
-use WikiPage;
 
 /**
  * Page revision base class.
@@ -81,8 +67,6 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	protected $mDeleted = 0;
 	/** @var int|null */
 	protected $mSize;
-	/** @var string|null */
-	protected $mSha1;
 	/** @var int|null */
 	protected $mParentId;
 	/** @var CommentStoreComment|null */
@@ -184,7 +168,7 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	public function getContent( $role, $audience = self::FOR_PUBLIC, ?Authority $performer = null ): ?Content {
 		try {
 			$content = $this->getSlot( $role, $audience, $performer )->getContent();
-		} catch ( BadRevisionException | SuppressedDataException $e ) {
+		} catch ( BadRevisionException | SuppressedDataException ) {
 			return null;
 		}
 		return $content->copy();
@@ -291,8 +275,6 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 *
 	 * To find all slots modified by this revision against its immediate parent
 	 * revision, use RevisionSlotsUpdate::newFromRevisionSlots().
-	 *
-	 * @return RevisionSlots
 	 */
 	public function getOriginalSlots(): RevisionSlots {
 		return new RevisionSlots( $this->mSlots->getOriginalSlots() );
@@ -306,8 +288,6 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 * This is the case for rollbacks: slots of a rollback revision are inherited from
 	 * the rollback target, and are different from the slots in the parent revision,
 	 * which was rolled back.
-	 *
-	 * @return RevisionSlots
 	 */
 	public function getInheritedSlots(): RevisionSlots {
 		return new RevisionSlots( $this->mSlots->getInheritedSlots() );
@@ -435,13 +415,13 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 * MCR migration note: this replaced Revision::getUser
 	 *
 	 * @param int $audience One of:
-	 *   RevisionRecord::FOR_PUBLIC       to be displayed to all users
-	 *   RevisionRecord::FOR_THIS_USER    to be displayed to the given user
-	 *   RevisionRecord::RAW              get the ID regardless of permissions
+	 * - `RevisionRecord::FOR_PUBLIC`: to be displayed to all users
+	 * - `RevisionRecord::FOR_THIS_USER`: to be displayed to the given user
+	 * - `RevisionRecord::RAW`: get the user regardless of permissions
 	 * @param Authority|null $performer user on whose behalf to check
-	 * @return UserIdentity|null
+	 * @return UserIdentity|null The identity of the revision author, null if access is forbidden.
 	 */
-	public function getUser( $audience = self::FOR_PUBLIC, ?Authority $performer = null ) {
+	public function getUser( int $audience = self::FOR_PUBLIC, ?Authority $performer = null ) {
 		if ( !$this->audienceCan( self::DELETED_USER, $audience, $performer ) ) {
 			return null;
 		} else {
@@ -458,14 +438,14 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 * MCR migration note: this replaced Revision::getComment
 	 *
 	 * @param int $audience One of:
-	 *   RevisionRecord::FOR_PUBLIC       to be displayed to all users
-	 *   RevisionRecord::FOR_THIS_USER    to be displayed to the given user
-	 *   RevisionRecord::RAW              get the text regardless of permissions
+	 * - `RevisionRecord::FOR_PUBLIC`: to be displayed to all users
+	 * - `RevisionRecord::FOR_THIS_USER`: to be displayed to the given user
+	 * - `RevisionRecord::RAW`: get the text regardless of permissions
 	 * @param Authority|null $performer user on whose behalf to check
 	 *
-	 * @return CommentStoreComment|null
+	 * @return CommentStoreComment|null The revision comment, null if access is forbidden.
 	 */
-	public function getComment( $audience = self::FOR_PUBLIC, ?Authority $performer = null ) {
+	public function getComment( int $audience = self::FOR_PUBLIC, ?Authority $performer = null ) {
 		if ( !$this->audienceCan( self::DELETED_COMMENT, $audience, $performer ) ) {
 			return null;
 		} else {
@@ -489,8 +469,8 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 *
 	 * @return bool
 	 */
-	public function isDeleted( $field ) {
-		return ( $this->getVisibility() & $field ) == $field;
+	public function isDeleted( int $field ) {
+		return ( $this->getVisibility() & $field ) === $field;
 	}
 
 	/**
@@ -520,21 +500,23 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 *
 	 * MCR migration note: this corresponded to Revision::userCan
 	 *
-	 * @param int $field One of self::DELETED_TEXT,
-	 *        self::DELETED_COMMENT,
-	 *        self::DELETED_USER
+	 * @param int $field Exactly one of the `DELETED_*` constants (single-bit flag):
+	 * - `RevisionRecord::DELETED_TEXT` = `File::DELETED_FILE`
+	 * - `RevisionRecord::DELETED_COMMENT` = `File::DELETED_COMMENT`
+	 * - `RevisionRecord::DELETED_USER` = `File::DELETED_USER`
+	 * - `RevisionRecord::DELETED_RESTRICTED` = `File::DELETED_RESTRICTED`
 	 * @param int $audience One of:
-	 *        RevisionRecord::FOR_PUBLIC       to be displayed to all users
-	 *        RevisionRecord::FOR_THIS_USER    to be displayed to the given user
-	 *        RevisionRecord::RAW              get the text regardless of permissions
+	 * - `RevisionRecord::FOR_PUBLIC`: to be displayed to all users
+	 * - `RevisionRecord::FOR_THIS_USER`: to be displayed to the given user
+	 * - `RevisionRecord::RAW`: get the field regardless of permissions
 	 * @param Authority|null $performer user on whose behalf to check
 	 *
 	 * @return bool
 	 */
-	public function audienceCan( $field, $audience, ?Authority $performer = null ) {
-		if ( $audience == self::FOR_PUBLIC && $this->isDeleted( $field ) ) {
+	public function audienceCan( int $field, int $audience, ?Authority $performer = null ) {
+		if ( $audience === self::FOR_PUBLIC && $this->isDeleted( $field ) ) {
 			return false;
-		} elseif ( $audience == self::FOR_THIS_USER ) {
+		} elseif ( $audience === self::FOR_THIS_USER ) {
 			if ( !$performer ) {
 				throw new InvalidArgumentException(
 					'An Authority object must be given when checking FOR_THIS_USER audience.'
@@ -550,18 +532,20 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	}
 
 	/**
-	 * Determine if the give authority is allowed to view a particular
+	 * Determine if the given authority is allowed to view a particular
 	 * field of this revision, if it's marked as deleted.
 	 *
 	 * MCR migration note: this corresponded to Revision::userCan
 	 *
-	 * @param int $field One of self::DELETED_TEXT,
-	 *                              self::DELETED_COMMENT,
-	 *                              self::DELETED_USER
+	 * @param int $field Exactly one of the `DELETED_*` constants (single-bit flag):
+	 * - `RevisionRecord::DELETED_TEXT` = `File::DELETED_FILE`
+	 * - `RevisionRecord::DELETED_COMMENT` = `File::DELETED_COMMENT`
+	 * - `RevisionRecord::DELETED_USER` = `File::DELETED_USER`
+	 * - `RevisionRecord::DELETED_RESTRICTED` = `File::DELETED_RESTRICTED`
 	 * @param Authority $performer user on whose behalf to check
 	 * @return bool
 	 */
-	public function userCan( $field, Authority $performer ) {
+	public function userCan( int $field, Authority $performer ) {
 		return self::userCanBitfield( $this->getVisibility(), $field, $performer, $this->mPage );
 	}
 
@@ -573,19 +557,25 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 * MCR migration note: this replaced Revision::userCanBitfield
 	 *
 	 * @param int $bitfield Current field
-	 * @param int $field One of self::DELETED_TEXT = File::DELETED_FILE,
-	 *                               self::DELETED_COMMENT = File::DELETED_COMMENT,
-	 *                               self::DELETED_USER = File::DELETED_USER
+	 * @param int $field Exactly one of the `DELETED_*` constants (single-bit flag):
+	 * - `self::DELETED_TEXT` = `File::DELETED_FILE`
+	 * - `self::DELETED_COMMENT` = `File::DELETED_COMMENT`
+	 * - `self::DELETED_USER` = `File::DELETED_USER`
+	 * - `self::DELETED_RESTRICTED` = `File::DELETED_RESTRICTED`
+	 * Note: When `self::DELETED_RESTRICTED` is passed, this method returns true if the
+	 * restricted bit isn't set in `$bitfield` (i.e., if the revision isn't suppressed).
 	 * @param Authority $performer user on whose behalf to check
 	 * @param PageIdentity|null $page A PageIdentity object to check for per-page restrictions on,
 	 *                          instead of just plain user rights
 	 * @return bool
 	 */
-	public static function userCanBitfield( $bitfield, $field, Authority $performer, ?PageIdentity $page = null ) {
-		if ( $bitfield & $field ) { // aspect is deleted
+	public static function userCanBitfield( $bitfield, int $field, Authority $performer, ?PageIdentity $page = null ) {
+		self::dieIfCompositeBits( $field ); // This method is unsafe with composite bit fields (T415584)
+
+		if ( $bitfield & $field ) { // Requested flag is set (deleted/suppressed)
 			if ( $bitfield & self::DELETED_RESTRICTED ) {
 				$permissions = [ 'suppressrevision', 'viewsuppressed' ];
-			} elseif ( $field & self::DELETED_TEXT ) {
+			} elseif ( $field === self::DELETED_TEXT ) {
 				$permissions = [ 'deletedtext' ];
 			} else {
 				$permissions = [ 'deletedhistory' ];
@@ -606,6 +596,23 @@ abstract class RevisionRecord implements WikiAwareEntity {
 			}
 		} else {
 			return true;
+		}
+	}
+
+	private static function dieIfCompositeBits( int $field ): void {
+		$validMask = self::DELETED_TEXT
+			| self::DELETED_COMMENT
+			| self::DELETED_USER
+			| self::DELETED_RESTRICTED;
+
+		if (
+			$field === 0 ||
+			( $field & ( $field - 1 ) ) !== 0 || // Not a power of two
+			( $field & ~$validMask ) !== 0 // Contains invalid bits
+		) {
+			throw new \UnexpectedValueException(
+				'Expected $field to be a single DELETED_* constant, got ' . $field
+			);
 		}
 	}
 
@@ -635,7 +642,7 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	}
 
 	/**
-	 * Checks whether the revision record is a stored current revision.
+	 * Checks whether the revision record is a stored latest revision.
 	 * @since 1.35
 	 * @return bool
 	 */

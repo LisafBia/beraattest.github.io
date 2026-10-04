@@ -3,21 +3,7 @@
  * Send SQL queries from the specified file to the database, performing
  * variable replacement along the way.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
@@ -53,12 +39,11 @@ class MwSql extends Maintenance {
 			'The database wiki ID to use if not the current one', false, true );
 		$this->addOption( 'replicadb',
 			'Replica DB server to use instead of the primary DB (can be "any")', false, true );
+		$this->addArg( 'file', 'File with SQL to execute', false );
 		$this->setBatchSize( 100 );
 	}
 
 	public function execute() {
-		global $IP;
-
 		// We want to allow "" for the wikidb, meaning don't call select_db()
 		$wiki = $this->hasOption( 'wikidb' ) ? $this->getOption( 'wikidb' ) : false;
 		// Get the appropriate load balancer (for this wiki)
@@ -81,7 +66,6 @@ class MwSql extends Maintenance {
 					break;
 				}
 			}
-			// @phan-suppress-next-line PhanSuspiciousValueComparison
 			if ( $index === null || $index === ServerInfo::WRITER_INDEX ) {
 				$this->fatalError( "No replica DB server configured with the name '$replicaDB'." );
 			}
@@ -100,12 +84,16 @@ class MwSql extends Maintenance {
 		}
 
 		if ( $this->hasArg( 0 ) ) {
-			$file = fopen( $this->getArg( 0 ), 'r' );
+			$fileName = $this->getArg( 0 );
+			if ( !is_readable( $fileName ) ) {
+				$this->fatalError( "Unable to open input file: $fileName" );
+			}
+			$file = fopen( $fileName, 'r' );
 			if ( !$file ) {
-				$this->fatalError( "Unable to open input file" );
+				$this->fatalError( "Unable to open input file: $fileName" );
 			}
 
-			$error = $db->sourceStream( $file, null, [ $this, 'sqlPrintResult' ], __METHOD__ );
+			$error = $db->sourceStream( $file, null, $this->sqlPrintResult( ... ), __METHOD__ );
 			if ( $error !== true ) {
 				$this->fatalError( $error );
 			}
@@ -127,8 +115,9 @@ class MwSql extends Maintenance {
 			Maintenance::posix_isatty( 0 /*STDIN*/ )
 		) {
 			$home = getenv( 'HOME' );
-			$historyFile = $home ?
-				"$home/.mwsql_history" : "$IP/maintenance/.mwsql_history";
+			$historyFile = $home
+				? "$home/.mwsql_history"
+				: MW_INSTALL_PATH . '/maintenance/.mwsql_history';
 			readline_read_history( $historyFile );
 		} else {
 			$historyFile = null;
@@ -202,7 +191,7 @@ class MwSql extends Maintenance {
 	 * @param IDatabase $db
 	 * @return int|null Number of rows selected or updated, or null if the query was unsuccessful.
 	 */
-	public function sqlPrintResult( $res, $db ) {
+	private function sqlPrintResult( $res, $db ) {
 		if ( !$res ) {
 			// Do nothing
 			return null;

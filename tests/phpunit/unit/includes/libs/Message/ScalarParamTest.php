@@ -3,6 +3,7 @@
 namespace Wikimedia\Tests\Message;
 
 use InvalidArgumentException;
+use MediaWiki\Debug\MWDebug;
 use MediaWiki\Json\JsonCodec;
 use MediaWikiUnitTestCase;
 use stdClass;
@@ -16,10 +17,6 @@ use Wikimedia\Message\ScalarParam;
 class ScalarParamTest extends MediaWikiUnitTestCase {
 	use MessageSerializationTestTrait;
 
-	/**
-	 * Overrides SerializationTestTrait::getClassToTest
-	 * @return string
-	 */
 	public static function getClassToTest(): string {
 		return ScalarParam::class;
 	}
@@ -76,16 +73,40 @@ class ScalarParamTest extends MediaWikiUnitTestCase {
 	}
 
 	public function testConstruct_badTypeConst() {
-		$this->expectException( InvalidArgumentException::class );
-		$this->expectExceptionMessage( '$type must be one of the ParamType constants' );
+		MWDebug::filterDeprecationForTest( '/with string type was deprecated/' );
+		$this->expectException( \ValueError::class );
+		$this->expectExceptionMessage( '"invalid" is not a valid backing value for enum' );
 		new ScalarParam( 'invalid', '' );
 	}
 
 	public function testConstruct_badValueNULL() {
-		$this->expectDeprecationAndContinue(
-			'/Using null as message parameter was deprecated/'
+		$this->assertDeprecation(
+			static function () {
+				new ScalarParam( ParamType::TEXT, null );
+			},
+			'Using null as a message parameter was deprecated in MediaWiki 1.43'
 		);
-		new ScalarParam( ParamType::TEXT, null );
+	}
+
+	public function assertDeprecation( callable $callback, string $message ) {
+		$errorTriggered = false;
+
+		set_error_handler( function ( $errno, $errstr ) use ( $message, &$errorTriggered ) {
+			if ( $errno === E_DEPRECATED || $errno === E_USER_DEPRECATED ) {
+				$this->assertStringContainsString( $message, $errstr );
+				$errorTriggered = true;
+				return true;
+			}
+			return false;
+		} );
+
+		try {
+			$callback();
+		} finally {
+			restore_error_handler();
+		}
+
+		$this->assertTrue( $errorTriggered, 'Expected deprecation warning was not triggered.' );
 	}
 
 	public function testConstruct_badValueClass() {

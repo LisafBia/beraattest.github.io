@@ -5,13 +5,12 @@ namespace MediaWiki\Tests\Storage;
 use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\Json\FormatJson;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Page\WikiPage;
 use MediaWikiIntegrationTestCase;
-use RecentChange;
-use WikiPage;
 
 /**
  * @covers \MediaWiki\Storage\RevertedTagUpdate
- * @covers \RevertedTagUpdateJob
+ * @covers \MediaWiki\JobQueue\Jobs\RevertedTagUpdateJob
  * @covers \MediaWiki\Storage\RevertedTagUpdateManager
  *
  * @group Database
@@ -93,8 +92,12 @@ class RevertedTagUpdateIntegrationTest extends MediaWikiIntegrationTestCase {
 		$this->verifyNoRevertedTags( $revertedRevs );
 
 		// approve the edit – this should enqueue the job
-		$rc = RecentChange::newFromConds( [ 'rc_this_oldid' => $revertRevId ] );
-		$rc->reallyMarkPatrolled();
+		$rc = $this->getServiceContainer()
+			->getRecentChangeLookup()
+			->getRecentChangeByConds( [ 'rc_this_oldid' => $revertRevId ] );
+		$this->getServiceContainer()
+			->getPatrolManager()
+			->reallyMarkPatrolled( $rc );
 
 		// run the job
 		$this->runJobs( [ 'numJobs' => 1 ], [
@@ -149,8 +152,12 @@ class RevertedTagUpdateIntegrationTest extends MediaWikiIntegrationTestCase {
 		$this->verifyRevertedTags( [ $revertId1 ], $revertId2 );
 
 		// approve the edit – this should enqueue the job
-		$rc = RecentChange::newFromConds( [ 'rc_this_oldid' => $revertId1 ] );
-		$rc->reallyMarkPatrolled();
+		$rc = $this->getServiceContainer()
+			->getRecentChangeLookup()
+			->getRecentChangeByConds( [ 'rc_this_oldid' => $revertId1 ] );
+		$this->getServiceContainer()
+			->getPatrolManager()
+			->reallyMarkPatrolled( $rc );
 
 		// Run the job.
 		// The job should notice that the revert is reverted and refuse to perform
@@ -344,8 +351,6 @@ class RevertedTagUpdateIntegrationTest extends MediaWikiIntegrationTestCase {
 
 	/**
 	 * Ensures that the reverted tag is not set for given revisions.
-	 *
-	 * @param array $revisionIds
 	 */
 	private function verifyNoRevertedTags( array $revisionIds ) {
 		$dbw = $this->getDb();
@@ -387,7 +392,7 @@ class RevertedTagUpdateIntegrationTest extends MediaWikiIntegrationTestCase {
 			$this->assertNotEmpty( $extraParams, 'change_tag.ct_params' );
 			$this->assertJson( $extraParams, 'change_tag.ct_params' );
 			$parsedParams = FormatJson::decode( $extraParams, true );
-			$this->assertArraySubmapSame(
+			$this->assertArrayContains(
 				[ 'revertId' => $revertRevId ],
 				$parsedParams,
 				'change_tag.ct_params'

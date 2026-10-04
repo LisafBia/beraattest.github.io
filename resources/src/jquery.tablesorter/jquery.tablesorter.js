@@ -307,7 +307,7 @@
 	function uniqueElements( array ) {
 		const uniques = [];
 		array.forEach( ( elem ) => {
-			if ( elem !== undefined && uniques.indexOf( elem ) === -1 ) {
+			if ( elem !== undefined && !uniques.includes( elem ) ) {
 				uniques.push( elem );
 			}
 		} );
@@ -386,7 +386,7 @@
 					.prop( 'tabIndex', 0 )
 					.attr( {
 						role: 'columnheader button',
-						title: msg[ 2 ]
+						title: msg[ getHeaderSortSequence( $cell )[ 0 ] ]
 					} );
 
 				for ( let k = 0; k < this.colSpan; k++ ) {
@@ -426,9 +426,38 @@
 		return false;
 	}
 
+	function getHeaderSortSequence( $header ) {
+		const sortOrder = String( $header.data( 'sortOrder' ) ).toLowerCase();
+
+		return [ 'desc', 'descending' ].includes( sortOrder ) ? [ 1, 0, 2 ] : [ 0, 1, 2 ];
+	}
+
+	function getNextSortOrderFromCount( $header ) {
+		const sequence = getHeaderSortSequence( $header );
+
+		return sequence[ $header.data( 'count' ) % sequence.length ];
+	}
+
+	function getNextSortOrder( $header, order ) {
+		const sequence = getHeaderSortSequence( $header );
+		const index = sequence.indexOf( order );
+
+		return sequence[ ( index + 1 ) % sequence.length ];
+	}
+
+	function setHeaderSortState( $header, order ) {
+		const sequence = getHeaderSortSequence( $header );
+		const index = sequence.indexOf( order );
+
+		$header.data( {
+			order: order,
+			count: index === -1 ? 0 : index + 1
+		} );
+	}
+
 	/**
 	 * Sets the sort count of the columns that are not affected by the sorting to have them sorted
-	 * in default (ascending) order when their header cell is clicked the next time.
+	 * in their configured first-click order when their header cell is clicked the next time.
 	 *
 	 * @param {jQuery} $headers
 	 * @param {Array} sortList 2D number array
@@ -438,7 +467,7 @@
 		// Loop through all headers to retrieve the indices of the columns the header spans across:
 		headerToColumns.forEach( ( columns, headerIndex ) => {
 
-			columns.forEach( ( columnIndex, i ) => {
+			columns.forEach( ( columnIndex ) => {
 				const header = $headers[ headerIndex ],
 					$header = $( header );
 
@@ -452,11 +481,8 @@
 					// Column shall be sorted: Apply designated count and order.
 					for ( let j = 0; j < sortList.length; j++ ) {
 						const sortColumn = sortList[ j ];
-						if ( sortColumn[ 0 ] === i ) {
-							$header.data( {
-								order: sortColumn[ 1 ],
-								count: sortColumn[ 1 ] + 1
-							} );
+						if ( sortColumn[ 0 ] === columnIndex ) {
+							setHeaderSortState( $header, sortColumn[ 1 ] );
 							break;
 						}
 					}
@@ -467,20 +493,24 @@
 	}
 
 	function setHeadersCss( table, $headers, list, css, msg, columnToHeader ) {
-		// Remove all header information and reset titles to default message
+		// Remove all header information and reset titles to the first configured sort order.
 		// The following classes are used here:
 		// * headerSortUp
 		// * headerSortDown
-		$headers.removeClass( css ).attr( 'title', msg[ 2 ] );
+		$headers.removeClass( css ).each( function () {
+			const $header = $( this );
+			$header.attr( 'title', msg[ getHeaderSortSequence( $header )[ 0 ] ] );
+		} );
 
 		for ( let i = 0; i < list.length; i++ ) {
+			const $header = $headers.eq( columnToHeader[ list[ i ][ 0 ] ] ),
+				order = list[ i ][ 1 ];
 			// The following classes are used here:
 			// * headerSortUp
 			// * headerSortDown
-			$headers
-				.eq( columnToHeader[ list[ i ][ 0 ] ] )
-				.addClass( css[ list[ i ][ 1 ] ] )
-				.attr( 'title', msg[ list[ i ][ 1 ] ] );
+			$header
+				.addClass( css[ order ] )
+				.attr( 'title', msg[ getNextSortOrder( $header, order ) ] );
 		}
 	}
 
@@ -585,7 +615,7 @@
 		regex = regex.join( '|' );
 
 		// Build RegEx
-		// Any date formated with . , ' - or /
+		// Any date formatted with . , ' - or /
 		ts.dateRegex[ 0 ] = new RegExp( /^\s*(\d{1,2})[,.\-/'\s]{1,2}(\d{1,2})[,.\-/'\s]{1,2}(\d{2,4})\s*?/i );
 
 		// Written Month name, dmy
@@ -712,7 +742,7 @@
 	 * Build index to handle colspanned cells in the body.
 	 * Set the cell index for each column in an array,
 	 * so that colspaned cells set multiple in this array.
-	 * columnToCell[collumnIndex] point at the real cell in this row.
+	 * columnToCell[columnIndex] point at the real cell in this row.
 	 *
 	 * @param {jQuery} $table object for a <table>
 	 */
@@ -881,9 +911,8 @@
 
 				// Get the CSS class names, could be done elsewhere
 				const sortCSS = [ config.cssAsc, config.cssDesc, config.cssInitial ];
-				// Messages tell the user what the *next* state will be
-				// so are shifted by one relative to the CSS classes.
-				const sortMsg = [ mw.msg( 'sort-descending' ), mw.msg( 'sort-initial' ), mw.msg( 'sort-ascending' ) ];
+				// Messages tell the user what the next sort action will be.
+				const sortMsg = [ mw.msg( 'sort-ascending' ), mw.msg( 'sort-descending' ), mw.msg( 'sort-initial' ) ];
 
 				// Build headers
 				const $headers = buildHeaders( table, sortMsg );
@@ -960,11 +989,10 @@
 					if ( totalRows > 0 ) {
 						const cell = this;
 						const $cell = $( cell );
-						const numSortOrders = 3;
 
 						// Get current column sort order
 						$cell.data( {
-							order: $cell.data( 'count' ) % numSortOrders,
+							order: getNextSortOrderFromCount( $cell ),
 							count: $cell.data( 'count' ) + 1
 						} );
 
@@ -989,8 +1017,9 @@
 									const s = config.sortList[ j ];
 									const o = config.headerList[ config.columnToHeader[ s[ 0 ] ] ];
 									if ( isValueInArray( s[ 0 ], newSortList ) ) {
-										$( o ).data( 'count', s[ 1 ] + 1 );
-										s[ 1 ] = $( o ).data( 'count' ) % numSortOrders;
+										const $o = $( o );
+										s[ 1 ] = getNextSortOrder( $o, s[ 1 ] );
+										setHeaderSortState( $o, s[ 1 ] );
 									}
 								}
 							} else {
@@ -1253,7 +1282,7 @@
 
 			let y;
 			if ( ( y = parseInt( s[ 0 ], 10 ) ) < 100 ) {
-				// Guestimate years without centuries
+				// Guesstimate years without centuries
 				if ( y < 30 ) {
 					s[ 0 ] = 2000 + y;
 				} else {

@@ -4,7 +4,7 @@ namespace MediaWiki\Tests\Rest\Handler;
 
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Interwiki\ClassicInterwikiLookup;
-use MediaWiki\Languages\LanguageNameUtils;
+use MediaWiki\Language\LanguageNameUtils;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Rest\Handler\LanguageLinksHandler;
@@ -14,6 +14,7 @@ use MediaWiki\Tests\Unit\DummyServicesTrait;
 use MediaWiki\Title\Title;
 use MediaWikiIntegrationTestCase;
 use Wikimedia\Message\MessageValue;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * @covers \MediaWiki\Rest\Handler\LanguageLinksHandler
@@ -58,13 +59,11 @@ class LanguageLinksHandlerTest extends MediaWikiIntegrationTestCase {
 			$this->getServiceContainer()->getHookContainer()
 		);
 
-		$titleCodec = $this->getDummyMediaWikiTitleCodec();
-
 		return new LanguageLinksHandler(
 			$this->getServiceContainer()->getConnectionProvider(),
 			$languageNameUtils,
-			$titleCodec,
-			$titleCodec,
+			$this->getDummyTitleFormatter(),
+			$this->getDummyTitleParser(),
 			$this->getServiceContainer()->getPageStore(),
 			$this->getServiceContainer()->getPageRestHelperFactory()
 		);
@@ -120,7 +119,7 @@ class LanguageLinksHandlerTest extends MediaWikiIntegrationTestCase {
 
 		$firstETag = $response->getHeaderLine( 'ETag' );
 		$this->assertSame(
-			wfTimestamp( TS_RFC2822, $title->getTouched() ),
+			wfTimestamp( TS::RFC2822, $title->getTouched() ),
 			$response->getHeaderLine( 'Last-Modified' )
 		);
 
@@ -132,7 +131,7 @@ class LanguageLinksHandlerTest extends MediaWikiIntegrationTestCase {
 
 		$this->assertNotEquals( $response->getHeaderLine( 'ETag' ), $firstETag );
 		$this->assertSame(
-			wfTimestamp( TS_RFC2822, $title->getTouched() ),
+			wfTimestamp( TS::RFC2822, $title->getTouched() ),
 			$response->getHeaderLine( 'Last-Modified' )
 		);
 	}

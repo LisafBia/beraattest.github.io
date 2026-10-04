@@ -29,6 +29,7 @@ class PruneUnusedLinkTargetRows extends Maintenance {
 		$this->setBatchSize( 50 );
 	}
 
+	/** @inheritDoc */
 	public function execute() {
 		$dbw = $this->getPrimaryDB();
 		$dbr = $this->getReplicaDB();
@@ -82,6 +83,8 @@ class PruneUnusedLinkTargetRows extends Maintenance {
 					$tableData['target_id'] => null
 				] );
 			}
+			$queryBuilder->leftJoin( 'existencelinks', null, 'exl_target_id=lt_id' )
+				->andWhere( [ 'exl_target_id' => null ] );
 			$ltIdsToDelete = $queryBuilder->caller( __METHOD__ )->fetchFieldValues();
 			if ( !$ltIdsToDelete ) {
 				$ltCounter += $this->getBatchSize();

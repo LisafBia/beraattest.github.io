@@ -136,7 +136,7 @@
 	"underline-always": "Фалу",
 	"tog-showhiddencats": "Няфнемс кяшф категориятнень",
 	"tog-showrollbackconfirmation": "Ссылкать лангс люпштамста анамс кемокстама меки мрдамать инкса",
-	"tog-forcesafemode": "Туфтомс [[mw:Manual:Safemode|кальдявонь араламать ззда  режимть]] сембе пингс",
+	"tog-forcesafemode": "Туфтомс [[mw:Special:MyLanguage/Manual:Safemode|кальдявонь араламать ззда  режимть]] сембе пингс",
 	"prefs-help-forcesafemode": "Лоткафтыть вики-скрипттнень и таблицань стильхнень.",
 	"prefs-editing": "Петнема",
 	"prefs-description-editing": "Тик-ладяк сянь, кода тон петькснень сувафнесайть, мушендьсайть и ванат мельгаст.",
@@ -220,6 +220,7 @@
 	"search-thumbnail-extra-namespaces-label": "Няфнемс миниатюрат:Special:Search шра лангонь версияса",
 	"search-thumbnail-extra-namespaces-message": "Няфни миниатюрат {{PLURAL:$2|лемонь ётка вастонди|лемонь ётка васттненди}}$1путфксонь лопаса{{#special:search}}",
 	"prefs-advancedsearchoptions": "Келептьф ладямат",
+	"prefs-misc": "Лия латцемат-тиемат",
 	"prefs-reset-intro": "Тя лопаса ули кода лоткафтомс тонь тифнень-ладяфнень и полафтомс синь стандартнайхнень лангс.\nКиртьк мяльса, тя тевтиемась аш кода мрдафтомс.",
 	"prefs-reset-confirm": "Тяфта, монь ули мелезе ёрдамс эсь тифонень-ладяфонень.",
 	"restoreprefs": "Мрдафтомс меки сембе тифне-ладяфне эсезост"

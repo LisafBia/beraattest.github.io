@@ -2,7 +2,7 @@
 
 namespace MediaWiki\Tests\Storage;
 
-use ChangeTags;
+use MediaWiki\ChangeTags\ChangeTags;
 use MediaWiki\ChangeTags\ChangeTagsStore;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Json\FormatJson;
@@ -14,7 +14,6 @@ use MediaWiki\Storage\EditResult;
 use MediaWiki\Storage\RevertedTagUpdate;
 use MediaWikiUnitTestCase;
 use MockTitleTrait;
-use PHPUnit\Framework\MockObject\Stub\ReturnCallback;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
 use TestLogger;
@@ -86,15 +85,15 @@ class RevertedTagUpdateTest extends MediaWikiUnitTestCase {
 		string $timestamp = '20100101202020',
 		?string $sha1 = null
 	) {
-		$revisionRecord = new MutableRevisionRecord(
-			$this->makeMockTitle( __METHOD__, [ 'id' => $pageId ] )
+		$revisionRecord = new TestMutableRevisionRecord(
+			$this->makeMockTitle( __METHOD__, [ 'id' => $pageId ] ),
+			TestMutableRevisionRecord::LOCAL,
+			$sha1 ?? strval( $revisionId )
 		);
 		$revisionRecord->setId( $revisionId );
 		$revisionRecord->setTimestamp( $timestamp );
 		$revisionRecord->setPageId( $pageId );
-		// Not a valid SHA-1, but enough to make these revisions appear like they have
-		// different contents.
-		$revisionRecord->setSha1( $sha1 ?? strval( $revisionId ) );
+
 		return $revisionRecord;
 	}
 
@@ -549,7 +548,7 @@ class RevertedTagUpdateTest extends MediaWikiUnitTestCase {
 	/**
 	 * Test marking multiple revisions as reverted.
 	 *
-	 * Also ensures that null revisions (e.g. move and protection entries) are not
+	 * Also ensures that dummy revisions (e.g. move and protection entries) are not
 	 * marked as 'reverted', see: T265312
 	 */
 	public function testMultipleRevertedRevisions() {
@@ -586,9 +585,8 @@ class RevertedTagUpdateTest extends MediaWikiUnitTestCase {
 		$reallyRevertedRevs = [ 123, 124, 126 ];
 		$changeTagsStoreRetCallbacks = [];
 		for ( $i = 0; $i <= 2; $i++ ) {
-			$changeTagsStoreRetCallbacks[] = new ReturnCallback(
-				$this->getChangeTagsReturnCallback( $reallyRevertedRevs[$i], 130, $editResult )
-			);
+			$changeTagsStoreRetCallbacks[] =
+				$this->getChangeTagsReturnCallback( $reallyRevertedRevs[$i], 130, $editResult );
 		}
 		$changeTagsStore
 			->method( 'addTags' )

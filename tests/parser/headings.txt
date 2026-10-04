@@ -42,8 +42,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==h1==
 ===h1.1===
@@ -76,21 +74,23 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==a==
 <h2>b</h2>
 <h3>c</h3>
 ===d===
 <h2>e</h2>
-!! metadata
+!! metadata/php
 Sections:
  h2 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:a line:a
  h2 index: toclevel:1 number:2 title:NULL off:NULL anchor/linkAnchor:b line:b
   h3 index: toclevel:2 number:2.1 title:NULL off:NULL anchor/linkAnchor:c line:c
   h3 index:2 toclevel:2 number:2.2 title:Parser_test off:28 anchor/linkAnchor:d line:d
  h2 index: toclevel:1 number:3 title:NULL off:NULL anchor/linkAnchor:e line:e
+!! metadata/parsoid
+Sections:
+ h2 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:a line:a
+  h3 index:2 toclevel:2 number:1.1 title:Parser_test off:28 anchor/linkAnchor:d line:d
 !! end
 
 !! test
@@ -101,25 +101,25 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 {{1x|
 <h2>hi</h2>
 ho
 }}
 !! html/php
-<div class="mw-heading mw-heading2"><h2 id="hi">hi</h2></div>
+<h2 id="hi" class="mw-html-heading">hi</h2>
 <p>ho
 </p>
-!! html/parsoid
-<section data-mw-section-id="0"></section><section data-mw-section-id="-1"><span about="#mwt1" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"\n&lt;h2>hi&lt;/h2>\nho\n"}},"i":0}}]}'>
-</span><h2 about="#mwt1" id="hi">hi</h2><span about="#mwt1">
-</span><p about="#mwt1">ho</p><span about="#mwt1">
-</span></section>
-!! metadata
+!! metadata/php
 Sections:
  h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:hi line:hi
+!! html/parsoid
+<section data-mw-section-id="0"><span about="#mwt1" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"\n&lt;h2>hi&lt;/h2>\nho\n"}},"i":0}}]}'>
+</span><h2 about="#mwt1" id="hi" data-parsoid='{"stx":"html"}'>hi</h2><span about="#mwt1">
+</span><p about="#mwt1">ho</p><span about="#mwt1">
+</span></section>
+!! metadata/parsoid
+Sections:
 !! end
 
 !! test
@@ -131,8 +131,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==a==
 ==a==
@@ -153,12 +151,10 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==a==
 {{Test}}
-!! metadata
+!! metadata/integrated
 Sections:
  h2 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:a line:a
  h2 index:T-1 toclevel:1 number:2 title:Template:Test off:NULL anchor/linkAnchor:th2 line:th2
@@ -174,8 +170,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==<span>x</span>==
 ==<strike>y</strike>==
@@ -194,8 +188,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==<div>b</div>==
 ==<font>c</font>==
@@ -214,8 +206,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==<span dir='ltr' title='x'>a</span>==
 ==<span dir='rtl' title='x'>b</span>==
@@ -237,8 +227,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==<span><div></div></span>x==
 ==<span dir='ltr'><i dir='ltr'></i></span>y==
@@ -253,10 +241,31 @@ Sections:
 !! end
 
 !! test
+Ensure tags following empty tags are stripped
+!! options
+nohtml
+showtocdata
+parsoid={
+	"modes": [ "wt2html" ],
+	"wrapSections": true
+}
+!! wikitext
+==<div></div>x==
+==<abbr><abbr></abbr></abbr><abbr><abbr title="abbr title">y</abbr></abbr>z==
+!! metadata/php
+Sections:
+ h2 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:x line:x
+ h2 index:2 toclevel:1 number:2 title:Parser_test off:17 anchor/linkAnchor:yz line:yz
+!! metadata/parsoid
+Sections:
+ h2 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:x line:x
+ h2 index:2 toclevel:1 number:2 title:Parser_test off:17 anchor/linkAnchor:yz line:yz
+!! end
+
+!! test
 Ensure comments in toc lines are stripped
 !! config
 wgRawHtml=1
-wgParserEnableLegacyHeadingDOM=false
 !! options
 nohtml
 showtocdata
@@ -276,8 +285,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==[[Cat]]==
 ==[[Dog]]s==
@@ -303,7 +310,6 @@ parsoid={
 }
 !! config
 wgFragmentMode=[ "html5", "legacy" ]
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ===a=
 =''x''=
@@ -313,27 +319,6 @@ Sections:
  h1 index:2 toclevel:1 number:2 title:Parser_test off:6 anchor/linkAnchor:x line:<i>x</i>
 !! end
 
-# For heading that come from template args, core, Parsoid-standalone, and
-# Parsoid-integrate different in ther "index" output.
-#
-# - For templated sections, Parsoid and core differ in some of the metadata.
-#   Parsoid doesn't distinguish between sections that come from template args
-#   and from templated content - it treats them all as template-generated headings.
-#   But core does not consider headings from template-args as "inTemplate", but
-#   'fromtitle' is set to false even so.
-#
-# - Parsoid's behavior is more consistent wrt templates. But, this is potentially
-#   a breaking change for users of TOC data. The index for templated
-#   content is used to generate section edit links for content coming
-#   from a template, and in updating the appropriate article when that
-#   section is saved.  So this is potentially a breaking change when
-#   Parsoid starts to generate section edit links, and possible one
-#   which could cause db corruption.
-#
-# - Additionally, heading-index is reset in integrated mode because templates are
-#   processed by core preprocessor whereas in native preprocessing mode (used by
-#   parsertests), the heading index is not reset.
-# - See also T222419.
 !! test
 Templated sections (heading from template arg)
 !! options
@@ -343,32 +328,21 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==a==
 {{1x|1=
 ==b==
 }}
-!! metadata/php
+!! metadata/integrated
 Sections:
  h2 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:a line:a
  h2 index: toclevel:1 number:2 title:NULL off:NULL anchor/linkAnchor:b line:b
-!! metadata/parsoid+integrated
-Sections:
- h2 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:a line:a
- h2 index:T-1 toclevel:1 number:2 title:Template:1x off:NULL anchor/linkAnchor:b line:b
-!! metadata/parsoid+standalone
-Sections:
- h2 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:a line:a
- h2 index:T-2 toclevel:1 number:2 title:Template:1x off:NULL anchor/linkAnchor:b line:b
 !! end
 
 !! test
 Handle extension content in section headers properly (non-Cite version)
 !! config
 wgFragmentMode=[ "html5", "legacy" ]
-wgParserEnableLegacyHeadingDOM=false
 !! options
 nohtml
 showtocdata
@@ -387,7 +361,6 @@ Sections:
 Offsets in toc metadata should be unicode codepoints, not bytes or UCS-2
 !! config
 wgFragmentMode=[ "html5", "legacy" ]
-wgParserEnableLegacyHeadingDOM=false
 !! options
 parsoid={
 	"modes": [ "wt2html" ],
@@ -415,8 +388,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 <div>
 {{1x|1=
@@ -430,10 +401,6 @@ Sections:
  h2 index:2 toclevel:1 number:2 title:Parser_test off:32 anchor/linkAnchor:bar line:bar
 !! end
 
-# Parsoid's parser function implementation used for standalone testing
-# is incomplete and only used in parser tests.
-# So, use HTML h-tags instead of wikitext h-tags in the parser function
-# to let us run this test in both standalone and integrated modes.
 !! test
 Handle parser functions generating sections
 !! options
@@ -443,15 +410,41 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
-{{#if:1|<h2>foo</h2>|unused}}
+{{#if:1|
+==foo==
+|unused}}
 ==bar==
 !! metadata
 Sections:
  h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:foo line:foo
- h2 index:1 toclevel:1 number:2 title:Parser_test off:30 anchor/linkAnchor:bar line:bar
+ h2 index:2 toclevel:1 number:2 title:Parser_test off:27 anchor/linkAnchor:bar line:bar
+!! end
+
+!! article
+Template:Pfheading
+!! text
+{{#if:1|
+==foo==
+|unused}}
+==bar==
+!! endarticle
+
+!! test
+Handle parser functions generating sections (in template)
+!! options
+nohtml
+showtocdata
+parsoid={
+	"modes": [ "wt2html" ],
+	"wrapSections": true
+}
+!! wikitext
+{{pfheading}}
+!! metadata/integrated
+Sections:
+ h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:foo line:foo
+ h2 index:T-2 toclevel:1 number:2 title:Template:Pfheading off:NULL anchor/linkAnchor:bar line:bar
 !! end
 
 !! test
@@ -463,15 +456,15 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 {{{foo|
 ==tplarg==
 |abcd}}}
+==bar==
 !! metadata
 Sections:
  h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:tplarg line:tplarg
+ h2 index:2 toclevel:1 number:2 title:Parser_test off:28 anchor/linkAnchor:bar line:bar
 !! end
 
 ###
@@ -479,8 +472,6 @@ Sections:
 ###
 !! test
 Basic section headings
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==Headline 1==
 Some text
@@ -503,8 +494,6 @@ Blah blah
 
 !! test
 Section headings with TOC
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==Headline 1==
 ===Subheadline 1===
@@ -561,7 +550,6 @@ Some text
 Section headings with TOC and language conversion (T295187, T306862)
 !! config
 wgUsePigLatinVariant=true
-wgParserEnableLegacyHeadingDOM=false
 !! options
 language=en htmlVariantLanguage=en-x-piglatin
 !! wikitext
@@ -607,7 +595,6 @@ Some text
 Section headings with TOC and language conversion disabled (T295187)
 !! config
 wgUsePigLatinVariant=true
-wgParserEnableLegacyHeadingDOM=false
 !! options
 language=en htmlVariantLanguage=en-x-piglatin
 !! wikitext
@@ -658,7 +645,6 @@ Section headings with TOC, language conversion rules, and displaytitle
 !! config
 wgUsePigLatinVariant=true
 wgRestrictDisplayTitle=false
-wgParserEnableLegacyHeadingDOM=false
 !! options
 language=en htmlVariantLanguage=en-x-piglatin
 showtitle
@@ -728,8 +714,6 @@ Introduction.
 
 !! test
 TOC anchors don't collide
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __FORCETOC__
 ==Headline 2==
@@ -758,8 +742,6 @@ __FORCETOC__
 Handling of sections up to level 6 and beyond
 !! options
 parsoid=wt2html
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 =Level 1 Heading=
 ==Level 2 Heading==
@@ -827,8 +809,6 @@ wgParserEnableLegacyHeadingDOM=false
 
 !! test
 TOC regression (T11764)
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==title 1==
 ===title 1.1===
@@ -874,8 +854,6 @@ wgParserEnableLegacyHeadingDOM=false
 
 !! test
 TOC for heading containing <span id="..."></span> (T96153)
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __FORCETOC__
 ==<span id="old-anchor"></span>New title==
@@ -893,8 +871,6 @@ __FORCETOC__
 TOC with wgMaxTocLevel=3 (T8204)
 !! options
 wgMaxTocLevel=3
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==title 1==
 ===title 1.1===
@@ -938,8 +914,6 @@ wgParserEnableLegacyHeadingDOM=false
 TOC with wgMaxTocLevel=3 and two level four headings (T8204)
 !! options
 wgMaxTocLevel=3
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==Section 1==
 ===Section 1.1===
@@ -973,8 +947,6 @@ wgParserEnableLegacyHeadingDOM=false
 
 !! test
 Resolving duplicate section names
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==Foo bar==
 ==Foo bar==
@@ -985,8 +957,6 @@ wgParserEnableLegacyHeadingDOM=false
 
 !! test
 Resolving duplicate section names with differing case (T12721)
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==Foo bar==
 ==Foo Bar==
@@ -1009,8 +979,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __NOTOC__
 ==Section 0==
@@ -1038,8 +1006,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 !! metadata
 flags=
@@ -1056,8 +1022,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __FORCETOC__
 !! metadata
@@ -1075,8 +1039,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 !! metadata
@@ -1093,8 +1055,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __NOTOC__
 !! metadata
@@ -1111,8 +1071,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 == One ==
 !! metadata
@@ -1132,8 +1090,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 <div>
 ==a==
@@ -1163,8 +1119,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __FORCETOC__
 == One ==
@@ -1191,8 +1145,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 == One ==
 __TOC__
@@ -1217,8 +1169,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __NOTOC__
 == One ==
@@ -1239,8 +1189,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 == One ==
 === Two ===
@@ -1282,8 +1230,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __FORCETOC__
 == One ==
@@ -1327,8 +1273,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __NOTOC__
 == One ==
@@ -1360,8 +1304,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __NOEDITSECTION__
 ==Section 1==
@@ -1381,8 +1323,6 @@ flags=no-section-edit-links
 
 !! test
 Link inside a section heading
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==Section with a [[Main Page|link]] in it==
 !! html
@@ -1391,8 +1331,6 @@ wgParserEnableLegacyHeadingDOM=false
 
 !! test
 TOC regression (T14077)
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==title 1==
@@ -1431,8 +1369,6 @@ showflags
 parsoid={
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __NEWSECTIONLINK__
 __FORCETOC__
@@ -1456,8 +1392,6 @@ flags=mw-NewSection
 T28375: TOC with italics
 !! options
 title=[[Main Page]]
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==''Lost'' episodes==
@@ -1478,8 +1412,6 @@ __TOC__
 T28375: TOC with bold
 !! options
 title=[[Main Page]]
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 =='''should be bold''' then normal text==
@@ -1500,9 +1432,6 @@ __TOC__
 T35845: Headings become cursive in TOC when they contain an image
 !! options
 title=[[Main Page]]
-!! config
-wgParserEnableLegacyMediaDOM=false
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==Image [[Image:foobar.jpg]]==
@@ -1513,18 +1442,16 @@ __TOC__
 </ul>
 </div>
 
-<div class="mw-heading mw-heading2"><h2 id="Image">Image <span class="mw-default-size" typeof="mw:File"><a href="/wiki/File:Foobar.jpg" class="mw-file-description"><img src="http://example.com/images/3/3a/Foobar.jpg" decoding="async" width="1941" height="220" class="mw-file-element" /></a></span></h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Main_Page&amp;action=edit&amp;section=1" title="Edit section: Image">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<div class="mw-heading mw-heading2"><h2 id="Image">Image <span class="mw-default-size" typeof="mw:File"><a href="/wiki/File:Foobar.jpg" class="mw-file-description"><img src="http://example.com/images/3/3a/Foobar.jpg" decoding="async" loading="lazy" width="1941" height="220" class="mw-file-element" /></a></span></h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Main_Page&amp;action=edit&amp;section=1" title="Edit section: Image">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 !! html/parsoid
 <meta property="mw:PageProp/toc" data-parsoid='{}'/>
-<h2 id="Image" data-parsoid='{}'>Image <span class="mw-default-size" typeof="mw:File"><a href="./File:Foobar.jpg" class="mw-file-description"><img resource="./File:Foobar.jpg" src="http://example.com/images/3/3a/Foobar.jpg" decoding="async" data-file-width="1941" data-file-height="220" data-file-type="bitmap" height="220" width="1941" data-parsoid='{"a":{"resource":"./File:Foobar.jpg","height":"220","width":"1941"},"sa":{"resource":"Image:foobar.jpg"}}' class="mw-file-element"/></a></span></h2>
+<h2 id="Image" data-parsoid='{}'>Image <span class="mw-default-size" typeof="mw:File"><a href="./File:Foobar.jpg" class="mw-file-description"><img resource="./File:Foobar.jpg" src="http://example.com/images/3/3a/Foobar.jpg" decoding="async" loading="lazy" data-file-width="1941" data-file-height="220" data-file-type="bitmap" height="220" width="1941" data-parsoid='{"a":{"resource":"./File:Foobar.jpg","height":"220","width":"1941"},"sa":{"resource":"Image:foobar.jpg"}}' class="mw-file-element"/></a></span></h2>
 !! end
 
 !! test
 T35845 (2): Headings become bold in TOC when they contain a blockquote
 !! options
 title=[[Main Page]]
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==<blockquote>Quote</blockquote>==
@@ -1545,7 +1472,6 @@ __TOC__
 Unclosed tags in TOC
 !! config
 wgFragmentMode=[ "html5", "legacy" ]
-wgParserEnableLegacyHeadingDOM=false
 !! options
 title=[[Main Page]]
 !! wikitext
@@ -1573,8 +1499,6 @@ QED</p>
 
 !! test
 Multiple tags in TOC
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==<i>Foo</i> <b>Bar</b>==
@@ -1603,8 +1527,6 @@ __TOC__
 Tags with parameters in TOC
 !! options
 parsoid=wt2html
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==<sup class="in-h2">Hello</sup>==
@@ -1629,8 +1551,6 @@ __TOC__
 
 !! test
 span tags with directionality in TOC
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==<span dir="ltr">C++</span>==
@@ -1659,8 +1579,6 @@ __TOC__
 
 !! test
 T74884: bdi element in ToC
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==<bdi>test</bdi>==
@@ -1679,8 +1597,6 @@ __TOC__
 
 !! test
 T35715: s/strike element in ToC
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==<s>test</s> test <strike>test</strike>==
@@ -1701,8 +1617,6 @@ __TOC__
 T198618: style element in ToC
 !! options
 styletag=1
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==<style>.foo {}</style>Style<style>.bar {}</style>==
@@ -1723,8 +1637,6 @@ __TOC__
 T198618: script element in ToC
 !! options
 wgRawHtml=1
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==<html><script>alert(1);</script></html>Script<html><script>alert(1);</script></html>==
@@ -1743,8 +1655,6 @@ __TOC__
 
 !! test
 Empty <p> tag in TOC, removed by Sanitizer (T92892)
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __TOC__
 ==x==
@@ -1765,8 +1675,6 @@ __TOC__
 Disable TOC
 !! options
 notoc
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 Lead
 ==Section 1==
@@ -1794,8 +1702,6 @@ Lead
 Short headings with trailing space should match behavior of Parser::doHeadings (T21910)
 !! options
 parsoid=wt2html,html2html
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 === 
 The line above must have a trailing space!
@@ -1819,8 +1725,6 @@ But just in case it doesn't...
 
 !! test
 Header with special characters (T27462)
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 The tooltips shall not show entities to the user (ie. be double escaped)
 
@@ -1860,7 +1764,7 @@ section 5
 <div class="mw-heading mw-heading2"><h2 id="text_.26_text">text &amp; text</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=3" title="Edit section: text &amp; text">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <p>section 3
 </p>
-<div class="mw-heading mw-heading2"><h2 id="text_.27_text">text ' text</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=4" title="Edit section: text &#039; text">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<div class="mw-heading mw-heading2"><h2 id="text_.27_text">text ' text</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=4" title="Edit section: text &#39; text">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <p>section 4
 </p>
 <div class="mw-heading mw-heading2"><h2 id="text_.22_text">text " text</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=5" title="Edit section: text &quot; text">edit</a><span class="mw-editsection-bracket">]</span></span></div>
@@ -1887,8 +1791,6 @@ section 5
 
 !! test
 Header with space, plus and underscore as entity
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 Id should not contain + for spaces
 
@@ -1989,8 +1891,6 @@ Headers with excess '=' characters
 (Are similar tests necessary beyond the 1st level?)
 !! options
 parsoid=wt2html,wt2wt,html2html
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 =foo==
 ==foo=
@@ -2020,8 +1920,6 @@ wgParserEnableLegacyHeadingDOM=false
 !! test
 HTML headers vs TOC (T25393)
 (__NOEDITSECTION__ for clearer output, doesn't matter here)
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 <h1>Header 1</h1>
 ==Header 1.1==
@@ -2050,11 +1948,11 @@ __NOEDITSECTION__
 </ul>
 </div>
 
-<div class="mw-heading mw-heading1"><h1 id="Header_1">Header 1</h1></div>
+<h1 id="Header_1" class="mw-html-heading">Header 1</h1>
 <div class="mw-heading mw-heading2"><h2 id="Header_1.1">Header 1.1</h2></div>
 <div class="mw-heading mw-heading2"><h2 id="Header_1.2">Header 1.2</h2></div>
-<div class="mw-heading mw-heading1"><h1 id="Header_2">Header 2
-</h1></div>
+<h1 id="Header_2" class="mw-html-heading">Header 2
+</h1>
 <div class="mw-heading mw-heading2"><h2 id="Header_2.1">Header 2.1</h2></div>
 <div class="mw-heading mw-heading2"><h2 id="Header_2.2">Header 2.2</h2></div>
 !! html/parsoid
@@ -2071,8 +1969,6 @@ __NOEDITSECTION__
 
 !! test
 Out-of-order TOC heading levels
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==2==
 ======6======
@@ -2120,7 +2016,6 @@ wgParserEnableLegacyHeadingDOM=false
 TOC with HTML entities which are not wikitext entities (T355386)
 !! config
 wgFragmentMode=[ "html5" ]
-wgParserEnableLegacyHeadingDOM=false
 !! options
 nohtml
 showtocdata
@@ -2143,7 +2038,6 @@ Sections:
 TOC with french spacing (T324763)
 !! config
 wgFragmentMode=[ "html5" ]
-wgParserEnableLegacyHeadingDOM=false
 !! options
 nohtml
 showtocdata
@@ -2171,8 +2065,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __FORCETOC__
 <spantag>
@@ -2215,8 +2107,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __FORCETOC__
 {{1x|1=foo
@@ -2264,8 +2154,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 __FORCETOC__
 {{1x|1=<spantag>
@@ -2293,22 +2181,18 @@ blah
 <div class="mw-heading mw-heading2"><h2 id="page_h2">page h2</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=2" title="Edit section: page h2">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <p>blah
 </p>
-!! html/parsoid
+!! html/parsoid+integrated
 <section data-mw-section-id="-1"><meta property="mw:PageProp/forcetoc" data-parsoid='{"src":"__FORCETOC__","magicSrc":"__FORCETOC__"}'/>
-</section><section data-mw-section-id="-2" about="#mwt4" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"&lt;spantag>\n==spantag h2==\n&lt;/spantag>\n==template h2=="}},"i":0}},"\nintro\n"]}'><span typeof="mw:Extension/spantag mw:Transclusion" about="#mwt2" data-parsoid='{"pi":[[{"k":"1","named":true,"spc":["","","","\n"]}]],"dsr":[13,74,null,null]}' data-mw='{"name":"spantag","attrs":{},"body":{"extsrc":"\n==spantag h2==\n"},"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"&lt;spantag>\n==spantag h2==\n&lt;/spantag>\n==template h2=="}},"i":0}}]}'>
+</section><section data-mw-section-id="-2" about="#mwt4" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"&lt;spantag>\n==spantag h2==\n&lt;/spantag>\n==template h2=="}},"i":0}},"\nintro\n"]}'><span typeof="mw:Extension/spantag mw:Transclusion" about="#mwt2" data-parsoid='{"pi":[[{"k":"1","named":true,"spc":["","","","\n"]}]]}' data-mw='{"name":"spantag","attrs":{},"body":{"extsrc":"\n==spantag h2==\n"},"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"&lt;spantag>\n==spantag h2==\n&lt;/spantag>\n==template h2=="}},"i":0}}]}'>
 <section data-mw-section-id="-1"><h2 id="spantag_h2">spantag h2</h2>
 </section></span><span about="#mwt2">
 </span><meta property="mw:PageProp/toc" data-mw='{"autoGenerated":true}'/></section><section data-mw-section-id="-1" about="#mwt4"><h2 about="#mwt2" id="template_h2">template h2</h2>
 <p>intro</p>
 </section><section data-mw-section-id="2"><h2 id="page_h2">page h2</h2>
 <p>blah</p></section>
-!! metadata/php
+!! metadata/integrated
 Sections:
  h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:template_h2 line:template h2
- h2 index:2 toclevel:1 number:2 title:Parser_test off:81 anchor/linkAnchor:page_h2 line:page h2
-!! metadata/parsoid
-Sections:
- h2 index:T-1 toclevel:1 number:1 title:Template:1x off:NULL anchor/linkAnchor:template_h2 line:template h2
  h2 index:2 toclevel:1 number:2 title:Parser_test off:81 anchor/linkAnchor:page_h2 line:page h2
 !! end
 
@@ -2320,8 +2204,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 <span id="hiho">hiho</span>
 === hiho ===
@@ -2348,26 +2230,21 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 <h3 id="asdf">odd</h3>
 !! html/php
-<h3 id="asdf">odd</h3>
+<h3 id="asdf" class="mw-html-heading">odd</h3>
 !! metadata/php
 Sections:
  h3 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:asdf line:odd
 !! html/parsoid
-<section data-mw-section-id="0"></section><section data-mw-section-id="-1"><h3 id="asdf" data-parsoid='{"stx":"html","reusedId":true}'>odd</h3></section>
+<section data-mw-section-id="0"><h3 id="asdf" data-parsoid='{"stx":"html","reusedId":true}'>odd</h3></section>
 !! metadata/parsoid
 Sections:
- h3 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:asdf line:odd
 !! end
 
 !! test
 Extra newlines followed by heading
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 a
 
@@ -2396,8 +2273,6 @@ Dummy article to suppress redlinks in tests
 
 !! test
 Extra newlines between heading and content are swallowed (Parsoid does not)
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 =b=
 
@@ -2422,7 +2297,6 @@ Heading with line break in nowiki
 parsoid=wt2html
 !! config
 wgFragmentMode=[ "html5", "legacy" ]
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==A <nowiki>B
 C</nowiki>==
@@ -2440,7 +2314,6 @@ Heading with nonbreaking space in prefix/suffix (T235684)
 parsoid=wt2html,html2html
 !! config
 wgFragmentMode=[ "html5", "legacy" ]
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 == &nbsp; A &nbsp; B &nbsp; ==
 !! html/php
@@ -2453,7 +2326,6 @@ wgParserEnableLegacyHeadingDOM=false
 Heading with literal wikitext - the wikitext is not parsed in section edit link tooltip
 !! config
 wgFragmentMode=[ "html5" ]
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 == <nowiki>{{PAGENAME}}</nowiki> ==
 == &#123;&#123;PAGENAME}} ==
@@ -2473,8 +2345,6 @@ Template:Includeonly section
 
 !! test
 T8563: Edit link generation for section shown by <includeonly>
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 {{includeonly section}}
 !! html
@@ -2484,8 +2354,6 @@ wgParserEnableLegacyHeadingDOM=false
 
 !! test
 T8563: Edit link generation for section suppressed by <includeonly>
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 <includeonly>
 ==Includeonly section==
@@ -2500,8 +2368,6 @@ wgParserEnableLegacyHeadingDOM=false
 # production takes precedence.
 !! test
 Fuzz testing: Parser14
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==onmouseover===
 http://__TOC__
@@ -2514,21 +2380,19 @@ http://</p><div id="toc" class="toc" role="navigation" aria-labelledby="mw-toc-h
 </div>
 !! html/parsoid
 <h2 id="onmouseover="><span id="onmouseover.3D" typeof="mw:FallbackId"></span>onmouseover=</h2>
-<p><a rel="mw:ExtLink" href="http://__TOC__" class="external free" data-parsoid='{"stx":"url"}'>http://__TOC__</a></p>
+<p><a rel="mw:ExtLink nofollow" href="http://__TOC__" class="external free" data-parsoid='{"stx":"url"}'>http://__TOC__</a></p>
 !! end
 
 !! test
 Fuzz testing: Parser14-table
 !! options
 parsoid=wt2html,html2html
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==a==
 {| STYLE=__TOC__
 !! html/php
 <div class="mw-heading mw-heading2"><h2 id="a">a</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=1" title="Edit section: a">edit</a><span class="mw-editsection-bracket">]</span></span></div>
-<table style="&#95;_TOC&#95;_">
+<table style="&#95;&#95;TOC&#95;&#95;">
 <tbody><tr><td></td></tr>
 </tbody></table>
 !! html/parsoid
@@ -2545,8 +2409,6 @@ MediaWiki:Fake
 
 !! test
 Inclusion of !userCanEdit() content
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 {{MediaWiki:Fake}}
 !! html
@@ -2556,8 +2418,6 @@ wgParserEnableLegacyHeadingDOM=false
 
 !! test
 Morwen/13: Unclosed link followed by heading
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 [[link
 ==heading==
@@ -2569,8 +2429,6 @@ wgParserEnableLegacyHeadingDOM=false
 
 !! test
 HHP2.1: Heuristics for headings in preprocessor parenthetical structures
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 {{foo|
 =heading=
@@ -2582,8 +2440,6 @@ wgParserEnableLegacyHeadingDOM=false
 
 !! test
 HHP2.2: Heuristics for headings in preprocessor parenthetical structures
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 {{foo|
 ==heading==
@@ -2601,8 +2457,6 @@ FOO
 
 !! test
 nowiki inside link inside heading (T20295)
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==[[foo|x<nowiki>y</nowiki>z]]==
 !! html
@@ -2613,7 +2467,6 @@ wgParserEnableLegacyHeadingDOM=false
 Decoding of HTML entities in headings and links for IDs and link fragments (T103714)
 !! config
 wgFragmentMode=[ "html5", "legacy" ]
-wgParserEnableLegacyHeadingDOM=false
 !! options
 showtocdata
 parsoid={
@@ -2638,7 +2491,6 @@ Sections:
 Decoding of HTML entities in headings and links for IDs and link fragments (T103714) (legacy)
 !! config
 wgFragmentMode=[ "legacy" ]
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==A&B&amp;C&amp;amp;D&amp;amp;amp;E==
 [[#A&B&amp;C&amp;amp;D&amp;amp;amp;E]]
@@ -2653,7 +2505,6 @@ wgParserEnableLegacyHeadingDOM=false
 HTML5 ids: fallback to legacy
 !! config
 wgFragmentMode=[ "html5", "legacy" ]
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==Foo bar==
 
@@ -2690,7 +2541,7 @@ wgParserEnableLegacyHeadingDOM=false
 <div class="mw-heading mw-heading2"><h2 id="Тест"><span id=".D0.A2.D0.B5.D1.81.D1.82"></span>Тест</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=3" title="Edit section: Тест">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <div class="mw-heading mw-heading2"><h2 id="Тест_2"><span id=".D0.A2.D0.B5.D1.81.D1.82_2"></span>Тест</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=4" title="Edit section: Тест">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <div class="mw-heading mw-heading2"><h2 id="тест"><span id=".D1.82.D0.B5.D1.81.D1.82"></span>тест</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=5" title="Edit section: тест">edit</a><span class="mw-editsection-bracket">]</span></span></div>
-<div class="mw-heading mw-heading2"><h2 id="Hey_&lt;_#_&quot;_&gt;_%_:_'"><span id="Hey_.3C_.23_.22_.3E_.25_:_.27"></span>Hey &lt; # " &gt;&#160;%&#160;: '</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=6" title="Edit section: Hey &lt; # &quot; &gt; % : &#039;">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<div class="mw-heading mw-heading2"><h2 id="Hey_&lt;_#_&quot;_&gt;_%_:_'"><span id="Hey_.3C_.23_.22_.3E_.25_:_.27"></span>Hey &lt; # " &gt;&#160;%&#160;: '</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=6" title="Edit section: Hey &lt; # &quot; &gt;&#160;%&#160;: &#39;">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <p><a href="#Foo_bar">#Foo bar</a> <a href="#foo_Bar">#foo Bar</a> <a href="#Тест">#Тест</a> <a href="#тест">#тест</a> <a href="#Hey_&lt;_#_&quot;_&gt;_%_:_&#39;">#Hey &lt; # " &gt;&#160;%&#160;: '</a>
 </p><p>💩 <span id="💩"></span>
 </p><p><a href="#啤酒">#啤酒</a> <a href="#啤酒">#啤酒</a>
@@ -2709,7 +2560,7 @@ wgParserEnableLegacyHeadingDOM=false
 <h2 id="Hey_&lt;_#_&quot;_>_%_:_'"><span id="Hey_.3C_.23_.22_.3E_.25_:_.27" typeof="mw:FallbackId"></span>Hey &lt; # " ><span typeof="mw:DisplaySpace"> </span>%<span typeof="mw:DisplaySpace"> </span>: '</h2>
 <p><a rel="mw:WikiLink" href="./Parser_test#Foo_bar" class="mw-selflink-fragment">#Foo bar</a> <a rel="mw:WikiLink" href="./Parser_test#foo_Bar" class="mw-selflink-fragment">#foo Bar</a> <a rel="mw:WikiLink" href="./Parser_test#Тест" class="mw-selflink-fragment">#Тест</a> <a rel="mw:WikiLink" href="./Parser_test#тест" class="mw-selflink-fragment">#тест</a> <a rel="mw:WikiLink" href="./Parser_test#Hey_&lt;_#_&quot;_>_%_:_'" class="mw-selflink-fragment">#Hey &lt; # " ><span typeof="mw:DisplaySpace"> </span>%<span typeof="mw:DisplaySpace"> </span>: '</a></p>
 
-<p><span about="#mwt1" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"anchorencode:💩","function":"anchorencode"},"params":{},"i":0}}]}'>💩</span> <span id="💩" about="#mwt3" typeof="mw:ExpandedAttrs" data-mw='{"attribs":[[{"txt":"id"},{"html":"&lt;span about=\"#mwt2\" typeof=\"mw:Transclusion\" data-parsoid=&#39;{\"pi\":[[]],\"dsr\":[178,197,null,null]}&#39; data-mw=&#39;{\"parts\":[{\"template\":{\"target\":{\"wt\":\"anchorencode:💩\",\"function\":\"anchorencode\"},\"params\":{},\"i\":0}}]}&#39;>💩&lt;/span>"}]]}'></span></p>
+<p><span about="#mwt1" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"anchorencode:💩","function":"anchorencode"},"params":{},"i":0}}]}'>💩</span> <span id="💩" about="#mwt3" typeof="mw:ExpandedAttrs" data-mw='{"attribs":[[{"txt":"id"},{"html":"&lt;span about=\"#mwt2\" typeof=\"mw:Transclusion\" data-parsoid=&#39;{\"pi\":[[]]}&#39; data-mw=&#39;{\"parts\":[{\"template\":{\"target\":{\"wt\":\"anchorencode:💩\",\"function\":\"anchorencode\"},\"params\":{},\"i\":0}}]}&#39;>💩&lt;/span>"}]]}'></span></p>
 
 <!-- These two links should produce identical HTML -->
 <p><a rel="mw:WikiLink" href="./Parser_test#啤酒" class="mw-selflink-fragment">#啤酒</a> <a rel="mw:WikiLink" href="./Parser_test#啤酒" class="mw-selflink-fragment" data-parsoid='{"stx":"simple","a":{"href":"./Parser_test#啤酒"},"sa":{"href":"#%E5%95%A4%E9%85%92"}}'>#啤酒</a></p>
@@ -2720,7 +2571,6 @@ wgParserEnableLegacyHeadingDOM=false
 HTML5 ids: legacy with a fallback to modern
 !! config
 wgFragmentMode=[ "legacy", "html5" ]
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==Foo bar==
 
@@ -2757,7 +2607,7 @@ wgParserEnableLegacyHeadingDOM=false
 <div class="mw-heading mw-heading2"><h2 id=".D0.A2.D0.B5.D1.81.D1.82"><span id="Тест"></span>Тест</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=3" title="Edit section: Тест">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <div class="mw-heading mw-heading2"><h2 id=".D0.A2.D0.B5.D1.81.D1.82_2"><span id="Тест_2"></span>Тест</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=4" title="Edit section: Тест">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <div class="mw-heading mw-heading2"><h2 id=".D1.82.D0.B5.D1.81.D1.82"><span id="тест"></span>тест</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=5" title="Edit section: тест">edit</a><span class="mw-editsection-bracket">]</span></span></div>
-<div class="mw-heading mw-heading2"><h2 id="Hey_.3C_.23_.22_.3E_.25_:_.27"><span id="Hey_&lt;_#_&quot;_&gt;_%_:_'"></span>Hey &lt; # " &gt;&#160;%&#160;: '</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=6" title="Edit section: Hey &lt; # &quot; &gt; % : &#039;">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<div class="mw-heading mw-heading2"><h2 id="Hey_.3C_.23_.22_.3E_.25_:_.27"><span id="Hey_&lt;_#_&quot;_&gt;_%_:_'"></span>Hey &lt; # " &gt;&#160;%&#160;: '</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=6" title="Edit section: Hey &lt; # &quot; &gt;&#160;%&#160;: &#39;">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <p><a href="#Foo_bar">#Foo bar</a> <a href="#foo_Bar">#foo Bar</a> <a href="#.D0.A2.D0.B5.D1.81.D1.82">#Тест</a> <a href="#.D1.82.D0.B5.D1.81.D1.82">#тест</a> <a href="#Hey_.3C_.23_.22_.3E_.25_:_.27">#Hey &lt; # " &gt;&#160;%&#160;: '</a>
 </p><p>.F0.9F.92.A9 <span id=".F0.9F.92.A9"></span>
 </p><p><a href="#.E5.95.A4.E9.85.92">#啤酒</a> <a href="#.E5.95.A4.E9.85.92">#啤酒</a>
@@ -2769,7 +2619,6 @@ wgParserEnableLegacyHeadingDOM=false
 HTML5 ids: no legacy
 !! config
 wgFragmentMode=[ "html5" ]
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==Foo bar==
 
@@ -2806,7 +2655,7 @@ wgParserEnableLegacyHeadingDOM=false
 <div class="mw-heading mw-heading2"><h2 id="Тест">Тест</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=3" title="Edit section: Тест">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <div class="mw-heading mw-heading2"><h2 id="Тест_2">Тест</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=4" title="Edit section: Тест">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <div class="mw-heading mw-heading2"><h2 id="тест">тест</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=5" title="Edit section: тест">edit</a><span class="mw-editsection-bracket">]</span></span></div>
-<div class="mw-heading mw-heading2"><h2 id="Hey_&lt;_#_&quot;_&gt;_%_:_'">Hey &lt; # " &gt;&#160;%&#160;: '</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=6" title="Edit section: Hey &lt; # &quot; &gt; % : &#039;">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<div class="mw-heading mw-heading2"><h2 id="Hey_&lt;_#_&quot;_&gt;_%_:_'">Hey &lt; # " &gt;&#160;%&#160;: '</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=6" title="Edit section: Hey &lt; # &quot; &gt;&#160;%&#160;: &#39;">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 <p><a href="#Foo_bar">#Foo bar</a> <a href="#foo_Bar">#foo Bar</a> <a href="#Тест">#Тест</a> <a href="#тест">#тест</a> <a href="#Hey_&lt;_#_&quot;_&gt;_%_:_&#39;">#Hey &lt; # " &gt;&#160;%&#160;: '</a>
 </p><p>💩 <span id="💩"></span>
 </p><p><a href="#啤酒">#啤酒</a> <a href="#啤酒">#啤酒</a>
@@ -2817,7 +2666,6 @@ wgParserEnableLegacyHeadingDOM=false
 T90902: Normalize weird characters in section IDs
 !! config
 wgFragmentMode=[ "html5", "legacy" ]
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==Foo&nbsp;bar==
 [[#Foo&nbsp;bar]]
@@ -2835,8 +2683,10 @@ wgParserEnableLegacyHeadingDOM=false
 mw-heading wrapper edge cases
 !! options
 notoc
-!! config
-wgParserEnableLegacyHeadingDOM=false
+showtocdata
+parsoid={
+	"wrapSections": true
+}
 !! wikitext
 ==Normal heading!==
 
@@ -2850,27 +2700,35 @@ wgParserEnableLegacyHeadingDOM=false
 !! html/php
 
 <div class="mw-heading mw-heading2"><h2 id="Normal_heading.21">Normal heading!</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=1" title="Edit section: Normal heading!">edit</a><span class="mw-editsection-bracket">]</span></span></div>
-<div class="mw-heading mw-heading2"><h2 id="HTML_heading.21">HTML heading!</h2></div>
-<h2 id="HTML_heading_with_attributes.21" style="border: 1px solid green; background: lightgreen; padding: 5px; font-size: 1.5em;">HTML heading with attributes!</h2>
+<h2 id="HTML_heading.21" class="mw-html-heading">HTML heading!</h2>
+<h2 id="HTML_heading_with_attributes.21" style="border: 1px solid green; background: lightgreen; padding: 5px; font-size: 1.5em;" class="mw-html-heading">HTML heading with attributes!</h2>
 <div class="mw-heading mw-heading2">
 <h2 id="Normal_heading_with_existing_wrapper.21">Normal heading with existing wrapper!</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=2" title="Edit section: Normal heading with existing wrapper!">edit</a><span class="mw-editsection-bracket">]</span></span>
 </div>
+!! metadata/php
+Sections:
+ h2 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:Normal_heading.21 line:Normal heading!
+ h2 index: toclevel:1 number:2 title:NULL off:NULL anchor/linkAnchor:HTML_heading.21 line:HTML heading!
+ h2 index: toclevel:1 number:3 title:NULL off:NULL anchor/linkAnchor:HTML_heading_with_attributes.21 line:HTML heading with attributes!
+ h2 index:2 toclevel:1 number:4 title:Parser_test off:211 anchor/linkAnchor:Normal_heading_with_existing_wrapper.21 line:Normal heading with existing wrapper!
 !! html/parsoid
-<h2 id="Normal_heading!" data-parsoid='{"dsr":[0,19,2,2]}'><span id="Normal_heading.21" typeof="mw:FallbackId" data-parsoid='{"dsr":[2,2,null,null]}'></span>Normal heading!</h2>
+<section data-mw-section-id="0"></section><section data-mw-section-id="-1"><h2 id="Normal_heading!" data-parsoid='{}'><span id="Normal_heading.21" typeof="mw:FallbackId"></span>Normal heading!</h2>
 
-<h2 id="HTML_heading!" data-parsoid='{"stx":"html","dsr":[21,43,4,5]}'><span id="HTML_heading.21" typeof="mw:FallbackId" data-parsoid='{"dsr":[25,25,null,null]}'></span>HTML heading!</h2>
+<h2 id="HTML_heading!" data-parsoid='{"stx":"html"}'><span id="HTML_heading.21" typeof="mw:FallbackId"></span>HTML heading!</h2>
 
-<h2 style="border: 1px solid green; background: lightgreen; padding: 5px; font-size: 1.5em;" id="HTML_heading_with_attributes!" data-parsoid='{"stx":"html","dsr":[45,172,93,5]}'><span id="HTML_heading_with_attributes.21" typeof="mw:FallbackId" data-parsoid='{"dsr":[138,138,null,null]}'></span>HTML heading with attributes!</h2>
+<h2 style="border: 1px solid green; background: lightgreen; padding: 5px; font-size: 1.5em;" id="HTML_heading_with_attributes!" data-parsoid='{"stx":"html"}'><span id="HTML_heading_with_attributes.21" typeof="mw:FallbackId"></span>HTML heading with attributes!</h2>
 
-<div class="mw-heading mw-heading2" data-parsoid='{"stx":"html","dsr":[174,259,36,6]}'>
-<h2 id="Normal_heading_with_existing_wrapper!" data-parsoid='{"dsr":[211,252,2,2]}'><span id="Normal_heading_with_existing_wrapper.21" typeof="mw:FallbackId" data-parsoid='{"dsr":[213,213,null,null]}'></span>Normal heading with existing wrapper!</h2>
-</div>
+</section><section data-mw-section-id="-2"><div class="mw-heading mw-heading2">
+<section data-mw-section-id="-1"><h2 id="Normal_heading_with_existing_wrapper!" data-parsoid='{}'><span id="Normal_heading_with_existing_wrapper.21" typeof="mw:FallbackId"></span>Normal heading with existing wrapper!</h2>
+</section></div></section>
+!! metadata/parsoid
+Sections:
+ h2 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:Normal_heading! line:Normal heading!
+ h2 index:2 toclevel:1 number:2 title:Parser_test off:211 anchor/linkAnchor:Normal_heading_with_existing_wrapper! line:Normal heading with existing wrapper!
 !! end
 
 !! test
 T365413: Headings with dollar signs
-!! options
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 ==$text==
 
@@ -2892,11 +2750,11 @@ wgParserEnableLegacyHeadingDOM=false
 </ul>
 </div>
 
-<h2><span class="mw-headline" id=".24text">$text</span><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=1" title="Edit section: $text">edit</a><span class="mw-editsection-bracket">]</span></span></h2>
-<h2><span class="mw-headline" id=".24_text">$ text</span><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=2" title="Edit section: $ text">edit</a><span class="mw-editsection-bracket">]</span></span></h2>
-<h2><span class="mw-headline" id="text_.24text">text $text</span><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=3" title="Edit section: text $text">edit</a><span class="mw-editsection-bracket">]</span></span></h2>
-<h2><span class="mw-headline" id=".5C.24text">\$text</span><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=4" title="Edit section: \$text">edit</a><span class="mw-editsection-bracket">]</span></span></h2>
-<h2><span class="mw-headline" id=".24.24text">$$text</span><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=5" title="Edit section: $$text">edit</a><span class="mw-editsection-bracket">]</span></span></h2>
+<div class="mw-heading mw-heading2"><h2 id=".24text">$text</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=1" title="Edit section: $text">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<div class="mw-heading mw-heading2"><h2 id=".24_text">$ text</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=2" title="Edit section: $ text">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<div class="mw-heading mw-heading2"><h2 id="text_.24text">text $text</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=3" title="Edit section: text $text">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<div class="mw-heading mw-heading2"><h2 id=".5C.24text">\$text</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=4" title="Edit section: \$text">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<div class="mw-heading mw-heading2"><h2 id=".24.24text">$$text</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=5" title="Edit section: $$text">edit</a><span class="mw-editsection-bracket">]</span></span></div>
 !! end
 
 !! article
@@ -2913,17 +2771,15 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 {{With a section?}}
 !! html/php
 <div class="mw-heading mw-heading3"><h3 id="test">test</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Template:With_a_section%3F&amp;action=edit&amp;section=T-1" title="Edit section: test">edit</a><span class="mw-editsection-bracket">]</span></span></div>
-!! html/parsoid
+!! html/parsoid+integrated
 <section data-mw-section-id="0"></section><section data-mw-section-id="-1">
 <h3 typeof="mw:Transclusion" id="test" data-mw='{"parts":[{"template":{"target":{"wt":"With a section?","href":"./Template:With_a_section%3F"},"params":{},"i":0}}]}'>test</h3>
 </section>
-!! metadata
+!! metadata/integrated
 Sections:
  h3 index:T-1 toclevel:1 number:1 title:Template:With_a_section? off:NULL anchor/linkAnchor:test line:test
 !! end
@@ -2954,8 +2810,6 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 === out ===
 123
@@ -2968,7 +2822,7 @@ wgParserEnableLegacyHeadingDOM=false
 {{with two}}
 
 {{with one}}
-!! metadata
+!! metadata/integrated
 Sections:
  h3 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:out line:out
  h3 index:T-1 toclevel:1 number:2 title:Template:With_one off:NULL anchor/linkAnchor:in line:in
@@ -2987,7 +2841,6 @@ lala
 {{with two}}
 !! endarticle
 
-## FIXME: Parsoid doesn't have insight into nested templates
 !! test
 Nested section numbering
 !! options
@@ -2997,14 +2850,12 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 === out ===
 123
 
 {{with heading nesting}}
-!! metadata
+!! metadata/integrated
 Sections:
  h3 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:out line:out
  h3 index:T-1 toclevel:1 number:2 title:Template:With_heading_nesting off:NULL anchor/linkAnchor:in_4 line:in 4
@@ -3027,11 +2878,339 @@ parsoid={
 	"modes": [ "wt2html" ],
 	"wrapSections": true
 }
-!! config
-wgParserEnableLegacyHeadingDOM=false
 !! wikitext
 {{with redirect}}
 !! metadata
 Sections:
  h3 index:T-1 toclevel:1 number:1 title:Template:With_one off:NULL anchor/linkAnchor:in line:in
+!! end
+
+!! test
+Editable headings can only have trailing comments and whitespace
+!! options
+showtocdata
+parsoid={
+	"wrapSections": true
+}
+!! wikitext
+==== test ====
+yup
+
+==== hi ho ====<noinclude>
+nope
+</noinclude>
+
+==== test 2 ====
+another yup
+
+<!-- well -->==== ha ha ====
+back to nope
+
+==== he he ====  <!-- but this is ok -->
+see
+!! metadata
+Sections:
+ h4 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor:test line:test
+ h4 index: toclevel:1 number:2 title:NULL off:NULL anchor/linkAnchor:hi_ho line:hi ho
+ h4 index:2 toclevel:1 number:3 title:Parser_test off:66 anchor/linkAnchor:test_2 line:test 2
+ h4 index: toclevel:1 number:4 title:NULL off:NULL anchor/linkAnchor:ha_ha line:ha ha
+ h4 index:3 toclevel:1 number:5 title:Parser_test off:139 anchor/linkAnchor:he_he line:he he
+!! html/php
+<div id="toc" class="toc" role="navigation" aria-labelledby="mw-toc-heading"><input type="checkbox" role="button" id="toctogglecheckbox" class="toctogglecheckbox" style="display:none" /><div class="toctitle" lang="en" dir="ltr"><h2 id="mw-toc-heading">Contents</h2><span class="toctogglespan"><label class="toctogglelabel" for="toctogglecheckbox"></label></span></div>
+<ul>
+<li class="toclevel-1 tocsection-1"><a href="#test"><span class="tocnumber">1</span> <span class="toctext">test</span></a></li>
+<li class="toclevel-1"><a href="#hi_ho"><span class="tocnumber">2</span> <span class="toctext">hi ho</span></a></li>
+<li class="toclevel-1 tocsection-2"><a href="#test_2"><span class="tocnumber">3</span> <span class="toctext">test 2</span></a></li>
+<li class="toclevel-1"><a href="#ha_ha"><span class="tocnumber">4</span> <span class="toctext">ha ha</span></a></li>
+<li class="toclevel-1 tocsection-3"><a href="#he_he"><span class="tocnumber">5</span> <span class="toctext">he he</span></a></li>
+</ul>
+</div>
+
+<div class="mw-heading mw-heading4"><h4 id="test">test</h4><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=1" title="Edit section: test">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<p>yup
+</p>
+<div class="mw-heading mw-heading4"><h4 id="hi_ho">hi ho</h4></div>
+<p>nope
+</p><p><br />
+</p>
+<div class="mw-heading mw-heading4"><h4 id="test_2">test 2</h4><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=2" title="Edit section: test 2">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<p>another yup
+</p>
+<div class="mw-heading mw-heading4"><h4 id="ha_ha">ha ha</h4></div>
+<p>back to nope
+</p>
+<div class="mw-heading mw-heading4"><h4 id="he_he">he he</h4><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=3" title="Edit section: he he">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<p>see
+</p>
+!! html/parsoid
+<section data-mw-section-id="0"><meta property="mw:PageProp/toc" data-mw='{"autoGenerated":true}'/></section><section data-mw-section-id="1"><h4 id="test">test</h4>
+<p>yup</p>
+
+</section><section data-mw-section-id="-1"><h4 id="hi_ho">hi ho</h4><meta typeof="mw:Includes/NoInclude" data-parsoid='{"src":"&lt;noinclude>"}'/>
+<p>nope</p>
+<meta typeof="mw:Includes/NoInclude/End" data-parsoid='{"src":"&lt;/noinclude>"}'/>
+
+</section><section data-mw-section-id="2"><h4 id="test_2">test 2</h4>
+<p>another yup</p>
+
+<!-- well --></section><section data-mw-section-id="-1"><h4 id="ha_ha">ha ha</h4>
+<p>back to nope</p>
+
+</section><section data-mw-section-id="3"><h4 id="he_he">he he</h4>  <!-- but this is ok -->
+<p>see</p></section>
+!! end
+
+!! article
+Template:Noincludeheading
+!! text
+==== test ====
+yup
+
+==== hi ho ====<noinclude>
+nope
+</noinclude>
+
+==== test 2 ====
+another yup
+
+<!-- well -->==== ha ha ====
+back to nope
+
+==== he he ====  <!-- but this is ok -->
+see
+!! endarticle
+
+!! test
+Editable headings can only have trailing comments and whitespace (in template)
+!! options
+nohtml
+showtocdata
+parsoid={
+	"modes": [ "wt2html" ],
+	"wrapSections": true
+}
+!! wikitext
+{{noincludeheading}}
+!! metadata/integrated
+Sections:
+ h4 index:T-1 toclevel:1 number:1 title:Template:Noincludeheading off:NULL anchor/linkAnchor:test line:test
+ h4 index: toclevel:1 number:2 title:NULL off:NULL anchor/linkAnchor:hi_ho line:hi ho
+ h4 index:T-2 toclevel:1 number:3 title:Template:Noincludeheading off:NULL anchor/linkAnchor:test_2 line:test 2
+ h4 index: toclevel:1 number:4 title:NULL off:NULL anchor/linkAnchor:ha_ha line:ha ha
+ h4 index:T-3 toclevel:1 number:5 title:Template:Noincludeheading off:NULL anchor/linkAnchor:he_he line:he he
+!! end
+
+## While Parsoid sets an empty id on the heading here, DOMDataUtils::storeInPageBundle
+## considers it bogus and replaces it with a Parsoid generated id while creating the
+## PageBundle, orphaning the metadata.  Core's HandleParsoidSectionLinks won't be able
+## to getElementById either way.
+!! test
+T368722: Empty headings
+!! options
+showtocdata
+parsoid={
+	"modes": [ "wt2html" ],
+	"wrapSections": true
+}
+!! wikitext
+== ==
+!! html/php
+<div class="mw-heading mw-heading2"><h2 id=""></h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=1" title="Edit section: ">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+!! html/parsoid
+<section data-mw-section-id="0"></section><section data-mw-section-id="1"><h2 id=""></h2></section>
+!! metadata
+Sections:
+ h2 index:1 toclevel:1 number:1 title:Parser_test off:0 anchor/linkAnchor: line:
+!! end
+
+!! test
+Unclosed wiklink in heading
+!! options
+showtocdata
+parsoid={
+	"modes": [ "wt2html" ],
+	"wrapSections": true
+}
+!! wikitext
+== test [[ 123 ==
+test
+
+== asdf ==
+asdf
+!! html/php
+<div class="mw-heading mw-heading2"><h2 id="test_.5B.5B_123">test [[ 123</h2></div>
+<p>test
+</p>
+<div class="mw-heading mw-heading2"><h2 id="asdf">asdf</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=1" title="Edit section: asdf">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<p>asdf
+</p>
+!! metadata/php
+Sections:
+ h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:test_.5B.5B_123 line:test [[ 123
+ h2 index:1 toclevel:1 number:2 title:Parser_test off:24 anchor/linkAnchor:asdf line:asdf
+!! html/parsoid
+<section data-mw-section-id="0"></section><section data-mw-section-id="-1"><h2 id="test_[[_123"><span id="test_.5B.5B_123" typeof="mw:FallbackId"></span>test [[ 123</h2>
+<p>test</p>
+
+</section><section data-mw-section-id="1"><h2 id="asdf">asdf</h2>
+<p>asdf</p></section>
+!! metadata/parsoid
+Sections:
+ h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:test_[[_123 line:test [[ 123
+ h2 index:1 toclevel:1 number:2 title:Parser_test off:24 anchor/linkAnchor:asdf line:asdf
+!! end
+
+!! test
+Unclosed template in heading
+!! options
+showtocdata
+parsoid={
+	"modes": [ "wt2html" ],
+	"wrapSections": true
+}
+!! wikitext
+== test {{ 123 ==
+test
+
+== asdf ==
+asdf
+!! html/php
+<div class="mw-heading mw-heading2"><h2 id="test_.7B.7B_123">test {{ 123</h2></div>
+<p>test
+</p>
+<div class="mw-heading mw-heading2"><h2 id="asdf">asdf</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=1" title="Edit section: asdf">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<p>asdf
+</p>
+!! metadata/php
+Sections:
+ h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:test_.7B.7B_123 line:test {{ 123
+ h2 index:1 toclevel:1 number:2 title:Parser_test off:24 anchor/linkAnchor:asdf line:asdf
+!! html/parsoid
+<section data-mw-section-id="0"></section><section data-mw-section-id="-1"><h2 id="test_{{_123"><span id="test_.7B.7B_123" typeof="mw:FallbackId"></span>test {{ 123</h2>
+<p>test</p>
+
+</section><section data-mw-section-id="1"><h2 id="asdf">asdf</h2>
+<p>asdf</p></section>
+!! metadata/parsoid
+Sections:
+ h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:test_{{_123 line:test {{ 123
+ h2 index:1 toclevel:1 number:2 title:Parser_test off:24 anchor/linkAnchor:asdf line:asdf
+!! end
+
+!! test 
+Unclosed templatearg in heading
+!! options
+showtocdata
+parsoid={
+	"modes": [ "wt2html" ],
+	"wrapSections": true
+}
+!! wikitext
+== test {{{ 123 ==
+test
+
+== asdf ==
+asdf
+!! html/php
+<div class="mw-heading mw-heading2"><h2 id="test_.7B.7B.7B_123">test {{{ 123</h2></div>
+<p>test
+</p>
+<div class="mw-heading mw-heading2"><h2 id="asdf">asdf</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=1" title="Edit section: asdf">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<p>asdf
+</p>
+!! metadata/php
+Sections:
+ h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:test_.7B.7B.7B_123 line:test {{{ 123
+ h2 index:1 toclevel:1 number:2 title:Parser_test off:25 anchor/linkAnchor:asdf line:asdf
+!! html/parsoid
+<section data-mw-section-id="0"></section><section data-mw-section-id="-1"><h2 id="test_{{{_123"><span id="test_.7B.7B.7B_123" typeof="mw:FallbackId"></span>test {{{ 123</h2>
+<p>test</p>
+
+</section><section data-mw-section-id="1"><h2 id="asdf">asdf</h2>
+<p>asdf</p></section>
+!! metadata/parsoid
+Sections:
+ h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:test_{{{_123 line:test {{{ 123
+ h2 index:1 toclevel:1 number:2 title:Parser_test off:25 anchor/linkAnchor:asdf line:asdf
+!! end
+
+!! test
+Unclosed langconv in heading
+!! options
+showtocdata
+parsoid={
+	"modes": [ "wt2html" ],
+	"wrapSections": true
+}
+!! wikitext
+== test -{ 123 ==
+test
+
+== asdf ==
+asdf
+!! html/php
+<div class="mw-heading mw-heading2"><h2 id="test_-.7B_123">test -{ 123</h2></div>
+<p>test
+</p>
+<div class="mw-heading mw-heading2"><h2 id="asdf">asdf</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=1" title="Edit section: asdf">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<p>asdf
+</p>
+!! metadata/php
+Sections:
+ h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:test_-.7B_123 line:test -{ 123
+ h2 index:1 toclevel:1 number:2 title:Parser_test off:24 anchor/linkAnchor:asdf line:asdf
+!! html/parsoid
+<section data-mw-section-id="0"></section><section data-mw-section-id="-1"><h2 id="test_-{_123"><span id="test_-.7B_123" typeof="mw:FallbackId"></span>test -{ 123</h2>
+<p>test</p>
+
+</section><section data-mw-section-id="1"><h2 id="asdf">asdf</h2>
+<p>asdf</p></section>
+!! metadata/parsoid
+Sections:
+ h2 index: toclevel:1 number:1 title:NULL off:NULL anchor/linkAnchor:test_-{_123 line:test -{ 123
+ h2 index:1 toclevel:1 number:2 title:Parser_test off:24 anchor/linkAnchor:asdf line:asdf
+!! end
+
+!! test
+Compound template with top-level headings
+!! options
+showtocdata
+parsoid={
+	"modes": [ "wt2html" ],
+	"wrapSections": true
+}
+!! wikitext
+{{1x|
+{{{!}}
+{{!}}
+}}
+==One==
+Text 1
+===Two===
+Text 2
+|}
+!! html/php
+<table>
+<tbody><tr>
+<td>
+<div class="mw-heading mw-heading2"><h2 id="One">One</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=1" title="Edit section: One">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<p>Text 1
+</p>
+<div class="mw-heading mw-heading3"><h3 id="Two">Two</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/index.php?title=Parser_test&amp;action=edit&amp;section=2" title="Edit section: Two">edit</a><span class="mw-editsection-bracket">]</span></span></div>
+<p>Text 2
+</p>
+</td></tr></tbody></table>
+!! html/parsoid
+<section data-mw-section-id="0"><span class="mw-empty-elt" about="#mwt1" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"\n{{{!}}\n{{!}}\n"}},"i":0}},"\n==One==\nText 1\n===Two===\nText 2\n|}"]}'></span><table about="#mwt1">
+<tbody><tr><td>
+
+<section data-mw-section-id="-1"><h2 id="One">One</h2>
+<p>Text 1</p>
+<section data-mw-section-id="-1"><h3 id="Two">Two</h3>
+<p>Text 2</p></section></section></td></tr>
+</tbody></table></section>
+!! metadata
+Sections:
+ h2 index:1 toclevel:1 number:1 title:Parser_test off:22 anchor/linkAnchor:One line:One
+  h3 index:2 toclevel:2 number:1.1 title:Parser_test off:37 anchor/linkAnchor:Two line:Two
 !! end

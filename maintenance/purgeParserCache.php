@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -24,7 +10,9 @@ require_once __DIR__ . '/Maintenance.php';
 
 use MediaWiki\MainConfigNames;
 use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Parser\ParserOptions;
 use Wikimedia\Timestamp\ConvertibleTimestamp;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Remove expired objects from the parser cache database.
@@ -32,8 +20,8 @@ use Wikimedia\Timestamp\ConvertibleTimestamp;
  * By default, this does not need to be run. The default parser cache
  * backend is CACHE_DB (SqlBagOStuff), and by default that automatically
  * performs incremental purges in the background of write requests.
+ * Check your wiki's $wgParserCacheType setting to determine if you need to run this script.
  *
- * @see {@link MediaWiki\MainConfigSchema::ParserCacheType}
  * @ingroup Maintenance
  */
 class PurgeParserCache extends Maintenance {
@@ -71,6 +59,12 @@ class PurgeParserCache extends Maintenance {
 				'This requires using the SqlBagOStuff "servers" option in $wgObjectCaches.',
 			false,
 			true );
+		$this->addOption(
+			'name',
+			'Name of the ParserCache instance to purge.  Defaults to the' .
+				'primary cache of ParserOutputAccess.',
+			false,
+			true );
 	}
 
 	public function execute() {
@@ -86,19 +80,27 @@ class PurgeParserCache extends Maintenance {
 			$this->fatalError( "Must specify either --expiredate or --age" );
 		}
 		$this->usleep = 1e3 * $this->getOption( 'msleep', 0 );
-		$this->lastTimestamp = microtime( true );
+		$this->lastTimestamp = ConvertibleTimestamp::hrtime();
 
-		$humanDate = ConvertibleTimestamp::convert( TS_RFC2822, $timestamp );
+		$humanDate = ConvertibleTimestamp::convert( TS::RFC2822, $timestamp );
 		if ( $this->hasOption( 'dry-run' ) ) {
 			$this->fatalError( "\nDry run mode, would delete objects having an expiry before " . $humanDate . "\n" );
 		}
 
 		$this->output( "Deleting objects expiring before " . $humanDate . "\n" );
 
-		$pc = $this->getServiceContainer()->getParserCache()->getCacheStorage();
+		if ( $this->hasOption( 'name' ) ) {
+			$pc = $this->getServiceContainer()->getParserCacheFactory()->getParserCache(
+				$this->getOption( 'name' )
+			)->getCacheStorage();
+		} else {
+			$parserOutputAccess = $this->getServiceContainer()->getParserOutputAccess();
+			$parserOptions = ParserOptions::newFromAnon();
+			$pc = $parserOutputAccess->getPrimaryCache( $parserOptions )->getCacheStorage();
+		}
 		$success = $pc->deleteObjectsExpiringBefore(
 			$timestamp,
-			[ $this, 'showProgressAndWait' ],
+			$this->showProgressAndWait( ... ),
 			INF,
 			// Note that "0" can be a valid server tag, and must not be discarded or changed to null.
 			$this->getOption( 'tag', null )
@@ -110,7 +112,7 @@ class PurgeParserCache extends Maintenance {
 		$this->output( "\nDone\n" );
 	}
 
-	public function showProgressAndWait( $percent ) {
+	private function showProgressAndWait( int $percent ) {
 		// Parser caches involve mostly-unthrottled writes of large blobs. This is sometimes prone
 		// to replication lag. As such, while our purge queries are simple primary key deletes,
 		// we want to avoid adding significant load to the replication stream, by being
@@ -132,8 +134,8 @@ class PurgeParserCache extends Maintenance {
 			// and on how many table rows there are.
 			return;
 		}
-		$now = microtime( true );
-		$sec = sprintf( "%.1f", $now - $this->lastTimestamp );
+		$now = ConvertibleTimestamp::hrtime();
+		$sec = sprintf( "%.1f", ( $now - $this->lastTimestamp ) / 1e9 );
 
 		// Give a sense of how much time is spent in the delete operations vs the sleep time,
 		// by recording the number of iterations we've completed since the last progress update.

@@ -3,32 +3,18 @@
  * Moves blobs indexed by trackBlobs.php to a specified list of destination
  * clusters, and recompresses them in the process.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance ExternalStorage
  */
 
+use MediaWiki\ExternalStore\ExternalStoreDB;
 use MediaWiki\Logger\LegacyLogger;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Shell\Shell;
 use MediaWiki\Storage\SqlBlobStore;
 use MediaWiki\Title\Title;
 use MediaWiki\WikiMap\WikiMap;
-use Wikimedia\AtEase\AtEase;
 
 $optionsWithArgs = RecompressTracked::getOptionsWithArgs();
 require __DIR__ . '/../CommandLineInc.php';
@@ -71,9 +57,9 @@ class RecompressTracked {
 	public $numProcs = 1;
 	/** @var int */
 	public $numBatches = 0;
-	/** @var string */
+	/** @var class-string<HistoryBlob> */
 	public $pageBlobClass;
-	/** @var string */
+	/** @var class-string<HistoryBlob> */
 	public $orphanBlobClass;
 	/** @var resource[] */
 	public $childPipes;
@@ -118,11 +104,11 @@ class RecompressTracked {
 		'critical-log' => 'criticalLog',
 	];
 
-	public static function getOptionsWithArgs() {
+	public static function getOptionsWithArgs(): array {
 		return self::$optionsWithArgs;
 	}
 
-	public static function newFromCommandLine( $args, $options ) {
+	public static function newFromCommandLine( array $args, array $options ): self {
 		$jobOptions = [ 'destClusters' => $args ];
 		foreach ( self::$cmdLineOptionMap as $cmdOption => $classOption ) {
 			if ( isset( $options[$cmdOption] ) ) {
@@ -133,12 +119,12 @@ class RecompressTracked {
 		return new self( $jobOptions );
 	}
 
-	public function __construct( $options ) {
+	public function __construct( array $options ) {
 		foreach ( $options as $name => $value ) {
 			$this->$name = $value;
 		}
 		$esFactory = MediaWikiServices::getInstance()->getExternalStoreFactory();
-		$this->store = $esFactory->getStore( 'DB' );
+		$this->store = $esFactory->getDatabaseStore();
 		if ( !$this->isChild ) {
 			$GLOBALS['wgDebugLogPrefix'] = "RCT M: ";
 		} elseif ( $this->childId !== false ) {
@@ -153,28 +139,28 @@ class RecompressTracked {
 			->newSqlBlobStore();
 	}
 
-	public function debug( $msg ) {
+	public function debug( string $msg ) {
 		wfDebug( "$msg" );
 		if ( $this->debugLog ) {
 			$this->logToFile( $msg, $this->debugLog );
 		}
 	}
 
-	public function info( $msg ) {
+	public function info( string $msg ) {
 		echo "$msg\n";
 		if ( $this->infoLog ) {
 			$this->logToFile( $msg, $this->infoLog );
 		}
 	}
 
-	public function critical( $msg ) {
+	public function critical( string $msg ) {
 		echo "$msg\n";
 		if ( $this->criticalLog ) {
 			$this->logToFile( $msg, $this->criticalLog );
 		}
 	}
 
-	private function logToFile( $msg, $file ) {
+	private function logToFile( string $msg, string $file ) {
 		$header = '[' . date( 'd\TH:i:s' ) . '] ' . wfHostname() . ' ' . posix_getpid();
 		if ( $this->childId !== false ) {
 			$header .= "({$this->childId})";
@@ -270,9 +256,8 @@ class RecompressTracked {
 				[ 'file', 'php://stdout', 'w' ],
 				[ 'file', 'php://stderr', 'w' ]
 			];
-			AtEase::suppressWarnings();
-			$proc = proc_open( "$cmd --child-id $i", $spec, $pipes );
-			AtEase::restoreWarnings();
+			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			$proc = @proc_open( "$cmd --child-id $i", $spec, $pipes );
 			if ( !$proc ) {
 				$this->critical( "Error opening child process: $cmd" );
 				exit( 1 );
@@ -709,9 +694,9 @@ class RecompressTracked {
 class CgzCopyTransaction {
 	/** @var RecompressTracked */
 	public $parent;
-	/** @var string */
+	/** @var class-string<HistoryBlob> */
 	public $blobClass;
-	/** @var ConcatenatedGzipHistoryBlob|false */
+	/** @var HistoryBlob|false */
 	public $cgz;
 	/** @var string[] */
 	public $referrers;
@@ -721,7 +706,7 @@ class CgzCopyTransaction {
 	/**
 	 * Create a transaction from a RecompressTracked object
 	 * @param RecompressTracked $parent
-	 * @param string $blobClass
+	 * @param class-string<HistoryBlob> $blobClass
 	 */
 	public function __construct( $parent, $blobClass ) {
 		$this->blobClass = $blobClass;
@@ -749,7 +734,7 @@ class CgzCopyTransaction {
 		return $this->cgz->isHappy();
 	}
 
-	public function getSize() {
+	public function getSize(): int {
 		return count( $this->texts );
 	}
 

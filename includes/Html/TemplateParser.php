@@ -1,11 +1,16 @@
 <?php
 
+/**
+ * @license GPL-2.0-or-later
+ */
+
 namespace MediaWiki\Html;
 
-use FileContentsHasher;
+use Exception;
 use LightnCandy\LightnCandy;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Utils\FileContentsHasher;
 use RuntimeException;
 use UnexpectedValueException;
 use Wikimedia\ObjectCache\BagOStuff;
@@ -13,22 +18,6 @@ use Wikimedia\ObjectCache\BagOStuff;
 /**
  * Handles compiling Mustache templates into PHP rendering functions
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
- * @file
  * @since 1.25
  */
 class TemplateParser {
@@ -36,10 +25,7 @@ class TemplateParser {
 	private const CACHE_VERSION = '2.2.0';
 	private const CACHE_TTL = BagOStuff::TTL_WEEK;
 
-	/**
-	 * @var BagOStuff
-	 */
-	private $cache;
+	private readonly BagOStuff $cache;
 
 	/**
 	 * @var string The path to the Mustache templates
@@ -61,8 +47,8 @@ class TemplateParser {
 	 * @param BagOStuff|null $cache Read-write cache
 	 */
 	public function __construct( $templateDir = null, ?BagOStuff $cache = null ) {
-		$this->templateDir = $templateDir ?: __DIR__ . '/../templates';
-		$this->cache = $cache ?: MediaWikiServices::getInstance()->getObjectCacheFactory()
+		$this->templateDir = $templateDir ?: __DIR__ . '/../../resources/templates';
+		$this->cache = $cache ?? MediaWikiServices::getInstance()->getObjectCacheFactory()
 			->getLocalServerInstance( CACHE_ANYTHING );
 
 		// Do not add more flags here without discussion.
@@ -208,7 +194,7 @@ class TemplateParser {
 	 *
 	 * @param string $templateName The name of the template
 	 * @return array An associative array containing the PHP code and metadata about its compilation
-	 * @throws \Exception Thrown by LightnCandy if it could not compile the Mustache code
+	 * @throws Exception Thrown by LightnCandy if it could not compile the Mustache code
 	 * @throws RuntimeException If LightnCandy could not compile the Mustache code but did not throw
 	 *  an exception. This exception is indicative of a bug in LightnCandy
 	 * @suppress PhanTypeMismatchArgument
@@ -297,6 +283,3 @@ class TemplateParser {
 		return $template( $args, $scopes );
 	}
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( TemplateParser::class, 'TemplateParser' );

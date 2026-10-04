@@ -9,27 +9,12 @@
  *   <reason> is the delete reason
  *   <interval> is the number of seconds to sleep for after each delete
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
 use MediaWiki\Maintenance\Maintenance;
-use MediaWiki\StubObject\StubGlobalUser;
 use MediaWiki\Title\Title;
 use MediaWiki\User\User;
 
@@ -74,7 +59,6 @@ class DeleteBatch extends Maintenance {
 		if ( !$user ) {
 			$this->fatalError( "Invalid username" );
 		}
-		StubGlobalUser::setUser( $user );
 
 		if ( $this->hasArg( 0 ) ) {
 			$file = fopen( $this->getArg( 0 ), 'r' );
@@ -134,9 +118,10 @@ class DeleteBatch extends Maintenance {
 				->deleteUnsafe( $reason );
 
 			if ( $status->isOK() ) {
-				$this->output( " Deleted!\n" );
+				$this->output( " Deleted $line!\n" );
 			} else {
-				$this->output( " FAILED to delete article\n" );
+				$this->output( " FAILED to delete page $line\n" );
+				$this->error( $status );
 			}
 
 			if ( $interval ) {

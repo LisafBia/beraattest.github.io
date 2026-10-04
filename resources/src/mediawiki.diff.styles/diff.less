@@ -40,7 +40,7 @@
 
 		div {
 			/* Force-wrap very long lines such as URLs or page-widening char strings */
-			word-wrap: break-word;
+			overflow-wrap: break-word;
 		}
 	}
 
@@ -78,6 +78,7 @@
 		padding: 0.3em 1px;
 		text-decoration: none;
 		white-space: break-spaces;
+		unicode-bidi: isolate;
 		// When JS is enabled, deleted and added content will show a popup explaining what the colors mean.
 		// Show a cursor pointer to make it clear it's clickable.
 		.client-js & {
@@ -147,9 +148,9 @@
 .mw-diff-inline-moved,
 .mw-diff-inline-changed,
 .mw-diff-inline-context {
-	/* TODO: Re-evaluate whether we should keep this over-ride or switch to ems */
-	/* stylelint-disable-next-line declaration-property-unit-disallowed-list */
-	font-size: 13px;
+	// TODO: Re-evaluate we can use Codex design token like @font-size-small, which would mean to
+	// bump the size up by equal to 14px in Vector 2022 and MinervaNeue.
+	font-size: 0.8125rem;
 	/* Standardize tab width */
 	-moz-tab-size: 4;
 	tab-size: 4;
@@ -355,4 +356,9 @@
 	.mw-diff-inline-legend {
 		display: none;
 	}
+}
+
+// Never display mobile footer
+.mw-diff-mobile-footer {
+	display: none;
 }

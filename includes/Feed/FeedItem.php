@@ -3,21 +3,7 @@
  * Copyright © 2004 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -97,6 +83,15 @@ class FeedItem {
 		$string = preg_replace( '/[\x00-\x08\x0b\x0c\x0e-\x1f]/', '', $string );
 
 		return htmlspecialchars( $string );
+	}
+
+	/**
+	 * Encode $string so that it can be safely embedded in a XML document,
+	 * returning `null` if $string was `null`.
+	 * @since 1.44 (also backported to 1.39.12, 1.42.6 and 1.43.1)
+	 */
+	public function xmlEncodeNullable( ?string $string ): ?string {
+		return $string !== null ? $this->xmlEncode( $string ) : null;
 	}
 
 	/**
@@ -247,6 +242,3 @@ class FeedItem {
 	}
 
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( FeedItem::class, 'FeedItem' );

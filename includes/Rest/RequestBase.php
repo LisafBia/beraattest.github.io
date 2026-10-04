@@ -14,17 +14,14 @@ abstract class RequestBase implements RequestInterface {
 	/** @var array */
 	private $pathParams = [];
 
-	/** @var string */
-	private $cookiePrefix;
-
 	protected ?array $parsedBody = null;
 
 	/**
 	 * @internal
-	 * @param string $cookiePrefix
 	 */
-	public function __construct( $cookiePrefix ) {
-		$this->cookiePrefix = $cookiePrefix;
+	public function __construct(
+		private readonly string $cookiePrefix,
+	) {
 	}
 
 	/**
@@ -57,6 +54,7 @@ abstract class RequestBase implements RequestInterface {
 		$this->headerCollection->resetHeaders( $headers );
 	}
 
+	/** @inheritDoc */
 	public function getHeaders() {
 		if ( $this->headerCollection === null ) {
 			$this->initHeaders();
@@ -64,6 +62,7 @@ abstract class RequestBase implements RequestInterface {
 		return $this->headerCollection->getHeaders();
 	}
 
+	/** @inheritDoc */
 	public function getHeader( $name ) {
 		if ( $this->headerCollection === null ) {
 			$this->initHeaders();
@@ -71,6 +70,7 @@ abstract class RequestBase implements RequestInterface {
 		return $this->headerCollection->getHeader( $name );
 	}
 
+	/** @inheritDoc */
 	public function hasHeader( $name ) {
 		if ( $this->headerCollection === null ) {
 			$this->initHeaders();
@@ -78,6 +78,7 @@ abstract class RequestBase implements RequestInterface {
 		return $this->headerCollection->hasHeader( $name );
 	}
 
+	/** @inheritDoc */
 	public function getHeaderLine( $name ) {
 		if ( $this->headerCollection === null ) {
 			$this->initHeaders();
@@ -85,22 +86,27 @@ abstract class RequestBase implements RequestInterface {
 		return $this->headerCollection->getHeaderLine( $name );
 	}
 
+	/** @inheritDoc */
 	public function setPathParams( $params ) {
 		$this->pathParams = $params;
 	}
 
+	/** @inheritDoc */
 	public function getPathParams() {
 		return $this->pathParams;
 	}
 
+	/** @inheritDoc */
 	public function getPathParam( $name ) {
 		return $this->pathParams[$name] ?? null;
 	}
 
+	/** @inheritDoc */
 	public function getCookiePrefix() {
 		return $this->cookiePrefix;
 	}
 
+	/** @inheritDoc */
 	public function getCookie( $name, $default = null ) {
 		$cookies = $this->getCookieParams();
 		$prefixedName = $this->getCookiePrefix() . $name;

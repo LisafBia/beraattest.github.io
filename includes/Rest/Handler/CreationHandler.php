@@ -3,8 +3,10 @@
 namespace MediaWiki\Rest\Handler;
 
 use MediaWiki\Request\WebResponse;
+use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\Response;
+use MediaWiki\Rest\ResponseHeaders;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
 
@@ -17,8 +19,7 @@ class CreationHandler extends EditHandler {
 	 * @inheritDoc
 	 */
 	protected function getTitleParameter() {
-		$body = $this->getValidatedBody();
-		'@phan-var array $body';
+		$body = $this->getValidatedBodyArray();
 		return $body['title'];
 	}
 
@@ -32,37 +33,43 @@ class CreationHandler extends EditHandler {
 				self::PARAM_SOURCE => 'body',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
-				self::PARAM_DESCRIPTION => 'The intended content of the page',
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-source' ),
+				Handler::PARAM_EXAMPLE => 'Hello, world!',
 			],
 			'title' => [
 				self::PARAM_SOURCE => 'body',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
-				self::PARAM_DESCRIPTION => 'The title of the page to create',
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-create-title' ),
+				Handler::PARAM_EXAMPLE => 'User:<my username>/Sandbox',
 			],
 			'comment' => [
 				self::PARAM_SOURCE => 'body',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
-				self::PARAM_DESCRIPTION => 'A comment describing the reason for creating the page',
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-comment' ),
+				Handler::PARAM_EXAMPLE => 'Testing out the REST API',
 			],
 			'content_model' => [
 				self::PARAM_SOURCE => 'body',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => false,
-				self::PARAM_DESCRIPTION => 'The content model to use to interpret the source',
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-contentmodel' ),
+				Handler::PARAM_EXAMPLE => 'wikitext',
 			],
 		]
 		+ $this->getTokenParamDefinition();
+	}
+
+	public function getRequestBodyDescription(): MessageValue|string|null {
+		return new MessageValue( 'rest-requestbody-desc-create-page' );
 	}
 
 	/**
 	 * @inheritDoc
 	 */
 	protected function getActionModuleParameters() {
-		$body = $this->getValidatedBody();
-		'@phan-var array $body';
-
+		$body = $this->getValidatedBodyArray();
 		$title = $this->getTitleParameter();
 
 		$contentmodel = $body['content_model'] ?: null;
@@ -107,7 +114,7 @@ class CreationHandler extends EditHandler {
 		$title = $this->urlEncodeTitle( $actionModuleResult['edit']['title'] );
 
 		$url = $this->getRouter()->getRouteUrl( '/v1/page/' . $title );
-		$response->setHeader( 'Location', $url );
+		$response->setHeader( ResponseHeaders::LOCATION, $url );
 	}
 
 	/**
@@ -117,6 +124,18 @@ class CreationHandler extends EditHandler {
 	 * @return ?string The file path to the NewPage JSON schema.
 	 */
 	public function getResponseBodySchemaFileName( string $method ): ?string {
-		return 'includes/Rest/Handler/Schema/NewPage.json';
+		return __DIR__ . '/Schema/NewPage.json';
+	}
+
+	/** @inheritDoc */
+	public function getResponseHeaderSettings(): array {
+		return array_merge(
+			parent::getResponseHeaderSettings(),
+			[
+				ResponseHeaders::LOCATION => ResponseHeaders::RESPONSE_HEADER_DEFINITIONS[
+					ResponseHeaders::LOCATION
+				]
+			]
+		);
 	}
 }

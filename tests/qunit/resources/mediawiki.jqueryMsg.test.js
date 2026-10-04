@@ -4,7 +4,7 @@
 	/* eslint-disable camelcase */
 	let formatText, formatParse, specialCharactersPageName, expectedListUsers,
 		expectedListUsersSitename, expectedLinkPagenamee, expectedEntrypoints;
-	const testData = require( 'mediawiki.language.testdata' ),
+	const testData = require( 'mediawiki.language.jqueryMsg.testdata' ),
 		phpParserData = testData.phpParserData;
 
 	// When the expected result is the same in both modes
@@ -78,7 +78,7 @@
 		// Messages that are reused in multiple tests
 		messages: {
 			// The values for gender are not significant,
-			// what matters is which of the values is choosen by the parser
+			// what matters is which of the values is chosen by the parser
 			'gender-msg': '$1: {{GENDER:$2|blue|pink|green}}',
 			'gender-msg-currentuser': '{{GENDER:|blue|pink|green}}',
 
@@ -653,7 +653,7 @@
 				key = testCase[ 0 ],
 				input = testCase[ 1 ],
 				output = testCase[ 2 ],
-				paramHref = key.slice( 0, 8 ) === 'wikilink' ? 'Example' : 'http://example.com',
+				paramHref = key.startsWith( 'wikilink' ) ? 'Example' : 'http://example.com',
 				paramText = 'Text';
 			mw.messages.set( key, input );
 			assert.htmlEqual(
@@ -779,6 +779,31 @@
 			'⧼doesnt-exist⧽',
 			'int: where nested message does not exist'
 		);
+
+		// Ensure nested {{int:...}} markup is parsed with a custom mw.Map (T424167)
+		const customMap = new mw.Map();
+		customMap.set( {
+			'custom-int-parent': 'a{{int:custom-int-child}}c',
+			'custom-int-child': 'b',
+			'custom-int-missing': '{{int:custom-int-unknown}}'
+		} );
+
+		const customFormatText = jqueryMsg.getMessageFunction( {
+			messages: customMap,
+			format: 'text'
+		} );
+
+		assert.strictEqual(
+			customFormatText( 'custom-int-parent' ),
+			'abc',
+			'int: resolves nested message in custom mw.Map'
+		);
+
+		assert.strictEqual(
+			customFormatText( 'custom-int-missing' ),
+			'⧼custom-int-unknown⧽',
+			'int: missing nested message in custom mw.Map'
+		);
 	} );
 
 	QUnit.test( 'Ns', ( assert ) => {
@@ -833,7 +858,7 @@
 		function verifyGetMessageFunction( key, format, shouldCall ) {
 			outerCalled = false;
 			innerCalled = false;
-			// eslint-disable-next-line mediawiki/msg-doc
+
 			const message = mw.message( key );
 			message[ format ]();
 			assert.strictEqual( outerCalled, shouldCall, 'Outer function called for ' + key );
@@ -1123,14 +1148,14 @@
 			'Attributes with single quotes are normalized to double'
 		);
 
-		mw.messages.set( 'jquerymsg-escaped-double-quotes-attribute', '<i style="font-family:&quot;Arial&quot;">Styled</i>' );
+		mw.messages.set( 'jquerymsg-escaped-double-quotes-attribute', '<i title="Hello &quot;World&quot;">Title</i>' );
 		assert.htmlEqual(
 			formatParse( 'jquerymsg-escaped-double-quotes-attribute' ),
 			mw.messages.get( 'jquerymsg-escaped-double-quotes-attribute' ),
 			'Escaped attributes are parsed correctly'
 		);
 
-		mw.messages.set( 'jquerymsg-escaped-single-quotes-attribute', '<i style=\'font-family:&#039;Arial&#039;\'>Styled</i>' );
+		mw.messages.set( 'jquerymsg-escaped-single-quotes-attribute', '<i title=\'Hello &#039;World&#039;\'>Title</i>' );
 		assert.htmlEqual(
 			formatParse( 'jquerymsg-escaped-single-quotes-attribute' ),
 			mw.messages.get( 'jquerymsg-escaped-single-quotes-attribute' ),
@@ -1156,13 +1181,6 @@
 			formatParse( 'jquerymsg-unclosed-tag' ),
 			'Foo&lt;tag&gt;bar',
 			'Nonsupported unclosed tags are escaped'
-		);
-
-		mw.messages.set( 'jquerymsg-self-closing-tag', 'Foo<tag/>bar' );
-		assert.htmlEqual(
-			formatParse( 'jquerymsg-self-closing-tag' ),
-			'Foo&lt;tag/&gt;bar',
-			'Self-closing tags don\'t cause a parse error'
 		);
 
 		mw.messages.set( 'jquerymsg-asciialphabetliteral-regression', '<b >>>="dir">asd</b>' );
@@ -1209,6 +1227,57 @@
 			'<i title="A&amp;rarr;B"></i>',
 			'"&rarr;" entity is double-escaped in attribute'
 		);
+
+		mw.messages.set( 'jquerymsg-valid-self-closing-tags-1', '<br><wbr><hr>' );
+		mw.messages.set( 'jquerymsg-valid-self-closing-tags-2', '<br/><wbr/><hr/>' );
+		mw.messages.set( 'jquerymsg-valid-self-closing-tags-3', '<br /><wbr  /><hr   />' );
+		mw.messages.set( 'jquerymsg-valid-self-closing-tags-4', '<br class="test" />' );
+		assert.htmlEqual(
+			formatParse( 'jquerymsg-valid-self-closing-tags-1' ),
+			'<br><wbr><hr>',
+			'Valid self-closing tags without slashes are turned into HTML'
+		);
+		assert.htmlEqual(
+			formatParse( 'jquerymsg-valid-self-closing-tags-2' ),
+			'<br><wbr><hr>',
+			'Valid self-closing tags with slashes are turned into HTML'
+		);
+		assert.htmlEqual(
+			formatParse( 'jquerymsg-valid-self-closing-tags-3' ),
+			'<br><wbr><hr>',
+			'Valid self-closing tags with whitespace and slashes are turned into HTML'
+		);
+		assert.htmlEqual(
+			formatParse( 'jquerymsg-valid-self-closing-tags-4' ),
+			'<br class="test">',
+			'Valid self-closing tags with attributes are turned into HTML'
+		);
+
+		mw.messages.set( 'jquerymsg-invalid-self-closing-tags-1', '<div/>' );
+		mw.messages.set( 'jquerymsg-invalid-self-closing-tags-2', '<foo/>' );
+		mw.messages.set( 'jquerymsg-invalid-self-closing-tags-3', '<br onclick="alert(1)">' );
+		assert.htmlEqual(
+			formatParse( 'jquerymsg-invalid-self-closing-tags-1' ),
+			'&lt;div/&gt;',
+			'Self-closing syntax on an allowed tag that is not self-closing escapes the tag'
+		);
+		assert.htmlEqual(
+			formatParse( 'jquerymsg-invalid-self-closing-tags-2' ),
+			'&lt;foo/&gt;',
+			'Self-closing syntax on a disallowed tag escapes the tag'
+		);
+		assert.htmlEqual(
+			formatParse( 'jquerymsg-invalid-self-closing-tags-3' ),
+			'&lt;br onclick="alert(1)"&gt;',
+			'Self-closing tags with disallowed attributes are escaped'
+		);
+
+		mw.messages.set( 'jquery-mixed-self-closing-tags', '<div><br></div>' );
+		assert.htmlEqual(
+			formatParse( 'jquery-mixed-self-closing-tags' ),
+			'<div><br></div>',
+			'Self-closing tags inside other tags are turned into HTML'
+		);
 	} );
 
 	QUnit.test( 'Nowiki', ( assert ) => {
@@ -1240,9 +1309,8 @@
 		this.suppressWarnings();
 		const logSpy = this.sandbox.spy( mw.log, 'warn' );
 
-		assert.strictEqual(
+		assert.false(
 			mw.message( 'invalid-wikitext' ).isParseable(),
-			false,
 			'Invalid wikitext: reported as not parseable'
 		);
 
@@ -1317,7 +1385,7 @@
 		for ( let i = 0; i < cases.length; i++ ) {
 			mw.messages.set( cases[ i ].key, cases[ i ].msg );
 			assert.strictEqual(
-				// eslint-disable-next-line mediawiki/msg-doc
+
 				mw.message( cases[ i ].key, $( '<b>' ).text( 'x' ) ).parse(),
 				cases[ i ].expected,
 				cases[ i ].key
@@ -1345,15 +1413,22 @@
 		);
 	} );
 
-	QUnit.test( 'Do not allow arbitrary style', function ( assert ) {
-		mw.messages.set( 'illegal-style', '<span style="background-image:url( http://example.com )">bar</span>' );
+	QUnit.test( 'Do not allow style attribute (T251032)', function ( assert ) {
+		mw.messages.set( 'unsafe-style', '<span style="background-image:url( http://example.com )">bar</span>' );
+		mw.messages.set( 'safe-style', '<span style="color:red">bar</span>' );
 
 		this.suppressWarnings();
 
 		assert.strictEqual(
-			formatParse( 'illegal-style' ),
+			formatParse( 'unsafe-style' ),
 			'&lt;span style="background-image:url( http://example.com )"&gt;bar&lt;/span&gt;',
-			'illegal-style: \'parse\' format'
+			'unsafe-style: \'parse\' format'
+		);
+
+		assert.strictEqual(
+			formatParse( 'safe-style' ),
+			'&lt;span style="color:red"&gt;bar&lt;/span&gt;',
+			'safe-style: \'parse\' format (all styles are disallowed now, T251032)'
 		);
 	} );
 
@@ -1381,9 +1456,8 @@
 			'jQuery plugin $.fn.msg() works correctly'
 		);
 
-		assert.strictEqual(
+		assert.true(
 			mw.message( 'integration-test' ).isParseable(),
-			true,
 			'mw.message().isParseable() works correctly'
 		);
 
@@ -1464,6 +1538,14 @@
 				BAR: 'bar'
 			},
 			'setParserDefaults updates the parser defaults'
+		);
+	} );
+
+	QUnit.test( 'Parse messages if one of the params is an object (T415939)', ( assert ) => {
+		mw.messages.set( 'non-wikitext-message', 'Test: $1' );
+		assert.strictEqual(
+			mw.message( 'non-wikitext-message', Object.assign( '<a href="/">Link</a>' ) ).parse(),
+			'Test: <a href="/">Link</a>'
 		);
 	} );
 }() );

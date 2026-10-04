@@ -6,9 +6,14 @@
 	.position-sticky();
 	top: 0;
 	padding: 0.5em 0;
-	box-shadow: @box-shadow-drop-small;
+	box-shadow: 0 2px 0 0 rgba( 0, 0, 0, 0.1 );
 	text-align: right;
 	z-index: 1;
+}
+
+#mw-apisandbox-ui .mw-apisandbox-api-help-general > .oo-ui-fieldLayout-body > .oo-ui-fieldLayout-header {
+	// Avoid awkward line wrapping in this long introduction message
+	max-width: none;
 }
 
 #mw-apisandbox-ui .mw-apisandbox-link {
@@ -111,6 +116,11 @@
 	.oo-ui-textInputWidget {
 		/* Leave at least enough space for icon, indicator, and a sliver of text */
 		min-width: 6em;
+	}
+
+	.oo-ui-textInputWidget textarea {
+		min-height: 8em;
+		resize: vertical;
 	}
 
 	&.oo-ui-labelElement.oo-ui-fieldLayout-align-left > .oo-ui-fieldLayout-body {

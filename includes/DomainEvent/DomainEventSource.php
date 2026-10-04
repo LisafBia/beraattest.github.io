@@ -5,23 +5,25 @@ namespace MediaWiki\DomainEvent;
  * Service object for registering listeners for domain events.
  *
  * @since 1.44
- * @unstable until 1.45
+ *
+ * @see docs/Events.md
+ * @see https://www.mediawiki.org/wiki/Manual:Domain_events
  */
 interface DomainEventSource {
 
 	/**
-	 * Listeners will be invoked before the transaction that produced the event
-	 * is committed. Delivery guarantees depend on the DomainEventDispatcher
-	 * implementation.
-	 *
-	 * Listeners may be invoked immediately, before the call to
-	 * DomainEventDispatcher::dispatch() returns, or later.
+	 * Default options to apply when registering listeners.
+	 * In the future, options may convey things like the listener priority or
+	 * error handling.
 	 */
-	public const INVOKE_BEFORE_COMMIT = 'BeforeCommit';
+	public const DEFAULT_LISTENER_OPTIONS = [];
 
 	/**
+	 * Add a listener that will be notified on events of the given type,
+	 * triggered by a change to an entity on the local wiki.
+	 *
 	 * Listeners will be invoked after the transaction that produced the event
-	 * was committed successfully. Delivery guarantees depend on the
+	 * was committed successfully. Delivery guarantees depend on the respective
 	 * DomainEventDispatcher implementation.
 	 *
 	 * In a web request, listeners should be invoked after the response has been
@@ -34,32 +36,11 @@ interface DomainEventSource {
 	 * Listeners should be implemented to be idempotent, that is, calling
 	 * them multiple times with the same parameters should produce the same
 	 * outcome.
-	 */
-	public const INVOKE_AFTER_COMMIT = 'AfterCommit';
-
-	public const INVOCATION_MODE = 'invocation';
-
-	/**
-	 * Default options to apply when registering listeners.
-	 */
-	public const DEFAULT_LISTENER_OPTIONS = [
-		self::INVOCATION_MODE => self::INVOKE_AFTER_COMMIT
-	];
-
-	/**
-	 * Add a listener that will be notified on events of the given type,
-	 * triggered by changed to the persistent state of the local wiki.
-	 *
-	 * Listeners should make sure to apply DEFAULT_OPTIONS to $options.
 	 *
 	 * @param string $eventType
 	 * @param callable $listener
-	 * @param array $options Options that control how the listener is invoked.
-	 *        Options may be implementation specific can could control things
-	 *        like invocation order (priority) and error handling.
-	 *        Well known keys are:
-	 *        - self::INVOCATION_MODE: one of the invocation modes defined
-	 *          in this class, e.g. self::INVOKE_AFTER_COMMIT.
+	 * @param array $options Currently unused. In the future, $options may
+	 * *        convey things like the listener priority or error handling.
 	 */
 	public function registerListener(
 		string $eventType,

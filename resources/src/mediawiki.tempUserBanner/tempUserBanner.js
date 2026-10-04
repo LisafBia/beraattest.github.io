@@ -8,8 +8,9 @@
 $( () => {
 
 	const config = require( './config.json' ),
-		$tempUserBannerEl = $( '.mw-temp-user-banner ' ),
-		$tempUserBannerTooltipEl = $( '.mw-temp-user-banner-tooltip ' ),
+		contLangMessages = require( './contLangMessages.json' ),
+		local = require( 'mediawiki.storage' ).local,
+		$tempUserBannerTooltipEl = $( '.mw-temp-user-banner-tooltip' ),
 		$tempUserBannerTooltipButtonEl = $( '#mw-temp-user-banner-tooltip-button' ),
 		TTL_DAY_MS = 86400000;
 
@@ -59,7 +60,7 @@ $( () => {
 	 * @return {boolean}
 	 */
 	function shouldShowExpirationAlert() {
-		const tempUserExpirationAlertDismissed = localStorage.getItem( 'tempUserExpirationAlertDismissed' );
+		const tempUserExpirationAlertDismissed = local.get( 'tempUserExpirationAlertDismissed' );
 		const expirationIsSet = typeof config.AutoCreateTempUser.expireAfterDays === 'number';
 		const notifyBeforeExpirationIsSet = typeof config.AutoCreateTempUser.notifyBeforeExpirationDays === 'number';
 		return expirationIsSet &&
@@ -98,7 +99,10 @@ $( () => {
 	function getTooltipContent( shouldShowExpiration ) {
 		const descriptionText = shouldShowExpiration ?
 			getExpirationDescriptionText() :
-			mw.message( 'temp-user-banner-tooltip-description-learn-more' ).parseDom();
+			mw.message(
+				'temp-user-banner-tooltip-description-learn-more',
+				contLangMessages[ 'tempuser-helppage' ]
+			).parseDom();
 		return $( '<div>' ).append(
 			$( '<p>' ).append( descriptionText ),
 			$( '<p>' ).append( mw.message( 'temp-user-banner-tooltip-description-login' ).parseDom() )
@@ -109,12 +113,11 @@ $( () => {
 	 * Builds a tooltip which is part of a banner for temporary account (IP masking) users.
 	 *
 	 * @ignore
-	 * @param {jQuery} $bannerEl
 	 * @param {jQuery} $tooltipEl
 	 * @param {jQuery} $buttonEl
 	 */
-	function initTempUserBannerTooltip( $bannerEl, $tooltipEl, $buttonEl ) {
-		if ( !$bannerEl.length || !$tooltipEl.length || !$buttonEl.length ) {
+	function initTempUserBannerTooltip( $tooltipEl, $buttonEl ) {
+		if ( !$tooltipEl.length || !$buttonEl.length ) {
 			return;
 		}
 
@@ -150,7 +153,7 @@ $( () => {
 					if ( shouldShowExpiration ) {
 						popup.on( 'toggle', ( visible ) => {
 							if ( !visible ) {
-								localStorage.setItem( 'tempUserExpirationAlertDismissed', true );
+								local.set( 'tempUserExpirationAlertDismissed', true );
 								popup = null;
 							}
 						} );
@@ -167,6 +170,6 @@ $( () => {
 		}
 	}
 
-	initTempUserBannerTooltip( $tempUserBannerEl, $tempUserBannerTooltipEl, $tempUserBannerTooltipButtonEl );
+	initTempUserBannerTooltip( $tempUserBannerTooltipEl, $tempUserBannerTooltipButtonEl );
 
 } );

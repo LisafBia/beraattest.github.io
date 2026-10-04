@@ -5,6 +5,7 @@
  * @license The MIT License (MIT); see LICENSE.txt
  */
 ( function () {
+	const util = require( 'mediawiki.util' );
 
 	/**
 	 * @classdesc User input widget.
@@ -21,10 +22,7 @@
 	 * @param {boolean} [config.excludetemp] Whether to exclude temporary users or not
 	 * @param {mw.Api} [config.api] API object to use, creates a default mw.Api instance if not specified
 	 */
-	mw.widgets.UserInputWidget = function MwWidgetsUserInputWidget( config ) {
-		// Config initialization
-		config = config || {};
-
+	mw.widgets.UserInputWidget = function MwWidgetsUserInputWidget( config = {} ) {
 		// Parent constructor
 		mw.widgets.UserInputWidget.super.call( this, Object.assign( {}, config, { autocomplete: false } ) );
 
@@ -97,10 +95,25 @@
 	 * @inheritdoc
 	 */
 	mw.widgets.UserInputWidget.prototype.getLookupRequest = function () {
+		let query = this.value;
+
+		if ( typeof query === 'string' ) {
+			// If the query is for an IP, trim both leading and trailing
+			// whitespaces before the lookup takes place; otherwise, remove only
+			// leading whitespaces, as usernames can't start with a whitespace
+			// but may contain them after, and we want to filter out usernames
+			// that don't contain spaces if the query contains them (T378279).
+			if ( util.isIPAddress( query.trim() ) ) {
+				query = query.trim();
+			} else {
+				query = query.replace( /^(\s)+/, '' );
+			}
+		}
+
 		return this.api.get( {
 			action: 'query',
 			list: 'allusers',
-			auprefix: this.value,
+			auprefix: query,
 			aulimit: this.limit,
 			auexcludenamed: this.excludeNamed,
 			auexcludetemp: this.excludeTemp

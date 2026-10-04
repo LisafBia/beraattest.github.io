@@ -41,6 +41,12 @@ $separatorTransformTable = null;
 $minimumGroupingDigits = 1;
 
 /**
+ * The CLDR numbering system name.
+ * Refer to https://github.com/unicode-org/cldr/blob/main/common/supplemental/numberingSystems.xml
+ */
+$numberingSystem = 'latn';
+
+/**
  * URLs do not specify their encoding. UTF-8 is used by default, but if the
  * URL is not a valid UTF-8 sequence, we have to try to guess what the real
  * encoding is. The encoding used in this case is defined below, and must be
@@ -189,6 +195,12 @@ $dateFormats = [
 ];
 
 /**
+ * Overrides for the JS date format option arrays generated from $dateFormats by
+ * Language::convertDateFormatToJs()
+ */
+$jsDateFormats = [];
+
+/**
  * Default list of book sources
  */
 $bookstoreList = [
@@ -229,7 +241,13 @@ $magicWords = [
 	'canonicalurl'            => [ 0, 'CANONICALURL:' ],
 	'canonicalurle'           => [ 0, 'CANONICALURLE:' ],
 	'cascadingsources'        => [ 1, 'CASCADINGSOURCES' ],
+	'categorysort'            => [ 1, 'CATEGORYSORT:' ],
+	'categorysort_rtimestamp' => [ 0, 'RTIMESTAMP' ],
+	'categorysort_timestamp'  => [ 0, 'TIMESTAMP' ],
 	'contentlanguage'         => [ 1, 'CONTENTLANGUAGE', 'CONTENTLANG' ],
+	'contentmodel'            => [ 1, '#contentmodel' ],
+	'contentmodel_canonical'  => [ 1, 'canonical' ],
+	'contentmodel_local'      => [ 1, 'local' ],
 	'currentday'              => [ 1, 'CURRENTDAY' ],
 	'currentday2'             => [ 1, 'CURRENTDAY2' ],
 	'currentdayname'          => [ 1, 'CURRENTDAYNAME' ],
@@ -253,6 +271,7 @@ $magicWords = [
 	'displaytitle'            => [ 1, 'DISPLAYTITLE' ],
 	'displaytitle_noerror'    => [ 0, 'noerror' ],
 	'displaytitle_noreplace'  => [ 0, 'noreplace' ],
+	'expectshortpage'         => [ 1, '__EXPECTSHORTPAGE__', ],
 	'expectunusedcategory'    => [ 1, '__EXPECTUNUSEDCATEGORY__', ],
 	'expectunusedtemplate'    => [ 1, '__EXPECTUNUSEDTEMPLATE__', ],
 	'filepath'                => [ 0, 'FILEPATH:' ],
@@ -295,6 +314,7 @@ $magicWords = [
 	'int'                     => [ 0, 'INT:' ],
 	'interlanguagelink'       => [ 1, '#interlanguagelink' ],
 	'interwikilink'           => [ 1, '#interwikilink' ],
+	'isbn'                    => [ 1, '#isbn' ],
 	'language'                => [ 0, '#LANGUAGE' ],
 	'language_option_bcp47'   => [ 1, 'bcp47' ],
 	'lc'                      => [ 0, 'LC:' ],
@@ -315,6 +335,7 @@ $magicWords = [
 	'localurle'               => [ 0, 'LOCALURLE:' ],
 	'localweek'               => [ 1, 'LOCALWEEK' ],
 	'localyear'               => [ 1, 'LOCALYEAR' ],
+	'lossless'                => [ 0, 'LOSSLESS' ],
 	'msg'                     => [ 0, 'MSG:' ],
 	'msgnw'                   => [ 0, 'MSGNW:' ],
 	'namespace'               => [ 1, 'NAMESPACE' ],
@@ -434,7 +455,7 @@ $specialPageAliases = [
 	'Contributions'              => [ 'Contributions', 'Contribs' ],
 	'CreateAccount'              => [ 'CreateAccount' ],
 	'Deadendpages'               => [ 'DeadendPages' ],
-	'DeletedContributions'       => [ 'DeletedContributions' ],
+	'DeletedContributions'       => [ 'DeletedContributions', 'DeletedContribs' ],
 	'DeletePage'                 => [ 'DeletePage', 'Delete' ],
 	'Diff'                       => [ 'Diff' ],
 	'DoubleRedirects'            => [ 'DoubleRedirects' ],
@@ -467,7 +488,7 @@ $specialPageAliases = [
 	'Log'                        => [ 'Log', 'Logs' ],
 	'Lonelypages'                => [ 'LonelyPages', 'OrphanedPages' ],
 	'Longpages'                  => [ 'LongPages' ],
-	'MediaStatistics'            => [ 'MediaStatistics' ],
+	'MediaStatistics'            => [ 'MediaStatistics', 'MediaStats' ],
 	'MergeHistory'               => [ 'MergeHistory' ],
 	'MIMEsearch'                 => [ 'MIMESearch' ],
 	'Mostcategories'             => [ 'MostCategories' ],
@@ -478,10 +499,10 @@ $specialPageAliases = [
 	'Mostlinkedtemplates'        => [ 'MostTranscludedPages', 'MostLinkedTemplates', 'MostUsedTemplates' ],
 	'Mostrevisions'              => [ 'MostRevisions' ],
 	'Movepage'                   => [ 'MovePage' ],
-	'Mute'                       => [ 'Mute' ],
+	'Mute'                       => [ 'Mute', 'MuteUser' ],
 	'Mycontributions'            => [ 'MyContributions', 'MyContribs' ],
 	'MyLanguage'                 => [ 'MyLanguage' ],
-	'Mylog'                      => [ 'MyLog' ],
+	'Mylog'                      => [ 'MyLog', 'MyLogs' ],
 	'Mypage'                     => [ 'MyPage' ],
 	'Mytalk'                     => [ 'MyTalk' ],
 	'Myuploads'                  => [ 'MyUploads', 'MyFiles' ],
@@ -497,7 +518,7 @@ $specialPageAliases = [
 	'PasswordPolicies'           => [ 'PasswordPolicies' ],
 	'PasswordReset'              => [ 'PasswordReset' ],
 	'PermanentLink'              => [ 'PermanentLink', 'PermaLink' ],
-	'Preferences'                => [ 'Preferences' ],
+	'Preferences'                => [ 'Preferences', 'Prefs' ],
 	'Prefixindex'                => [ 'PrefixIndex' ],
 	'Protectedpages'             => [ 'ProtectedPages' ],
 	'Protectedtitles'            => [ 'ProtectedTitles' ],
@@ -513,7 +534,6 @@ $specialPageAliases = [
 	'RemoveCredentials'          => [ 'RemoveCredentials' ],
 	'Renameuser'                 => [ 'RenameUser' ],
 	'ResetTokens'                => [ 'ResetTokens' ],
-	'RestSandbox'                => [ 'RestSandbox' ],
 	'Revisiondelete'             => [ 'RevisionDelete' ],
 	'RunJobs'                    => [ 'RunJobs' ],
 	'Search'                     => [ 'Search' ],
@@ -523,12 +543,12 @@ $specialPageAliases = [
 	'Tags'                       => [ 'Tags' ],
 	'TalkPage'                   => [ 'TalkPage' ],
 	'TrackingCategories'         => [ 'TrackingCategories' ],
-	'Unblock'                    => [ 'Unblock' ],
+	'Unblock'                    => [ 'Unblock', 'UnblockIP', 'UnblockUser' ],
 	'Uncategorizedcategories'    => [ 'UncategorizedCategories' ],
 	'Uncategorizedimages'        => [ 'UncategorizedFiles', 'UncategorizedImages' ],
 	'Uncategorizedpages'         => [ 'UncategorizedPages' ],
 	'Uncategorizedtemplates'     => [ 'UncategorizedTemplates' ],
-	'Undelete'                   => [ 'Undelete' ],
+	'Undelete'                   => [ 'Undelete', 'UndeletePage' ],
 	'UnlinkAccounts'             => [ 'UnlinkAccounts' ],
 	'Unlockdb'                   => [ 'UnlockDB' ],
 	'Unusedcategories'           => [ 'UnusedCategories' ],
@@ -540,12 +560,13 @@ $specialPageAliases = [
 	'Userlogin'                  => [ 'UserLogin', 'Login' ],
 	'Userlogout'                 => [ 'UserLogout', 'Logout' ],
 	'Userrights'                 => [ 'UserRights', 'MakeSysop', 'MakeBot' ],
-	'Version'                    => [ 'Version' ],
+	'Version'                    => [ 'Version', 'Versions' ],
 	'Wantedcategories'           => [ 'WantedCategories' ],
 	'Wantedfiles'                => [ 'WantedFiles' ],
 	'Wantedpages'                => [ 'WantedPages', 'BrokenLinks' ],
 	'Wantedtemplates'            => [ 'WantedTemplates' ],
 	'Watchlist'                  => [ 'Watchlist' ],
+	'WatchlistLabels'            => [ 'WatchlistLabels' ],
 	'Whatlinkshere'              => [ 'WhatLinksHere' ],
 	'Withoutinterwiki'           => [ 'WithoutInterwiki' ],
 ];

@@ -3,21 +3,7 @@
  * Merge $wgExtensionMessagesFiles from various extensions to produce a
  * single array containing all message files.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
@@ -60,7 +46,8 @@ class MergeMessageFileList extends Maintenance {
 		$config = $this->getConfig();
 		$extensionEntryPointListFiles = $config->get( MainConfigNames::ExtensionEntryPointListFiles );
 
-		if ( !count( $extensionEntryPointListFiles )
+		if (
+			!count( $extensionEntryPointListFiles )
 			&& !$this->hasOption( 'list-file' )
 			&& !$this->hasOption( 'extensions-dir' )
 		) {
@@ -70,7 +57,7 @@ class MergeMessageFileList extends Maintenance {
 
 		$setupFiles = [];
 
-		# Add setup files contained in file passed to --list-file
+		# Add setup files contained in the file passed to --list-file
 		if ( $this->hasOption( 'list-file' ) ) {
 			$extensionPaths = $this->readFile( $this->getOption( 'list-file' ) );
 			$setupFiles = array_merge( $setupFiles, $extensionPaths );
@@ -78,30 +65,29 @@ class MergeMessageFileList extends Maintenance {
 
 		# Now find out files in a directory
 		if ( $this->hasOption( 'extensions-dir' ) ) {
-			$extdir = $this->getOption( 'extensions-dir' );
-			# Allow multiple directories to be passed with ":" as delimiter
-			$extdirs = explode( ':', $extdir );
-			foreach ( $extdirs as $extdir ) {
-				$entries = scandir( $extdir );
-				foreach ( $entries as $extname ) {
-					if ( $extname == '.' || $extname == '..' || !is_dir( "$extdir/$extname" ) ) {
+			# Allow multiple directories to be passed with ":" as a delimiter
+			$extDirs = explode( ':', $this->getOption( 'extensions-dir' ) );
+			foreach ( $extDirs as $extDir ) {
+				$entries = scandir( $extDir );
+				foreach ( $entries as $extName ) {
+					if ( $extName === '.' || $extName === '..' || !is_dir( "$extDir/$extName" ) ) {
 						continue;
 					}
 					$possibilities = [
-						"$extdir/$extname/extension.json",
-						"$extdir/$extname/skin.json",
+						"$extDir/$extName/extension.json",
+						"$extDir/$extName/skin.json",
 					];
 					$found = false;
-					foreach ( $possibilities as $extfile ) {
-						if ( file_exists( $extfile ) ) {
-							$setupFiles[] = $extfile;
+					foreach ( $possibilities as $extFile ) {
+						if ( file_exists( $extFile ) ) {
+							$setupFiles[] = $extFile;
 							$found = true;
 							break;
 						}
 					}
 
 					if ( !$found ) {
-						$this->error( "Extension {$extname} in {$extdir} lacks expected entry point: " .
+						$this->error( "Extension {$extName} in {$extDir} lacks expected entry point: " .
 							"extension.json or skin.json " .
 							"(PHP entry points are no longer supported by this script)." );
 					}
@@ -139,9 +125,7 @@ class MergeMessageFileList extends Maintenance {
 	 * @param string $fileName
 	 * @return array List of absolute extension paths
 	 */
-	private function readFile( $fileName ) {
-		$IP = MW_INSTALL_PATH;
-
+	private function readFile( string $fileName ): array {
 		$files = [];
 		$fileLines = file( $fileName );
 		if ( $fileLines === false ) {
@@ -154,14 +138,14 @@ class MergeMessageFileList extends Maintenance {
 		foreach ( $fileLines as $extension ) {
 			$extension = trim( preg_replace( '/#.*/', '', $extension ) );
 			if ( $extension !== '' ) {
-				# Paths may use the string $IP to be substituted by the actual value
-				$extension = str_replace( '$IP', $IP, $extension );
+				# Paths may use a $IP placeholder string which we substitute here
+				$extension = str_replace( '$IP', MW_INSTALL_PATH, $extension );
 				if ( !str_ends_with( $extension, '.json' ) ) {
 					$this->error( "Extension {$extension} does not end with .json " .
 						"(PHP entry points are no longer supported by this script)" );
 				} elseif ( file_exists( $extension ) ) {
 					$files[] = $extension;
-				} else {
+				} elseif ( !$this->isQuiet() ) {
 					$this->error( "Extension {$extension} doesn't exist" );
 				}
 			}
@@ -170,16 +154,13 @@ class MergeMessageFileList extends Maintenance {
 		return $files;
 	}
 
-	private function generateMessageFileList( array $setupFiles ) {
-		$IP = MW_INSTALL_PATH;
-
+	private function generateMessageFileList( array $setupFiles ): void {
 		$outputFile = $this->getOption( 'output' );
-		$quiet = $this->hasOption( 'quiet' );
+		$quiet = $this->isQuiet();
 
 		$queue = [];
-
 		foreach ( $setupFiles as $fileName ) {
-			if ( strval( $fileName ) === '' ) {
+			if ( (string)$fileName === '' ) {
 				continue;
 			}
 			if ( !$quiet ) {
@@ -215,11 +196,10 @@ class MergeMessageFileList extends Maintenance {
 			'$wgMessagesDirs = ' . var_export( $vars['wgMessagesDirs'], true ) . ";\n\n";
 
 		$dirs = [
-			$IP,
+			MW_INSTALL_PATH,
 			dirname( __DIR__ ),
-			realpath( $IP )
+			realpath( MW_INSTALL_PATH )
 		];
-
 		foreach ( $dirs as $dir ) {
 			$s = preg_replace( "/'" . preg_quote( $dir, '/' ) . "([^']*)'/", '"$IP\1"', $s );
 		}

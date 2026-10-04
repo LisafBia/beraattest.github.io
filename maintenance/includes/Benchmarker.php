@@ -7,21 +7,7 @@
 /**
  * Base code for benchmark scripts.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Benchmark
  */
@@ -29,6 +15,7 @@
 namespace MediaWiki\Maintenance;
 
 use Wikimedia\RunningStat;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/../Maintenance.php';
@@ -73,7 +60,6 @@ abstract class Benchmarker extends Maintenance {
 			if ( is_string( $key ) ) {
 				$name = $key;
 			} else {
-				// @phan-suppress-next-line PhanTypePossiblyInvalidDimOffset False positive
 				if ( is_array( $bench['function'] ) ) {
 					$class = $bench['function'][0];
 					if ( is_object( $class ) ) {
@@ -81,16 +67,12 @@ abstract class Benchmarker extends Maintenance {
 					}
 					$name = $class . '::' . $bench['function'][1];
 				} else {
-					// @phan-suppress-next-line PhanTypePossiblyInvalidDimOffset False positive
 					$name = strval( $bench['function'] );
 				}
 				$argsText = implode(
 					', ',
 					array_map(
-						static function ( $a ) {
-							return var_export( $a, true );
-						},
-						// @phan-suppress-next-line PhanTypePossiblyInvalidDimOffset False positive
+						static fn ( $a ) => var_export( $a, true ),
 						$bench['args']
 					)
 				);
@@ -110,7 +92,7 @@ abstract class Benchmarker extends Maintenance {
 		foreach ( $normBenchs as $name => $bench ) {
 			// Optional setup called outside time measure
 			if ( isset( $bench['setup'] ) ) {
-				call_user_func( $bench['setup'] );
+				$bench['setup']();
 			}
 
 			// Run benchmarks
@@ -120,10 +102,9 @@ abstract class Benchmarker extends Maintenance {
 				if ( isset( $bench['setupEach'] ) ) {
 					$bench['setupEach']();
 				}
-				$t = microtime( true );
-				// @phan-suppress-next-line PhanTypePossiblyInvalidDimOffset False positive
-				call_user_func_array( $bench['function'], $bench['args'] );
-				$t = ( microtime( true ) - $t ) * 1000;
+				$t = ConvertibleTimestamp::hrtime();
+				$bench['function']( ...$bench['args'] );
+				$t = ( ConvertibleTimestamp::hrtime() - $t ) / 1e6;
 				if ( $verbose ) {
 					$this->verboseRun( $i );
 				}
@@ -159,7 +140,7 @@ abstract class Benchmarker extends Maintenance {
 		);
 	}
 
-	public function addResult( $res ) {
+	public function addResult( array $res ) {
 		$ret = sprintf( "%s\n  %' 6s: %d\n",
 			$res['name'],
 			'count',
@@ -189,7 +170,7 @@ abstract class Benchmarker extends Maintenance {
 		$this->output( "$ret\n" );
 	}
 
-	protected function verboseRun( $iteration ) {
+	protected function verboseRun( int $iteration ) {
 		$this->output( sprintf( "#%3d - memory: %-10s - peak: %-10s\n",
 			$iteration,
 			$this->formatSize( memory_get_usage( true ) ),

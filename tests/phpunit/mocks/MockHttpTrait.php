@@ -1,23 +1,11 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
+ * @license GPL-2.0-or-later
  */
 
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Http\HttpRequestFactory;
+use MediaWiki\Http\MWHttpRequest;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Status\Status;
 use PHPUnit\Framework\MockObject\MockObject;
@@ -89,6 +77,7 @@ trait MockHttpTrait {
 			MainConfigNames::HTTPConnectTimeout => 1,
 			MainConfigNames::HTTPMaxTimeout => 1,
 			MainConfigNames::HTTPMaxConnectTimeout => 1,
+			MainConfigNames::HTTPUserAgentContact => 'https://contact.test',
 			MainConfigNames::LocalVirtualHosts => [],
 			MainConfigNames::LocalHTTPProxy => false,
 		] );
@@ -149,20 +138,14 @@ trait MockHttpTrait {
 	 * Check whether $array is an array where all elements are instances of $class.
 	 *
 	 * @internal to the trait
-	 * @param string $class
+	 * @param class-string $class
 	 * @param mixed $array
 	 * @return bool
 	 */
 	private function isArrayOfClass( string $class, $array ): bool {
-		if ( !is_array( $array ) || !count( $array ) ) {
-			return false;
-		}
-		foreach ( $array as $item ) {
-			if ( !$item instanceof $class ) {
-				return false;
-			}
-		}
-		return true;
+		return is_array( $array ) &&
+			$array &&
+			array_all( $array, static fn ( $obj ) => $obj instanceof $class );
 	}
 
 	/**
@@ -188,7 +171,7 @@ trait MockHttpTrait {
 			MWHttpRequest::class,
 			[ 'execute', 'setCallback', 'isRedirect', 'getFinalUrl',
 				'getResponseHeaders', 'getResponseHeader', 'setHeader',
-				'getStatus', 'getContent'
+				'getStatus', 'getContent', 'setOriginalRequest',
 			]
 		);
 
@@ -202,7 +185,12 @@ trait MockHttpTrait {
 		$mockHttpRequest->method( 'getResponseHeaders' )->willReturn( $headers );
 		$mockHttpRequest->method( 'getResponseHeader' )->willReturnCallback(
 			static function ( $name ) use ( $headers ) {
-				return $headers[$name] ?? null;
+				foreach ( $headers as $headerName => $value ) {
+					if ( strtolower( $headerName ) === $name ) {
+						return $value;
+					}
+				}
+				return null;
 			}
 		);
 

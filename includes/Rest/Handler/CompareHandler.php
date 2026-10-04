@@ -6,6 +6,7 @@ use MediaWiki\Content\TextContent;
 use MediaWiki\Parser\ParserFactory;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\LocalizedHttpException;
+use MediaWiki\Rest\ResponseHeaders;
 use MediaWiki\Rest\StringStream;
 use MediaWiki\Revision\RevisionAccessException;
 use MediaWiki\Revision\RevisionLookup;
@@ -16,23 +17,19 @@ use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
 
 class CompareHandler extends Handler {
-	private RevisionLookup $revisionLookup;
-	private ParserFactory $parserFactory;
-
 	/** @var RevisionRecord[] */
-	private $revisions = [];
+	private array $revisions = [];
 
 	/** @var string[] */
-	private $textCache = [];
+	private array $textCache = [];
 
 	public function __construct(
-		RevisionLookup $revisionLookup,
-		ParserFactory $parserFactory
+		private readonly RevisionLookup $revisionLookup,
+		private readonly ParserFactory $parserFactory,
 	) {
-		$this->revisionLookup = $revisionLookup;
-		$this->parserFactory = $parserFactory;
 	}
 
+	/** @inheritDoc */
 	public function execute() {
 		$fromRev = $this->getRevisionOrThrow( 'from' );
 		$toRev = $this->getRevisionOrThrow( 'to' );
@@ -72,11 +69,7 @@ class CompareHandler extends Handler {
 		return $response;
 	}
 
-	/**
-	 * @param string $paramName
-	 * @return RevisionRecord|null
-	 */
-	private function getRevision( $paramName ) {
+	private function getRevision( string $paramName ): ?RevisionRecord {
 		if ( !isset( $this->revisions[$paramName] ) ) {
 			$this->revisions[$paramName] =
 				$this->revisionLookup->getRevisionById( $this->getValidatedParams()[$paramName] );
@@ -85,11 +78,9 @@ class CompareHandler extends Handler {
 	}
 
 	/**
-	 * @param string $paramName
-	 * @return RevisionRecord
 	 * @throws LocalizedHttpException
 	 */
-	private function getRevisionOrThrow( $paramName ) {
+	private function getRevisionOrThrow( string $paramName ): RevisionRecord {
 		$rev = $this->getRevision( $paramName );
 		if ( !$rev ) {
 			throw new LocalizedHttpException(
@@ -103,19 +94,15 @@ class CompareHandler extends Handler {
 		return $rev;
 	}
 
-	/**
-	 * @param RevisionRecord $rev
-	 * @return bool
-	 */
-	private function isAccessible( $rev ) {
+	private function isAccessible( RevisionRecord $rev ): bool {
 		return $rev->userCan( RevisionRecord::DELETED_TEXT, $this->getAuthority() );
 	}
 
-	private function getRole() {
+	private function getRole(): string {
 		return SlotRecord::MAIN;
 	}
 
-	private function getRevisionText( $paramName ) {
+	private function getRevisionText( string $paramName ): string {
 		if ( !isset( $this->textCache[$paramName] ) ) {
 			$revision = $this->getRevision( $paramName );
 			try {
@@ -133,10 +120,10 @@ class CompareHandler extends Handler {
 						),
 						400 );
 				}
-			} catch ( SuppressedDataException $e ) {
+			} catch ( SuppressedDataException ) {
 				throw new LocalizedHttpException(
 					new MessageValue( 'rest-compare-inaccessible', [ $paramName ] ), 403 );
-			} catch ( RevisionAccessException $e ) {
+			} catch ( RevisionAccessException ) {
 				throw new LocalizedHttpException(
 					new MessageValue( 'rest-compare-nonexistent', [ $paramName ] ), 404 );
 			}
@@ -144,10 +131,7 @@ class CompareHandler extends Handler {
 		return $this->textCache[$paramName];
 	}
 
-	/**
-	 * @return string
-	 */
-	private function getJsonDiff() {
+	private function getJsonDiff(): string {
 		// TODO: properly implement
 		// This is a prototype only. SlotDiffRenderer should be extended to support this use case.
 		$fromText = $this->getRevisionText( 'from' );
@@ -159,11 +143,7 @@ class CompareHandler extends Handler {
 		return wikidiff2_inline_json_diff( $fromText, $toText, 2 );
 	}
 
-	/**
-	 * @param string $paramName
-	 * @return array
-	 */
-	private function getSectionInfo( $paramName ) {
+	private function getSectionInfo( string $paramName ): array {
 		$text = $this->getRevisionText( $paramName );
 		$parserSections = $this->parserFactory->getInstance()->getFlatSectionInfo( $text );
 		$sections = [];
@@ -189,9 +169,10 @@ class CompareHandler extends Handler {
 	}
 
 	protected function getResponseBodySchemaFileName( string $method ): ?string {
-		return 'includes/Rest/Handler/Schema/RevisionCompare.json';
+		return __DIR__ . '/Schema/RevisionCompare.json';
 	}
 
+	/** @inheritDoc */
 	public function getParamSettings() {
 		return [
 			'from' => [
@@ -199,13 +180,27 @@ class CompareHandler extends Handler {
 				ParamValidator::PARAM_REQUIRED => true,
 				Handler::PARAM_SOURCE => 'path',
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-compare-from' ),
+				Handler::PARAM_EXAMPLE => 847170467,
 			],
 			'to' => [
 				ParamValidator::PARAM_TYPE => 'integer',
 				ParamValidator::PARAM_REQUIRED => true,
 				Handler::PARAM_SOURCE => 'path',
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-compare-to' ),
+				Handler::PARAM_EXAMPLE => 851733941,
 			],
 		];
+	}
+
+	/** @inheritDoc */
+	public function getResponseHeaderSettings(): array {
+		return array_merge(
+			parent::getResponseHeaderSettings(),
+			[
+				ResponseHeaders::CONTENT_TYPE => ResponseHeaders::RESPONSE_HEADER_DEFINITIONS[
+					ResponseHeaders::CONTENT_TYPE
+				]
+			]
+		);
 	}
 }

@@ -43,10 +43,6 @@ class TitleDef extends TypeDef {
 	/** @var TitleFactory */
 	private $titleFactory;
 
-	/**
-	 * @param Callbacks $callbacks
-	 * @param TitleFactory $titleFactory
-	 */
 	public function __construct( Callbacks $callbacks, TitleFactory $titleFactory ) {
 		parent::__construct( $callbacks );
 		$this->titleFactory = $titleFactory;
@@ -91,9 +87,8 @@ class TitleDef extends TypeDef {
 	public function checkSettings( string $name, $settings, array $options, array $ret ): array {
 		$ret = parent::checkSettings( $name, $settings, $options, $ret );
 
-		$ret['allowedKeys'] = array_merge( $ret['allowedKeys'], [
-			self::PARAM_MUST_EXIST, self::PARAM_RETURN_OBJECT,
-		] );
+		$ret['allowedKeys'][] = self::PARAM_MUST_EXIST;
+		$ret['allowedKeys'][] = self::PARAM_RETURN_OBJECT;
 
 		if ( !is_bool( $settings[self::PARAM_MUST_EXIST] ?? false ) ) {
 			$ret['issues'][self::PARAM_MUST_EXIST] = 'PARAM_MUST_EXIST must be boolean, got '

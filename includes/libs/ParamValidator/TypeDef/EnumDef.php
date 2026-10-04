@@ -48,6 +48,25 @@ class EnumDef extends TypeDef {
 	 */
 	public const PARAM_DEPRECATED_VALUES = 'param-deprecated-values';
 
+	/**
+	 * (array) Associative array of internal values.
+	 *
+	 * Keys are the internal parameter values. Value is one of the following:
+	 *  - false: Value isn't actually internal.
+	 *  - true: Value is internal.
+	 *
+	 * Note that this does not add any values to the enumeration, it only
+	 * documents existing values as being internal/unstable.
+	 *
+	 * Marking a value as internal is advisory only: it is surfaced in
+	 * the API help and in action=paraminfo, but it does not affect
+	 * validation.
+	 *
+	 * @since 1.47
+	 */
+	public const PARAM_INTERNAL_VALUES = 'param-internal-values';
+
+	/** @inheritDoc */
 	public function validate( $name, $value, array $settings, array $options ) {
 		$values = $this->getEnumValues( $name, $settings, $options );
 
@@ -76,38 +95,58 @@ class EnumDef extends TypeDef {
 		$isMulti = isset( $options['values-list'] );
 		$this->failure(
 			$this->failureMessage( 'badvalue', [], $isMulti ? 'enummulti' : 'enumnotmulti' )
-				->textListParams( array_map( static function ( $v ) {
-					return new ScalarParam( ParamType::PLAINTEXT, $v );
-				}, $values ) )
+				->textListParams( array_map(
+					static fn ( $v ) => new ScalarParam( ParamType::PLAINTEXT, $v ),
+					$values
+				) )
 				->numParams( count( $values ) ),
 			$name, $value, $settings, $options
 		);
 	}
 
+	private const DISCOURAGED_VALUE_INFO = [
+		[
+			'param' => self::PARAM_DEPRECATED_VALUES,
+			'name' => 'PARAM_DEPRECATED_VALUES',
+			'info' => 'deprecatedvalues',
+			'canBeMessage' => true,
+			'allowedValues' => [ null, true ],
+		],
+		[
+			'param' => self::PARAM_INTERNAL_VALUES,
+			'name' => 'PARAM_INTERNAL_VALUES',
+			'info' => 'internalvalues',
+			'canBeMessage' => false,
+			'allowedValues' => [ false, true ],
+		],
+	];
+
+	/** @inheritDoc */
 	public function checkSettings( string $name, $settings, array $options, array $ret ): array {
 		$ret = parent::checkSettings( $name, $settings, $options, $ret );
 
-		$ret['allowedKeys'][] = self::PARAM_DEPRECATED_VALUES;
+		foreach ( self::DISCOURAGED_VALUE_INFO as $vinfo ) {
+			$ret['allowedKeys'][] = $vinfo['param'];
 
-		$dv = $settings[self::PARAM_DEPRECATED_VALUES] ?? [];
-		if ( !is_array( $dv ) ) {
-			$ret['issues'][self::PARAM_DEPRECATED_VALUES] = 'PARAM_DEPRECATED_VALUES must be an array, got '
-				. gettype( $dv );
-		} else {
-			$values = array_map( function ( $v ) use ( $name, $settings, $options ) {
-				return $this->stringifyValue( $name, $v, $settings, $options );
-			}, $this->getEnumValues( $name, $settings, $options ) );
-			foreach ( $dv as $k => $v ) {
-				$k = $this->stringifyValue( $name, $k, $settings, $options );
-				if ( !in_array( $k, $values, true ) ) {
-					$ret['issues'][] = "PARAM_DEPRECATED_VALUES contains \"$k\", which is not "
-						. 'one of the enumerated values';
-				} elseif ( $v instanceof MessageValue ) {
-					$ret['messages'][] = $v;
-				} elseif ( $v !== null && $v !== true ) {
-					$type = $v === false ? 'false' : ( is_object( $v ) ? get_class( $v ) : gettype( $v ) );
-					$ret['issues'][] = 'Values in PARAM_DEPRECATED_VALUES must be null, true, or MessageValue, '
-						. "but value for \"$k\" is $type";
+			$dv = $settings[$vinfo['param']] ?? [];
+			if ( !is_array( $dv ) ) {
+				$ret['issues'][$vinfo['param']] = "{$vinfo['name']} must be an array, got "
+					. gettype( $dv );
+			} else {
+				$values = array_map( function ( $v ) use ( $name, $settings, $options ) {
+					return $this->stringifyValue( $name, $v, $settings, $options );
+				}, $this->getEnumValues( $name, $settings, $options ) );
+				foreach ( $dv as $k => $v ) {
+					$k = $this->stringifyValue( $name, $k, $settings, $options );
+					if ( !in_array( $k, $values, true ) ) {
+						$ret['issues'][] = "{$vinfo['name']} contains \"{$k}\", which is not "
+							. 'one of the enumerated values';
+					} elseif ( $vinfo['canBeMessage'] && $v instanceof MessageValue ) {
+						$ret['messages'][] = $v;
+					} elseif ( !in_array( $v, $vinfo['allowedValues'], true ) ) {
+						$type = get_debug_type( $v );
+						$ret['issues'][] = "Values in {$vinfo['name']} has bad type for \"{$k}\": {$type}";
+					}
 				}
 			}
 		}
@@ -115,10 +154,12 @@ class EnumDef extends TypeDef {
 		return $ret;
 	}
 
+	/** @inheritDoc */
 	public function getEnumValues( $name, array $settings, array $options ) {
 		return array_values( $settings[ParamValidator::PARAM_TYPE] );
 	}
 
+	/** @inheritDoc */
 	public function stringifyValue( $name, $value, array $settings, array $options ) {
 		if ( !is_array( $value ) ) {
 			return parent::stringifyValue( $name, $value, $settings, $options );
@@ -127,6 +168,7 @@ class EnumDef extends TypeDef {
 		return ParamValidator::implodeMultiValue( $value );
 	}
 
+	/** @inheritDoc */
 	public function getParamInfo( $name, array $settings, array $options ) {
 		$info = parent::getParamInfo( $name, $settings, $options );
 
@@ -137,20 +179,23 @@ class EnumDef extends TypeDef {
 			$options
 		);
 
-		if ( !empty( $settings[self::PARAM_DEPRECATED_VALUES] ) ) {
-			$deprecatedValues = array_intersect(
-				array_keys( $settings[self::PARAM_DEPRECATED_VALUES] ),
-				$this->getEnumValues( $name, $settings, $options )
-			);
-			if ( $deprecatedValues ) {
-				$deprecatedValues = $this->sortEnumValues( $name, $deprecatedValues, $settings, $options );
-				$info['deprecatedvalues'] = array_values( $deprecatedValues );
+		foreach ( self::DISCOURAGED_VALUE_INFO as $vinfo ) {
+			if ( !empty( $settings[$vinfo['param']] ) ) {
+				$badValues = array_intersect(
+					array_keys( $settings[$vinfo['param']] ),
+					$this->getEnumValues( $name, $settings, $options )
+				);
+				if ( $badValues ) {
+					$badValues = $this->sortEnumValues( $name, $badValues, $settings, $options );
+					$info[$vinfo['info']] = array_values( $badValues );
+				}
 			}
 		}
 
 		return $info;
 	}
 
+	/** @inheritDoc */
 	public function getHelpInfo( $name, array $settings, array $options ) {
 		$info = parent::getHelpInfo( $name, $settings, $options );
 

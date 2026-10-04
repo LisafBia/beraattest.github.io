@@ -1,11 +1,17 @@
 <?php
+declare( strict_types = 1 );
 
 namespace MediaWiki\OutputTransform\Stages;
 
+use MediaWiki\Config\ServiceOptions;
+use MediaWiki\Language\LanguageFactory;
 use MediaWiki\Message\Message;
 use MediaWiki\OutputTransform\ContentDOMTransformStage;
+use MediaWiki\Page\PageReference;
+use MediaWiki\Page\PageReferenceValue;
 use MediaWiki\Parser\ParserOptions;
 use MediaWiki\Parser\ParserOutput;
+use Psr\Log\LoggerInterface;
 use Wikimedia\Bcp47Code\Bcp47Code;
 use Wikimedia\Bcp47Code\Bcp47CodeValue;
 use Wikimedia\Parsoid\DOM\Document;
@@ -23,38 +29,55 @@ use Wikimedia\Parsoid\Utils\DOMUtils;
  * @internal
  */
 class ParsoidLocalization extends ContentDOMTransformStage {
+	public static bool $bodyOnly = false;
+
+	public function __construct(
+		ServiceOptions $options,
+		LoggerInterface $logger,
+		private LanguageFactory $languageFactory
+	) {
+		parent::__construct( $options, $logger, transformBodyOnly: false );
+	}
+
+	public function shouldRun( ParserOutput $po, ParserOptions $popts, array $options = [] ): bool {
+		return $po->getContentHolder()->isParsoidContent();
+	}
 
 	public function transformDOM(
-		Document $doc, ParserOutput $po, ?ParserOptions $popts, array &$options
-	): Document {
+		DocumentFragment $df, ParserOutput $po, ParserOptions $popts, array &$options
+	): DocumentFragment {
 		$poLang = $po->getLanguage();
 		if ( $poLang == null ) {
 			$this->logger->warning( 'Localization pass started on ParserOutput without defined language',
 				[
 					'pass' => 'Localization',
 				] );
-			return $doc;
+			return $df;
 		}
+
+		$pageReference = $this->getPageReference( $po );
+		$popts ??= ParserOptions::newFromAnon();
+
 		// TODO this traversal will need to also traverse rich attributes
 		$traverser = new DOMTraverser( false, false );
-		$traverser->addHandler( null, function ( $node ) use ( $po, $doc, $poLang ) {
+		$traverser->addHandler( null, function ( $node ) use ( $poLang, $pageReference, $popts ) {
 			if ( $node instanceof Element ) {
-				return $this->localizeElement( $node, $poLang, $doc );
+				// @phan-suppress-next-line PhanTypeMismatchArgumentNullable ownerDocument is not null
+				return $this->localizeElement( $node, $poLang, $node->ownerDocument, $pageReference, $popts );
 			}
 			return true;
 		} );
-		$traverser->traverse( null, $doc );
-		return $doc;
-	}
-
-	public function shouldRun( ParserOutput $po, ?ParserOptions $popts, array $options = [] ): bool {
-		return ( $options['isParsoidContent'] ?? false );
+		$traverser->traverse( null, $df );
+		return $df;
 	}
 
 	/**
 	 * @return bool|Element
 	 */
-	private function localizeElement( Element $node, Bcp47Code $lang, Document $doc ) {
+	private function localizeElement(
+		Element $node, Bcp47Code $lang, Document $doc, PageReference $pageRef,
+		ParserOptions $parserOptions
+	) {
 		if ( DOMUtils::hasTypeOf( $node, 'mw:LocalizedAttrs' ) ) {
 			$i18nNames = DOMDataUtils::getDataAttrI18nNames( $node );
 			if ( count( $i18nNames ) === 0 ) {
@@ -73,19 +96,25 @@ class ParsoidLocalization extends ContentDOMTransformStage {
 						] );
 					continue;
 				}
-				$frag = $this->localizeI18n( $i18n, $lang, $doc, true );
+				// No way to indicate the language of an attribute!
+				[ 'frag' => $frag ] = $this->localizeI18n( $i18n, $lang, $doc, true, $pageRef, $parserOptions );
 				$node->setAttribute( $name, $frag->textContent );
 			}
 		}
 
 		if (
-			( $node->tagName === 'span' || $node->tagName === 'div' )
+			( DOMUtils::nodeName( $node ) === 'span' || DOMUtils::nodeName( $node ) === 'div' )
 			&& DOMUtils::hasTypeOf( $node, 'mw:I18n' )
 		) {
 			$i18n = DOMDataUtils::getDataNodeI18n( $node );
 			if ( $i18n !== null ) {
-				$frag = $this->localizeI18n( $i18n, $lang, $doc, $node->tagName === 'span' );
-				$node->appendChild( $frag );
+				[ 'frag' => $frag, 'lang' => $lang ] = $this->localizeI18n(
+					$i18n, $lang, $doc, DOMUtils::nodeName( $node ) === 'span', $pageRef, $parserOptions
+				);
+				DOMCompat::appendChild( $node, $frag );
+				$lang = $this->languageFactory->getLanguage( $lang );
+				$node->setAttribute( 'lang', $lang->getHtmlCode() );
+				$node->setAttribute( 'dir', $lang->getDir() );
 			} else {
 				$this->logger->warning( 'element with mw:I18n typeof does not contain i18n data', [
 					'pass' => 'Localization',
@@ -96,19 +125,49 @@ class ParsoidLocalization extends ContentDOMTransformStage {
 		return true;
 	}
 
-	private function localizeI18n( I18nInfo $i18n, Bcp47Code $poLang, Document $doc, bool $inline ): DocumentFragment {
+	/** @return array{frag:DocumentFragment,lang:Bcp47Code} */
+	private function localizeI18n(
+		I18nInfo $i18n, Bcp47Code $poLang, Document $doc, bool $inline,
+		PageReference $title, ParserOptions $parserOptions
+	): array {
 		$msg = Message::newFromKey( $i18n->key, ...( $i18n->params ?? [] ) );
+		$msg->page( $title );
 		if ( $i18n->lang === I18nInfo::PAGE_LANG ) {
 			$msg = $msg->inLanguage( $poLang );
+			$lang = $poLang;
 		} elseif ( $i18n->lang === I18nInfo::USER_LANG ) {
-			// note: there's a high chance we'll want to access parseroptions->getUserLang here when we introduce
-			// post-proc cache (so that we split the cache accordingly)
-			$msg = $msg->inUserLanguage();
+			// This will split the cache and add language to used-options
+			$lang = $parserOptions->getUserLangObj();
+			$msg = $msg->inLanguage( $lang );
+			$msg->setInterfaceMessageFlag( true );
 		} else {
-			$msg = $msg->inLanguage( new Bcp47CodeValue( $i18n->lang ) );
+			$lang = new Bcp47CodeValue( $i18n->lang );
+			$msg = $msg->inLanguage( $lang );
 		}
-		$txt = $inline ? $msg->parse() : $msg->parseAsBlock();
+		if ( $msg->isDisabled() ) {
+			$txt = '';
+		} else {
+			$txt = $inline ? $msg->parse() : $msg->parseAsBlock();
+		}
 
-		return ContentUtils::createAndLoadDocumentFragment( $doc, $txt );
+		return [
+			'frag' => ContentUtils::createAndLoadDocumentFragment( $doc, $txt ),
+			'lang' => $lang,
+		];
+	}
+
+	/**
+	 * @param ParserOutput $po
+	 * @return PageReference
+	 */
+	private function getPageReference( ParserOutput $po ): PageReference {
+		$title = $po->getTitle();
+		if ( $title === null ) {
+			$this->logger->error( __METHOD__ . ": Bad title information in ParserOutput" );
+			return PageReferenceValue::localReference( NS_SPECIAL, 'BadTitle/Localization' );
+		}
+		return PageReferenceValue::localReference(
+			$title->getNamespace(), $title->getDBkey()
+		);
 	}
 }

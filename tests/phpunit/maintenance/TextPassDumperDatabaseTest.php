@@ -2,18 +2,18 @@
 
 namespace MediaWiki\Tests\Maintenance;
 
-use BaseDump;
+use MediaWiki\Export\BaseDump;
+use MediaWiki\Export\WikiExporter;
+use MediaWiki\Export\XmlDumpWriter;
 use MediaWiki\Maintenance\TextPassDumper;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWikiLangTestCase;
-use WikiExporter;
-use XmlDumpWriter;
 
 /**
  * Tests for TextPassDumper that rely on the database
  *
- * Some of these tests use the old constuctor for TextPassDumper
+ * Some of these tests use the old constructor for TextPassDumper
  * and the dump() function, while others use the new loadWithArgv( $args )
  * function and execute(). This is to ensure both the old and new methods
  * work properly.
@@ -32,7 +32,7 @@ class TextPassDumperDatabaseTest extends DumpTestCase {
 		$this->addTestPages( $this->getTestSysop()->getUser() );
 	}
 
-	public function schemaVersionProvider() {
+	public static function schemaVersionProvider() {
 		foreach ( XmlDumpWriter::$supportedSchemas as $schemaVersion ) {
 			yield [ $schemaVersion ];
 		}
@@ -174,9 +174,7 @@ class TextPassDumperDatabaseTest extends DumpTestCase {
 		$nameOutputDir = $this->getNewTempDirectory();
 
 		$stderr = fopen( 'php://output', 'a' );
-		if ( $stderr === false ) {
-			$this->fail( "Could not open stream for stderr" );
-		}
+		$this->assertNotFalse( $stderr, "Could not open stream for stderr" );
 
 		$iterations = 32; // We'll start with that many iterations of revisions
 		// in stub. Make sure that the generated volume is above the buffer size

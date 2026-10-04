@@ -3,6 +3,8 @@
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Parser\ParserOptions;
 use MediaWiki\Settings\SettingsBuilder;
+use MediaWiki\Tests\Common\Parser\MultiTestRecorder;
+use MediaWiki\Tests\Common\Parser\ParserTestRunner;
 use MediaWiki\Title\Title;
 use MediaWiki\User\User;
 use Wikimedia\Parsoid\ParserTests\Test as ParserTest;
@@ -34,7 +36,7 @@ class ParserFuzzTest extends Maintenance {
 
 	public function finalSetup( SettingsBuilder $settingsBuilder ) {
 		// Make RequestContext::resetMain() happy
-		define( 'MW_PARSER_TEST', 1 );
+		define( 'MW_PHPUNIT_TEST', true );
 
 		TestSetup::applyInitialConfig();
 	}
@@ -169,7 +171,7 @@ class ParserFuzzTest extends Maintenance {
 		$length = 0;
 		try {
 			$length = strlen( @serialize( $var ) );
-		} catch ( Exception $e ) {
+		} catch ( Exception ) {
 		}
 		return $length;
 	}

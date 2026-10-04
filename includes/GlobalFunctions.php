@@ -2,43 +2,31 @@
 /**
  * Global functions used everywhere.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 use MediaWiki\Debug\MWDebug;
+use MediaWiki\Exception\ProcOpenError;
+use MediaWiki\FileRepo\File\File;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Message\Message;
-use MediaWiki\ProcOpenError;
 use MediaWiki\Registration\ExtensionRegistry;
-use MediaWiki\Request\WebRequest;
+use MediaWiki\Request\ContentSecurityPolicy;
 use MediaWiki\Shell\Shell;
 use MediaWiki\Title\Title;
-use MediaWiki\Utils\MWTimestamp;
-use MediaWiki\Utils\UrlUtils;
-use Wikimedia\AtEase\AtEase;
+use Wikimedia\ArrayUtils\ArrayUtils;
 use Wikimedia\FileBackend\FileBackend;
 use Wikimedia\FileBackend\FSFile\TempFSFile;
+use Wikimedia\Http\HttpStatus;
 use Wikimedia\Message\MessageParam;
 use Wikimedia\Message\MessageSpecifier;
 use Wikimedia\ParamValidator\TypeDef\ExpiryDef;
 use Wikimedia\RequestTimeout\RequestTimeout;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Load an extension
@@ -111,87 +99,6 @@ function wfLoadSkins( array $skins ) {
 }
 
 /**
- * Like array_diff( $arr1, $arr2 ) except that it works with two-dimensional arrays.
- * @deprecated since 1.43 Use StatusValue::merge() instead
- * @param string[]|array[] $arr1
- * @param string[]|array[] $arr2
- * @return array
- */
-function wfArrayDiff2( $arr1, $arr2 ) {
-	wfDeprecated( __FUNCTION__, '1.43' );
-	/**
-	 * @param string|array $a
-	 * @param string|array $b
-	 */
-	$comparator = static function ( $a, $b ): int {
-		if ( is_string( $a ) && is_string( $b ) ) {
-			return strcmp( $a, $b );
-		}
-		if ( !is_array( $a ) && !is_array( $b ) ) {
-			throw new InvalidArgumentException(
-				'This function assumes that array elements are all strings or all arrays'
-			);
-		}
-		if ( count( $a ) !== count( $b ) ) {
-			return count( $a ) <=> count( $b );
-		} else {
-			reset( $a );
-			reset( $b );
-			while ( key( $a ) !== null && key( $b ) !== null ) {
-				$valueA = current( $a );
-				$valueB = current( $b );
-				$cmp = strcmp( $valueA, $valueB );
-				if ( $cmp !== 0 ) {
-					return $cmp;
-				}
-				next( $a );
-				next( $b );
-			}
-			return 0;
-		}
-	};
-	return array_udiff( $arr1, $arr2, $comparator );
-}
-
-/**
- * Merge arrays in the style of PermissionManager::getPermissionErrors, with duplicate removal
- * e.g.
- *     wfMergeErrorArrays(
- *       [ [ 'x' ] ],
- *       [ [ 'x', '2' ] ],
- *       [ [ 'x' ] ],
- *       [ [ 'y' ] ]
- *     );
- * returns:
- *     [
- *       [ 'x', '2' ],
- *       [ 'x' ],
- *       [ 'y' ]
- *     ]
- *
- * @deprecated since 1.43 Use StatusValue::merge() instead
- * @param array[] ...$args
- * @return array
- */
-function wfMergeErrorArrays( ...$args ) {
-	wfDeprecated( __FUNCTION__, '1.43' );
-	$out = [];
-	foreach ( $args as $errors ) {
-		foreach ( $errors as $params ) {
-			$originalParams = $params;
-			if ( $params[0] instanceof MessageSpecifier ) {
-				$params = [ $params[0]->getKey(), ...$params[0]->getParams() ];
-			}
-			# @todo FIXME: Sometimes get nested arrays for $params,
-			# which leads to E_NOTICEs
-			$spec = implode( "\t", $params );
-			$out[$spec] = $originalParams;
-		}
-	}
-	return array_values( $out );
-}
-
-/**
  * Insert an array into another array after the specified key. If the key is
  * not present in the input array, it is returned without modification.
  *
@@ -199,24 +106,11 @@ function wfMergeErrorArrays( ...$args ) {
  * @param array $insert The array to insert.
  * @param mixed $after The key to insert after.
  * @return array
+ * @deprecated since 1.46, hard-deprecated since 1.47, use ArrayUtils::insertAfter
  */
 function wfArrayInsertAfter( array $array, array $insert, $after ) {
-	// Find the offset of the element to insert after.
-	$keys = array_keys( $array );
-	$offsetByKey = array_flip( $keys );
-
-	if ( !\array_key_exists( $after, $offsetByKey ) ) {
-		return $array;
-	}
-	$offset = $offsetByKey[$after];
-
-	// Insert at the specified offset
-	$before = array_slice( $array, 0, $offset + 1, true );
-	$after = array_slice( $array, $offset + 1, count( $array ) - $offset, true );
-
-	$output = $before + $insert + $after;
-
-	return $output;
+	wfDeprecated( __FUNCTION__, '1.46' );
+	return ArrayUtils::insertAfter( $array, $insert, $after );
 }
 
 /**
@@ -399,7 +293,7 @@ function wfCgiToArray( $query ) {
 		if ( $bit === '' ) {
 			continue;
 		}
-		if ( strpos( $bit, '=' ) === false ) {
+		if ( !str_contains( $bit, '=' ) ) {
 			// Pieces like &qwerty become 'qwerty' => '' (at least this is what php does)
 			$key = $bit;
 			$value = '';
@@ -408,7 +302,7 @@ function wfCgiToArray( $query ) {
 		}
 		$key = urldecode( $key );
 		$value = urldecode( $value );
-		if ( strpos( $key, '[' ) !== false ) {
+		if ( str_contains( $key, '[' ) ) {
 			$keys = array_reverse( explode( '[', $key ) );
 			$key = array_pop( $keys );
 			$temp = $value;
@@ -450,7 +344,7 @@ function wfAppendQuery( $url, $query ) {
 		}
 
 		// Add parameter
-		if ( strpos( $url, '?' ) === false ) {
+		if ( !str_contains( $url, '?' ) ) {
 			$url .= '?';
 		} else {
 			$url .= '&';
@@ -463,181 +357,6 @@ function wfAppendQuery( $url, $query ) {
 		}
 	}
 	return $url;
-}
-
-/**
- * @deprecated since 1.43; get a UrlUtils from services, or construct your own
- * @internal
- * @return UrlUtils from services if initialized, otherwise make one from globals
- */
-function wfGetUrlUtils(): UrlUtils {
-	global $wgServer, $wgCanonicalServer, $wgInternalServer, $wgRequest, $wgHttpsPort,
-		$wgUrlProtocols;
-
-	if ( MediaWikiServices::hasInstance() ) {
-		$services = MediaWikiServices::getInstance();
-		if ( $services->hasService( 'UrlUtils' ) ) {
-			return $services->getUrlUtils();
-		}
-	}
-
-	return new UrlUtils( [
-		// UrlUtils throws if the relevant $wg(|Canonical|Internal) variable is null, but the old
-		// implementations implicitly converted it to an empty string (presumably by mistake).
-		// Preserve the old behavior for compatibility.
-		UrlUtils::SERVER => $wgServer ?? '',
-		UrlUtils::CANONICAL_SERVER => $wgCanonicalServer ?? '',
-		UrlUtils::INTERNAL_SERVER => $wgInternalServer ?? '',
-		UrlUtils::FALLBACK_PROTOCOL => $wgRequest ? $wgRequest->getProtocol()
-			: WebRequest::detectProtocol(),
-		UrlUtils::HTTPS_PORT => $wgHttpsPort,
-		UrlUtils::VALID_PROTOCOLS => $wgUrlProtocols,
-	] );
-}
-
-/**
- * Expand a potentially local URL to a fully-qualified URL using $wgServer
- * (or one of its alternatives).
- *
- * The meaning of the PROTO_* constants is as follows:
- * PROTO_HTTP: Output a URL starting with http://
- * PROTO_HTTPS: Output a URL starting with https://
- * PROTO_RELATIVE: Output a URL starting with // (protocol-relative URL)
- * PROTO_CURRENT: Output a URL starting with either http:// or https:// , depending
- *    on which protocol was used for the current incoming request
- * PROTO_CANONICAL: For URLs without a domain, like /w/index.php , use $wgCanonicalServer.
- *    For protocol-relative URLs, use the protocol of $wgCanonicalServer
- * PROTO_INTERNAL: Like PROTO_CANONICAL, but uses $wgInternalServer instead of $wgCanonicalServer
- *
- * If $url specifies a protocol, or $url is domain-relative and $wgServer
- * specifies a protocol, PROTO_HTTP, PROTO_HTTPS, PROTO_RELATIVE and
- * PROTO_CURRENT do not change that.
- *
- * Parent references (/../) in the path are resolved (as in UrlUtils::removeDotSegments()).
- *
- * @deprecated since 1.39, use UrlUtils::expand()
- * @param string $url An URL; can be absolute (e.g. http://example.com/foo/bar),
- *    protocol-relative (//example.com/foo/bar) or domain-relative (/foo/bar).
- * @param string|int|null $defaultProto One of the PROTO_* constants, as described above.
- * @return string|false Fully-qualified URL, current-path-relative URL or false if
- *    no valid URL can be constructed
- */
-function wfExpandUrl( $url, $defaultProto = PROTO_CURRENT ) {
-	return wfGetUrlUtils()->expand( (string)$url, $defaultProto ) ?? false;
-}
-
-/**
- * Get the wiki's "server", i.e. the protocol and host part of the URL, with a
- * protocol specified using a PROTO_* constant as in wfExpandUrl()
- *
- * @deprecated since 1.39, use UrlUtils::getServer(); hard-deprecated since 1.43
- * @since 1.32
- * @param string|int|null $proto One of the PROTO_* constants.
- * @return string The URL
- */
-function wfGetServerUrl( $proto ) {
-	wfDeprecated( __FUNCTION__, '1.39' );
-
-	return wfGetUrlUtils()->getServer( $proto ) ?? '';
-}
-
-/**
- * This function will reassemble a URL parsed with wfParseURL.  This is useful
- * if you need to edit part of a URL and put it back together.
- *
- * This is the basic structure used (brackets contain keys for $urlParts):
- * [scheme][delimiter][user]:[pass]@[host]:[port][path]?[query]#[fragment]
- *
- * @deprecated since 1.39, use UrlUtils::assemble()
- * @since 1.19
- * @param array $urlParts URL parts, as output from wfParseUrl
- * @return string URL assembled from its component parts
- */
-function wfAssembleUrl( $urlParts ) {
-	return UrlUtils::assemble( (array)$urlParts );
-}
-
-/**
- * Returns a partial regular expression of recognized URL protocols, e.g. "http:\/\/|https:\/\/"
- *
- * @deprecated since 1.39, use UrlUtils::validProtocols(); hard-deprecated since 1.43
- * @param bool $includeProtocolRelative If false, remove '//' from the returned protocol list.
- *        DO NOT USE this directly, use wfUrlProtocolsWithoutProtRel() instead
- * @return string
- */
-function wfUrlProtocols( $includeProtocolRelative = true ) {
-	wfDeprecated( __FUNCTION__, '1.39' );
-
-	return $includeProtocolRelative ? wfGetUrlUtils()->validProtocols() :
-		wfGetUrlUtils()->validAbsoluteProtocols();
-}
-
-/**
- * Like wfUrlProtocols(), but excludes '//' from the protocol list. Use this if
- * you need a regex that matches all URL protocols but does not match protocol-
- * relative URLs
- * @deprecated since 1.39, use UrlUtils::validAbsoluteProtocols()
- * @return string
- */
-function wfUrlProtocolsWithoutProtRel() {
-	return wfGetUrlUtils()->validAbsoluteProtocols();
-}
-
-/**
- * parse_url() work-alike, but non-broken.  Differences:
- *
- * 1) Handles protocols that don't use :// (e.g., mailto: and news:, as well as
- *    protocol-relative URLs) correctly.
- * 2) Adds a "delimiter" element to the array (see (2)).
- * 3) Verifies that the protocol is on the $wgUrlProtocols allowed list.
- * 4) Rejects some invalid URLs that parse_url doesn't, e.g. the empty string or URLs starting with
- *    a line feed character.
- *
- * @deprecated since 1.39, use UrlUtils::parse()
- * @param string $url A URL to parse
- * @return string[]|false Bits of the URL in an associative array, or false on failure.
- *   Possible fields:
- *   - scheme: URI scheme (protocol), e.g. 'http', 'mailto'. Lowercase, always present, but can
- *       be an empty string for protocol-relative URLs.
- *   - delimiter: either '://', ':' or '//'. Always present.
- *   - host: domain name / IP. Always present, but could be an empty string, e.g. for file: URLs.
- *   - port: port number. Will be missing when port is not explicitly specified.
- *   - user: user name, e.g. for HTTP Basic auth URLs such as http://user:pass@example.com/
- *       Missing when there is no username.
- *   - pass: password, same as above.
- *   - path: path including the leading /. Will be missing when empty (e.g. 'http://example.com')
- *   - query: query string (as a string; see wfCgiToArray() for parsing it), can be missing.
- *   - fragment: the part after #, can be missing.
- */
-function wfParseUrl( $url ) {
-	return wfGetUrlUtils()->parse( (string)$url ) ?? false;
-}
-
-/**
- * Take a URL, make sure it's expanded to fully qualified, and replace any
- * encoded non-ASCII Unicode characters with their UTF-8 original forms
- * for more compact display and legibility for local audiences.
- *
- * @deprecated since 1.39, use UrlUtils::expandIRI(); hard-deprecated since 1.43
- * @param string $url
- * @return string
- */
-function wfExpandIRI( $url ) {
-	wfDeprecated( __FUNCTION__, '1.39' );
-
-	return wfGetUrlUtils()->expandIRI( (string)$url ) ?? '';
-}
-
-/**
- * Check whether a given URL has a domain that occurs in a given set of domains
- *
- * @deprecated since 1.39, use UrlUtils::expandIRI()
- * @param string $url
- * @param array $domains Array of domains (strings)
- * @return bool True if the host part of $url ends in one of the strings in $domains
- */
-function wfMatchesDomainList( $url, $domains ) {
-	return wfGetUrlUtils()->matchesDomainList( (string)$url, (array)$domains );
 }
 
 /**
@@ -1014,12 +733,10 @@ function wfGetCaller( $level = 2 ) {
  * @return string
  */
 function wfGetAllCallers( $limit = 3 ) {
-	$trace = array_reverse( wfDebugBacktrace() );
-	if ( !$limit || $limit > count( $trace ) - 1 ) {
-		$limit = count( $trace ) - 1;
-	}
-	$trace = array_slice( $trace, -$limit - 1, $limit );
-	return implode( '/', array_map( 'wfFormatStackFrame', $trace ) );
+	$limit = $limit ? $limit + 1 : 0;
+	// Strip the own "wfGetAllCallers" from the list
+	$trace = array_reverse( array_slice( wfDebugBacktrace( $limit ), 1 ) );
+	return implode( '/', array_map( wfFormatStackFrame( ... ), $trace ) );
 }
 
 /**
@@ -1089,7 +806,7 @@ function wfClientAcceptsGzip( $force = false ) {
 function wfEscapeWikiText( $input ): string {
 	global $wgEnableMagicLinks;
 	static $repl = null, $repl2 = null, $repl3 = null, $repl4 = null;
-	if ( $repl === null || defined( 'MW_PARSER_TEST' ) || defined( 'MW_PHPUNIT_TEST' ) ) {
+	if ( $repl === null || defined( 'MW_PHPUNIT_TEST' ) ) {
 		// Tests depend upon being able to change $wgEnableMagicLinks, so don't cache
 		// in those situations
 		$repl = [
@@ -1108,6 +825,8 @@ function wfEscapeWikiText( $input ): string {
 			"\n\t" => "\n&#9;", "\r\t" => "\r&#9;", // "\n\t\n" is treated like "\n\n"
 			"\n----" => "\n&#45;---", "\r----" => "\r&#45;---",
 			'__' => '_&#95;', '://' => '&#58;//',
+			// Japanese magic words start w/ wide underscore
+			'＿' => '&#xFF3F;',
 			'~~~' => '~~&#126;', // protect from PST, just to be safe(r)
 		];
 
@@ -1125,6 +844,8 @@ function wfEscapeWikiText( $input ): string {
 		// string.  Tokens like -{ {{ [[ {| etc are already escaped because
 		// the second character is escaped above, but the following tokens
 		// are handled here: |+ |- __FOO__ ~~~
+		// (Only single-byte characters can go here; multibyte characters
+		// like 'wide underscore' must go into $repl above.)
 		$repl3 = [
 			'+' => '&#43;', '-' => '&#45;', '_' => '&#95;', '~' => '&#126;',
 		];
@@ -1132,7 +853,8 @@ function wfEscapeWikiText( $input ): string {
 		// string, which could turn form the start of `__FOO__` or `~~~~`
 		// A trailing newline could also form the unintended start of a
 		// paragraph break if it is glued to a newline in the following
-		// context.
+		// context.  Again, only single-byte characters can be protected
+		// here; 'wide underscore' is protected by $repl above.
 		$repl4 = [
 			'_' => '&#95;', '~' => '&#126;',
 			"\n" => "&#10;", "\r" => "&#13;",
@@ -1242,6 +964,7 @@ function wfHttpError( $code, $label, $desc ) {
 
 	\MediaWiki\Request\HeaderCallback::warnIfHeadersSent();
 	header( 'Content-type: text/html; charset=utf-8' );
+	ContentSecurityPolicy::sendRestrictiveHeader();
 	ob_start();
 	print '<!DOCTYPE html>' .
 		'<html><head><title>' .
@@ -1273,27 +996,28 @@ function wfHttpError( $code, $label, $desc ) {
  * Note that some PHP configuration options may add output buffer
  * layers which cannot be removed; these are left in place.
  *
+ * Does nothing during unit tests.
+ *
  * @param bool $resetGzipEncoding
  */
 function wfResetOutputBuffers( $resetGzipEncoding = true ) {
+	if ( defined( 'MW_PHPUNIT_TEST' ) ) {
+		return;
+	}
 	// phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition
 	while ( $status = ob_get_status() ) {
 		if ( isset( $status['flags'] ) ) {
 			$flags = PHP_OUTPUT_HANDLER_CLEANABLE | PHP_OUTPUT_HANDLER_REMOVABLE;
-			$deleteable = ( $status['flags'] & $flags ) === $flags;
+			$deletable = ( $status['flags'] & $flags ) === $flags;
 		} elseif ( isset( $status['del'] ) ) {
-			$deleteable = $status['del'];
+			$deletable = $status['del'];
 		} else {
 			// Guess that any PHP-internal setting can't be removed.
-			$deleteable = $status['type'] !== 0; /* PHP_OUTPUT_HANDLER_INTERNAL */
+			$deletable = $status['type'] !== 0; /* PHP_OUTPUT_HANDLER_INTERNAL */
 		}
-		if ( !$deleteable ) {
+		if ( !$deletable ) {
 			// Give up, and hope the result doesn't break
 			// output behavior.
-			break;
-		}
-		if ( $status['name'] === 'MediaWikiIntegrationTestCase::wfResetOutputBuffersBarrier' ) {
-			// Unit testing barrier to prevent this function from breaking PHPUnit.
 			break;
 		}
 		if ( !ob_end_clean() ) {
@@ -1313,16 +1037,19 @@ function wfResetOutputBuffers( $resetGzipEncoding = true ) {
 /**
  * Get a timestamp string in one of various formats
  *
- * @param mixed $outputtype Output format, one of the TS_* constants. Defaults to
+ * @param int|TS $outputtype Output format, one of the TS::* constants. Defaults to
  *   Unix timestamp.
  * @param mixed $ts A timestamp in any supported format. The
  *   function will autodetect which format is supplied and act accordingly. Use 0 or
  *   omit to use current time
  * @return string|false The date in the specified format, or false on error.
  */
-function wfTimestamp( $outputtype = TS_UNIX, $ts = 0 ) {
-	$ret = MWTimestamp::convert( $outputtype, $ts );
+function wfTimestamp( $outputtype = TS::UNIX, $ts = 0 ) {
+	$ret = ConvertibleTimestamp::convert( $outputtype, $ts );
 	if ( $ret === false ) {
+		if ( $outputtype instanceof TS ) {
+			$outputtype = $outputtype->name;
+		}
 		wfDebug( "wfTimestamp() fed bogus time value: TYPE=$outputtype; VALUE=$ts" );
 	}
 	return $ret;
@@ -1336,7 +1063,7 @@ function wfTimestamp( $outputtype = TS_UNIX, $ts = 0 ) {
  * @param mixed|null $ts
  * @return string|false|null Null if called with null, otherwise the result of wfTimestamp()
  */
-function wfTimestampOrNull( $outputtype = TS_UNIX, $ts = null ) {
+function wfTimestampOrNull( $outputtype = TS::UNIX, $ts = null ) {
 	if ( $ts === null ) {
 		return null;
 	} else {
@@ -1347,10 +1074,10 @@ function wfTimestampOrNull( $outputtype = TS_UNIX, $ts = null ) {
 /**
  * Convenience function; returns MediaWiki timestamp for the present time.
  *
- * @return string TS_MW timestamp
+ * @return string TS::MW timestamp
  */
 function wfTimestampNow() {
-	return MWTimestamp::now( TS_MW );
+	return ConvertibleTimestamp::now( TS::MW );
 }
 
 /**
@@ -1436,12 +1163,16 @@ function wfRecursiveRemoveDir( $dir ) {
 }
 
 /**
+ * @deprecated since 1.46; use round() and format the number as
+ *  appropriate for the language, for example using
+ *  `wfMessage( 'percent' )->numParams( round( $x, 2 ) )->text()`
  * @param float|int $nr The number to format
  * @param int $acc The number of digits after the decimal point, default 2
  * @param bool $round Whether or not to round the value, default true
  * @return string
  */
 function wfPercent( $nr, int $acc = 2, bool $round = true ) {
+	wfDeprecated( __FUNCTION__, '1.46' );
 	$accForFormat = $acc >= 0 ? $acc : 0;
 	$ret = sprintf( "%.{$accForFormat}f", $nr );
 	return $round ? round( (float)$ret, $acc ) . '%' : "$ret%";
@@ -1506,9 +1237,10 @@ function wfStringToBool( $val ) {
  * @param string|string[] ...$args strings to escape and glue together,
  *  or a single array of strings parameter
  * @return string
- * @deprecated since 1.30 use MediaWiki\Shell\Shell::escape()
+ * @deprecated since 1.30 use MediaWiki\Shell\Shell::escape(); warning since 1.47
  */
 function wfEscapeShellArg( ...$args ) {
+	wfDeprecated( __FUNCTION__, '1.30' );
 	return Shell::escape( ...$args );
 }
 
@@ -1534,11 +1266,12 @@ function wfEscapeShellArg( ...$args ) {
  * @phan-param array{duplicateStderr?:bool,profileMethod?:string} $options
  *
  * @return string Collected stdout as a string
- * @deprecated since 1.30 use class MediaWiki\Shell\Shell
+ * @deprecated since 1.30 use class MediaWiki\Shell\Shell; warnings since 1.47
  */
 function wfShellExec( $cmd, &$retval = null, $environ = [],
 	$limits = [], $options = []
 ) {
+	wfDeprecated( __FUNCTION__, '1.30' );
 	if ( Shell::isDisabled() ) {
 		$retval = 1;
 		// Backwards compatibility be upon us...
@@ -1562,7 +1295,7 @@ function wfShellExec( $cmd, &$retval = null, $environ = [],
 			// For b/c
 			->restrict( Shell::RESTRICT_NONE )
 			->execute();
-	} catch ( ProcOpenError $ex ) {
+	} catch ( ProcOpenError ) {
 		$retval = -1;
 		return '';
 	}
@@ -1587,9 +1320,10 @@ function wfShellExec( $cmd, &$retval = null, $environ = [],
  * @param array $limits Optional array with limits(filesize, memory, time, walltime)
  *   this overwrites the global wgMaxShell* limits.
  * @return string Collected stdout and stderr as a string
- * @deprecated since 1.30 use class MediaWiki\Shell\Shell
+ * @deprecated since 1.30 use class MediaWiki\Shell\Shell; warning since 1.47
  */
 function wfShellExecWithStderr( $cmd, &$retval = null, $environ = [], $limits = [] ) {
+	wfDeprecated( __FUNCTION__, '1.30' );
 	return wfShellExec( $cmd, $retval, $environ, $limits,
 		[ 'duplicateStderr' => true, 'profileMethod' => wfGetCaller() ] );
 }
@@ -1599,7 +1333,7 @@ function wfShellExecWithStderr( $cmd, &$retval = null, $environ = [], $limits = 
  * Note that $parameters should be a flat array and an option with an argument
  * should consist of two consecutive items in the array (do not use "--option value").
  *
- * @deprecated since 1.31, use Shell::makeScriptCommand()
+ * @deprecated since 1.31, use Shell::makeScriptCommand(); warning since 1.47
  *
  * @param string $script MediaWiki cli script path
  * @param array $parameters Arguments and options to the script
@@ -1610,6 +1344,7 @@ function wfShellExecWithStderr( $cmd, &$retval = null, $environ = [], $limits = 
  * @return string
  */
 function wfShellWikiCmd( $script, array $parameters = [], array $options = [] ) {
+	wfDeprecated( __FUNCTION__, '1.30' );
 	global $wgPhpCli;
 	// Give site config file a chance to run the script in a wrapper.
 	// The caller may likely want to call wfBasename() on $script.
@@ -1651,9 +1386,8 @@ function wfMerge(
 
 	# This check may also protect against code injection in
 	# case of broken installations.
-	AtEase::suppressWarnings();
-	$haveDiff3 = $wgDiff3 && file_exists( $wgDiff3 );
-	AtEase::restoreWarnings();
+	// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+	$haveDiff3 = $wgDiff3 && @file_exists( $wgDiff3 );
 
 	if ( !$haveDiff3 ) {
 		wfDebug( "diff3 not found" );
@@ -1685,7 +1419,7 @@ function wfMerge(
 	$mergeLeftovers = '';
 	do {
 		$data = fread( $handle, 8192 );
-		if ( strlen( $data ) == 0 ) {
+		if ( $data === false || $data === '' ) {
 			break;
 		}
 		$mergeLeftovers .= $data;
@@ -1701,7 +1435,7 @@ function wfMerge(
 	$simplisticMergeAttempt = '';
 	do {
 		$data = fread( $handle, 8192 );
-		if ( strlen( $data ) == 0 ) {
+		if ( $data === false || $data === '' ) {
 			break;
 		}
 		$simplisticMergeAttempt .= $data;
@@ -1791,58 +1525,6 @@ function wfRelativePath( $path, $from ) {
 }
 
 /**
- * Get a Database object.
- *
- * @param int $db Index of the connection to get. May be DB_PRIMARY for the
- *            primary (for write queries), DB_REPLICA for potentially lagged read
- *            queries, or an integer >= 0 for a particular server.
- *
- * @param string|string[] $groups Query groups. An array of group names that this query
- *                belongs to. May contain a single string if the query is only
- *                in one group.
- *
- * @param string|false $wiki The wiki ID, or false for the current wiki
- *
- * Note: multiple calls to wfGetDB(DB_REPLICA) during the course of one request
- * will always return the same object, unless the underlying connection or load
- * balancer is manually destroyed.
- *
- * Note 2: use $this->getDB() in maintenance scripts that may be invoked by
- * updater to ensure that a proper database is being updated.
- *
- * Note 3: When replacing calls to this with calls to methods on an injected
- * LoadBalancer, LoadBalancer::getConnection is more commonly needed than
- * LoadBalancer::getMaintenanceConnectionRef, which is needed for more advanced
- * administrative tasks. See the IMaintainableDatabase and IDatabase interfaces
- * for details.
- *
- * @deprecated since 1.39, emitting warnings since 1.42; instead, you can use:
- *   $services = MediaWikiServices::getInstance();
- *   $dbr = $services->getConnectionProvider()->getReplicaDatabase();
- *   $dbw = $services->getConnectionProvider()->getPrimaryDatabase();
- *
- * 	 … or, in rare circumstances, you may need to use:
- *
- *   $services->getDBLoadBalancer()->getConnection() / getMaintenanceConnectionRef()
- *
- * @return \Wikimedia\Rdbms\DBConnRef
- */
-function wfGetDB( $db, $groups = [], $wiki = false ) {
-	wfDeprecated( __FUNCTION__, '1.39' );
-
-	if ( $wiki === false ) {
-		return MediaWikiServices::getInstance()
-			->getDBLoadBalancer()
-			->getMaintenanceConnectionRef( $db, $groups, $wiki );
-	} else {
-		return MediaWikiServices::getInstance()
-			->getDBLoadBalancerFactory()
-			->getMainLB( $wiki )
-			->getMaintenanceConnectionRef( $db, $groups, $wiki );
-	}
-}
-
-/**
  * Get the URL path to a MediaWiki entry point.
  *
  * This is a wrapper to respect $wgScript and $wgLoadScript overrides.
@@ -1916,14 +1598,12 @@ function wfMemoryLimit( $newLimit ) {
 		$newLimit = wfShorthandToInteger( (string)$newLimit );
 		if ( $newLimit == -1 ) {
 			wfDebug( "Removing PHP's memory limit" );
-			AtEase::suppressWarnings();
-			ini_set( 'memory_limit', $newLimit );
-			AtEase::restoreWarnings();
+			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			@ini_set( 'memory_limit', $newLimit );
 		} elseif ( $newLimit > $oldLimit ) {
 			wfDebug( "Raising PHP's memory limit to $newLimit bytes" );
-			AtEase::suppressWarnings();
-			ini_set( 'memory_limit', $newLimit );
-			AtEase::restoreWarnings();
+			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			@ini_set( 'memory_limit', $newLimit );
 		}
 	}
 }
@@ -1969,7 +1649,7 @@ function wfShorthandToInteger( ?string $string = '', int $default = -1 ): int {
 	if ( $string === '' ) {
 		return $default;
 	}
-	$last = $string[strlen( $string ) - 1];
+	$last = substr( $string, -1 );
 	$val = intval( $string );
 	switch ( $last ) {
 		case 'g':
@@ -2021,7 +1701,6 @@ function wfThumbIsStandard( File $file, array $params ) {
 	if ( $wgResponsiveImages ) {
 		// These available sizes are hardcoded currently elsewhere in MediaWiki.
 		// @see Linker::processResponsiveImages
-		$multipliers[] = 1.5;
 		$multipliers[] = 2;
 	}
 
@@ -2099,16 +1778,22 @@ function wfThumbIsStandard( File $file, array $params ) {
  * @param array $newValues An array with new values
  * @return array The combined array
  * @since 1.26
+ * @deprecated since 1.46, hard-deprecated since 1.47, use ArrayUtils::arrayPlus2d
  */
 function wfArrayPlus2d( array $baseArray, array $newValues ) {
-	// First merge items that are in both arrays
-	foreach ( $baseArray as $name => &$groupVal ) {
-		if ( isset( $newValues[$name] ) ) {
-			$groupVal += $newValues[$name];
-		}
-	}
-	// Now add items that didn't exist yet
-	$baseArray += $newValues;
+	wfDeprecated( __FUNCTION__, '1.46' );
+	return ArrayUtils::arrayPlus2d( $baseArray, $newValues );
+}
 
-	return $baseArray;
+/**
+ * Logs missing classes when unserializing. Should be enabled via the
+ * unserialize_callback_func PHP ini setting.
+ */
+function wfUnserializeMissingClass( string $className ): void {
+	LoggerFactory::getInstance( 'unserialize' )->error( 'Could not unserialize class {class}', [
+		'class' => $className,
+		'exception' => new RuntimeException( __FUNCTION__ ),
+	] );
+	// This will trigger a "PHP Warning: unserialize(): Function wfUnserializeMissingClass()
+	// hasn't defined the class it was called for" warning; we don't care about that.
 }

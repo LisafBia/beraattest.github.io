@@ -3,12 +3,14 @@
 use MediaWiki\Content\TextContent;
 use MediaWiki\Language\Language;
 use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Page\WikiPage;
 use MediaWiki\Page\WikiPageFactory;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Title\Title;
 use MediaWiki\WikiMap\WikiMap;
 use Wikimedia\Rdbms\IExpression;
 use Wikimedia\Rdbms\LikeValue;
+use Wikimedia\StringUtils\StringUtils;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -100,7 +102,7 @@ class GrepPages extends Maintenance {
 		}
 	}
 
-	public function findPages( $prefixes = null ) {
+	public function findPages( ?array $prefixes = null ): iterable {
 		$dbr = $this->getReplicaDB();
 		$orConds = [];
 		if ( $prefixes !== null ) {

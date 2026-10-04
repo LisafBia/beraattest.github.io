@@ -66,7 +66,6 @@ class DataMessageValue extends MessageValue {
 
 	/**
 	 * Get the message code
-	 * @return string
 	 */
 	public function getCode(): string {
 		return $this->code;
@@ -100,6 +99,13 @@ class DataMessageValue extends MessageValue {
 			. '</datamessage>';
 	}
 
+	public function isSameAs( MessageValue $mv ): bool {
+		return parent::isSameAs( $mv ) &&
+			$mv instanceof DataMessageValue &&
+			$this->code === $mv->code &&
+			$this->data === $mv->data;
+	}
+
 	public function toJsonArray(): array {
 		// WARNING: When changing how this class is serialized, follow the instructions
 		// at <https://www.mediawiki.org/wiki/Manual:Parser_cache/Serialization_compatibility>!
@@ -107,6 +113,14 @@ class DataMessageValue extends MessageValue {
 				'code' => $this->code,
 				'data' => $this->data,
 			];
+	}
+
+	/** @inheritDoc */
+	public static function jsonClassHintFor( string $keyName ) {
+		// JsonStaticClassCodec invokes $className::jsonClassHintFor() so
+		// we need to have an explicit definition in DataMessageValue, we
+		// can't simply inherit the static method from MessageValue.
+		return parent::jsonClassHintFor( $keyName );
 	}
 
 	public static function newFromJsonArray( array $json ): DataMessageValue {

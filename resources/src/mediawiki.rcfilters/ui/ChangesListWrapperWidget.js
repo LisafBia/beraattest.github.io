@@ -121,7 +121,7 @@ ChangesListWrapperWidget.prototype.onModelUpdate = function (
 					$( '<div>' )
 						.addClass( 'mw-rcfilters-ui-changesListWrapperWidget-results-message' )
 						// TODO: Document possible messages
-						// eslint-disable-next-line mediawiki/msg-doc
+
 						.text( mw.msg( conflictItem.getCurrentConflictResultMessage() ) )
 				);
 		} else {
@@ -135,14 +135,14 @@ ChangesListWrapperWidget.prototype.onModelUpdate = function (
 						// * recentchanges-network
 						// * recentchanges-notargetpage
 						// * allpagesbadtitle
-						.html( mw.message( this.getMsgKeyForNoResults( noResultsDetails ) ).parse() )
+						.append( mw.message( this.getMsgKeyForNoResults( noResultsDetails ) ).parseDom() )
 				);
 
 			// remove all classes matching mw-changeslist-*
-			// eslint-disable-next-line mediawiki/class-doc
+
 			this.$element.removeClass( ( elementIndex, allClasses ) => allClasses
 				.split( ' ' )
-				.filter( ( className ) => className.indexOf( 'mw-changeslist-' ) === 0 )
+				.filter( ( className ) => className.startsWith( 'mw-changeslist-' ) )
 				.join( ' ' ) );
 		}
 
@@ -327,7 +327,7 @@ ChangesListWrapperWidget.prototype.applyHighlight = function () {
 				filters = [];
 				$( this ).data( 'highlightedFilters', filters );
 			}
-			if ( filters.indexOf( filterItem.getLabel() ) === -1 ) {
+			if ( !filters.includes( filterItem.getLabel() ) ) {
 				filters.push( filterItem.getLabel() );
 			}
 		} );

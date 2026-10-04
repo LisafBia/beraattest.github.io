@@ -24,7 +24,7 @@
 	// Function suitable for passing to Array.prototype.map
 	// Can't use mw.msg directly because Array.prototype.map passes element index as second argument
 	function mwMsgMapper( key ) {
-		// eslint-disable-next-line mediawiki/msg-doc
+
 		return mw.msg( key );
 	}
 
@@ -41,7 +41,7 @@
 	/**
 	 * Information about month names in current UI language.
 	 *
-	 * @type {Months}
+	 * @type {mw.language~Months}
 	 */
 	mw.language.months = {
 		keys: {

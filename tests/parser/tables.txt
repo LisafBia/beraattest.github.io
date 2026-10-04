@@ -91,39 +91,6 @@ foo
 !! end
 
 ###
-### Parsoid edge case regression tests
-###
-
-# This is unlikely to ever be used in any production wikipage
-# since it doesn't make any sense embedding tables in links.
-# FIXME: Note that the legacy parser and Parsoid differ on this!
-!! test
-Tables with multiple newlines after individual lines embedded in links
-!! options
-parsoid=wt2html,wt2wt
-!! wikitext
-[[Test|
-{|
-
-|test
-|}]]
-!! html/php
-<p><a href="/wiki/Test" title="Test">
-</a></p><table>
-
-<tbody><tr>
-<td>test
-</td></tr></tbody></table>
-<p class="mw-empty-elt"></p>
-!! html/parsoid
-<p><a rel="mw:WikiLink" href="./Test" title="Test">
-<table>
-
-<tbody><tr data-parsoid='{"autoInsertedStart":true}'><td>test</td></tr>
-</tbody></table></a></p>
-!! end
-
-###
 ### Table tests
 ### some content taken from http://meta.wikimedia.org/wiki/MediaWiki_User%27s_Guide:_Using_tables
 ###
@@ -313,6 +280,24 @@ A table with captions with non-default spaced attributes and a table row
 !! end
 
 !! test
+Multi-line captions in tables
+!! wikitext
+{|
+|+line 1 of caption
+line 2 of caption
+|data
+|}
+!! html
+<table>
+<caption>line 1 of caption
+line 2 of caption
+</caption>
+<tbody><tr>
+<td>data
+</td></tr></tbody></table>
+!! end
+
+!! test
 Table td-cell syntax variations
 !! wikitext
 {|
@@ -353,6 +338,23 @@ Simple table
 <tr>
 <td>3</td>
 <td>4
+</td></tr></tbody></table>
+!! end
+
+## T387922
+!! test
+Row-syntax table cells require that the row start with a table cell
+!! wikitext
+{|
+|a
+b||c
+|}
+!! html
+<table>
+<tbody><tr>
+<td>a
+<p>b||c
+</p>
 </td></tr></tbody></table>
 !! end
 
@@ -761,9 +763,8 @@ parsoid=wt2html,html2html
 </tr>
 </tbody></table>
 !! html/parsoid
-<table><tbody>
-<tr>
-<td data-parsoid='{"startTagSrc":"| ","attrSepSrc":"|"}'>[<a rel="mw:ExtLink" href="ftp://%7Cx" class="external free" data-parsoid='{"stx":"url","a":{"href":"ftp://%7Cx"},"sa":{"href":"ftp://|x"}}'>ftp://%7Cx</a></td><td data-parsoid='{"stx":"row"}'>]" onmouseover="alert(document.cookie)">test</td></tr></tbody></table>
+<table data-parsoid='{"autoInsertedEnd":true}'>
+<tbody><tr data-parsoid='{"autoInsertedStart":true}'><td data-parsoid='{"startTagSrc":"| ","attrSepSrc":"|"}'>[<a rel="mw:ExtLink nofollow" href="ftp://%7Cx" class="external free" data-parsoid='{"stx":"url","a":{"href":"ftp://%7Cx"},"sa":{"href":"ftp://|x"}}'>ftp://|x</a></td><td data-parsoid='{"stx":"row"}'>]" onmouseover="alert(document.cookie)">test</td></tr></tbody></table>
 !! end
 
 !! test
@@ -1162,9 +1163,11 @@ Build table with {{!}}
 !header
 !second header
 {{!}}- style="color:red;"
-{{!}}data{{!}}{{!}} style="color:red;" {{!}}second data
+{{!}}data{{!}}{{!}} style="color:red;"{{!}}second data
+{{!}}data{{!}}| style="color:green;"{{!}}third data
+{{!}}data|{{!}} style="color:blue;"{{!}}fourth data
 {{!}}}
-!! html
+!! html/php
 <table class="wikitable">
 <tbody><tr>
 <th>header
@@ -1174,7 +1177,55 @@ Build table with {{!}}
 <tr style="color:red;">
 <td>data</td>
 <td style="color:red;">second data
+</td>
+<td>data</td>
+<td style="color:green;">third data
+</td>
+<td>data</td>
+<td style="color:blue;">fourth data
 </td></tr></tbody></table>
+!! html/parsoid
+<table class="wikitable" data-parsoid='{"startTagSrc":"{{{!}}","endTagSrc":"{{!}}}"}'>
+<tbody><tr data-parsoid='{"autoInsertedStart":true}'><th>header</th>
+<th>second header</th></tr>
+<tr style="color:red;" data-parsoid='{"startTagSrc":"{{!}}-"}'>
+<td data-parsoid='{"startTagSrc":"{{!}}"}'>data</td><td style="color:red;" data-parsoid='{"attrSepSrc":"{{!}}","stx":"row","startTagSrc":"{{!}}{{!}}"}'>second data</td>
+<td data-parsoid='{"startTagSrc":"{{!}}"}'>data</td><td style="color:green;" data-parsoid='{"attrSepSrc":"{{!}}","stx":"row","startTagSrc":"{{!}}|"}'>third data</td>
+<td data-parsoid='{"startTagSrc":"{{!}}"}'>data</td><td style="color:blue;" data-parsoid='{"attrSepSrc":"{{!}}","stx":"row","startTagSrc":"|{{!}}"}'>fourth data</td></tr>
+</tbody></table>
+!! end
+
+# When quotes are not used around attribute values, {{!}} should not
+# prevent attribute detection when there is no preceding whitespace
+!! test
+Edge cases with use of {{!}}
+!! options
+parsoid=wt2html
+!! wikitext
+{|
+| width=60{{!}} foo
+| width=60 {{!}} foo
+| width="60{{!}}0" foo
+| width="60 {{!}}0" foo
+|}
+!! html/php
+<table>
+<tbody><tr>
+<td width="60">foo
+</td>
+<td width="60">foo
+</td>
+<td width="60">0" foo
+</td>
+<td width="60">0" foo
+</td></tr></tbody></table>
+!! html/parsoid
+<table>
+<tbody><tr><td width="60">foo</td>
+<td width="60">foo</td>
+<td width="60">0" foo</td>
+<td width="60 ">0" foo</td></tr>
+</tbody></table>
 !! end
 
 !! test
@@ -1273,7 +1324,7 @@ a
 <p data-parsoid='{"fostered":true,"autoInsertedEnd":true,"autoInsertedStart":true}'>
 a</p>
 <table>
-<tbody><tr class="mw-empty-elt" data-parsoid='{"startTagSrc":"|-"}'></tr></tbody></table>
+<tbody class="mw-empty-elt"><tr class="mw-empty-elt" data-parsoid='{"startTagSrc":"|-"}'></tr></tbody></table>
 !! end
 
 # selser tests are needed below as a regression test for T233815
@@ -1296,7 +1347,7 @@ parsoid={ "modes": ["wt2html","selser"], "suppressErrors": true }
 </table>
 !! html/parsoid
 <ul data-parsoid='{"fostered":true,"autoInsertedEnd":true}'><li>a</li><li>b</li></ul><table>
-<tbody><tr class="mw-empty-elt" data-parsoid='{"startTagSrc":"|-"}'>
+<tbody class="mw-empty-elt"><tr class="mw-empty-elt" data-parsoid='{"startTagSrc":"|-"}'>
 
 </tr></tbody></table>
 !! end
@@ -1396,7 +1447,8 @@ Templated table cell with untemplated attributes: Cell combination tests
 </tbody></table>
 !! end
 
-# The failure in T343874 is only exercised in integrated mode
+# Standalone test generates the right output as well but the attribute order
+# is flipped and the test runner doesn't normalize output for attribute order.
 !! test
 T343874: Templated table that has a templated cell with untemplated attributes
 !! options
@@ -1449,7 +1501,7 @@ Templated table cell with untemplated attributes: Regression tests
 !! end
 
 !! test
-Templated table cell with untemplated attributes: Unsupported (standalone mode) Scenarios
+Templated table cell with untemplated attributes: Integrated mode only
 !! options
 parsoid=wt2html
 !! wikitext
@@ -1468,10 +1520,6 @@ parsoid=wt2html
 <tr>
 <td class="foo">bar
 </td></tr></tbody></table>
-!! html/parsoid+standalone
-This test fails both the two table cell scenarios for different reasons
-because of differences how preprocessing works in standalone mode.
-We don't intend to support this here.
 !! html/parsoid+integrated
 <table>
 <tbody><tr>
@@ -1482,7 +1530,7 @@ We don't intend to support this here.
 !! end
 
 !! test
-Templated table cell with untemplated attributes: Unsupported Scenario
+Templated table cell with untemplated attributes
 !! options
 parsoid=wt2html
 !! wikitext
@@ -1497,8 +1545,9 @@ parsoid=wt2html
 <td class="foo">title="fail"|bar
 </td></tr></tbody></table>
 !! html/parsoid
-For now, we are deliberately not supporting this use cases in Parsoid unless
-required or we find a simpler solution that covers everything uniformly.
+<table>
+<tbody><tr><td about="#mwt" typeof="mw:Transclusion" class="foo" data-mw='{"parts":["|class=\"foo\"",{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"{{!}}title=\"fail\"{{!}}bar"}},"i":0}}]}'>title="fail"|bar</td></tr>
+</tbody></table>
 !! end
 
 !! test
@@ -1618,7 +1667,7 @@ parsoid=wt2html
 </table>
 !! html/parsoid
 <table>
-<tbody>
+<tbody class="mw-empty-elt">
 <tr class='mw-empty-elt'></tr>
 <tr class='mw-empty-elt'></tr>
 </tbody></table>
@@ -1960,4 +2009,401 @@ parsoid=wt2html,wt2wt
 </tr>
 </tbody>
 </table>
+!! end
+
+!! test
+Multiline inline table line in file caption
+!! wikitext
+[[File:Foobar.jpg|thumb|
+{|
+|
+asdf
+|}
+]]
+!! html/php
+<figure class="mw-default-size" typeof="mw:File/Thumb"><a href="/wiki/File:Foobar.jpg" class="mw-file-description"><img src="http://example.com/images/thumb/3/3a/Foobar.jpg/180px-Foobar.jpg" decoding="async" loading="lazy" width="180" height="20" class="mw-file-element" srcset="http://example.com/images/thumb/3/3a/Foobar.jpg/360px-Foobar.jpg 2x" /></a><figcaption> <table> <tbody><tr> <td> asdf </td></tr></tbody></table> </figcaption></figure>
+!! html/parsoid
+<figure class="mw-default-size" typeof="mw:File/Thumb"><a href="./File:Foobar.jpg" class="mw-file-description"><img resource="./File:Foobar.jpg" src="http://example.com/images/thumb/3/3a/Foobar.jpg/180px-Foobar.jpg" decoding="async" loading="lazy" data-file-width="1941" data-file-height="220" data-file-type="bitmap" height="20" width="180" srcset="http://example.com/images/thumb/3/3a/Foobar.jpg/360px-Foobar.jpg 2x" class="mw-file-element"/></a><figcaption>
+<table>
+<tbody><tr><td>
+asdf</td></tr>
+</tbody></table>
+</figcaption></figure>
+!! end
+
+###
+### Parsoid edge case regression tests
+###
+!! test
+Table lines with multiple newlines, spaces, comments embedded in file caption
+!! options
+parsoid=wt2html,wt2wt
+!! wikitext
+[[File:Foobar.jpg|thumb|
+  <!--cmt-->   
+{|
+  
+ |test
+   <!--cmt-->  
+|}]]
+!! html/php
+<figure class="mw-default-size" typeof="mw:File/Thumb"><a href="/wiki/File:Foobar.jpg" class="mw-file-description"><img src="http://example.com/images/thumb/3/3a/Foobar.jpg/180px-Foobar.jpg" decoding="async" loading="lazy" width="180" height="20" class="mw-file-element" srcset="http://example.com/images/thumb/3/3a/Foobar.jpg/360px-Foobar.jpg 2x" /></a><figcaption> <table>    <tbody><tr> <td>test </td></tr></tbody></table></figcaption></figure>
+!! html/parsoid
+<figure class="mw-default-size" typeof="mw:File/Thumb" data-parsoid='{"optList":[{"ck":"thumbnail","ak":"thumb"},{"ck":"caption","ak":"\n  &lt;!--cmt-->   \n{|\n  \n |test\n   &lt;!--cmt-->  \n|}"}]}'><a href="./File:Foobar.jpg" class="mw-file-description"><img resource="./File:Foobar.jpg" src="http://example.com/images/thumb/3/3a/Foobar.jpg/180px-Foobar.jpg" decoding="async" loading="lazy" data-file-width="1941" data-file-height="220" data-file-type="bitmap" height="20" width="180" srcset="http://example.com/images/thumb/3/3a/Foobar.jpg/360px-Foobar.jpg 2x" class="mw-file-element" data-parsoid='{"a":{"resource":"./File:Foobar.jpg","height":"20","width":"180"},"sa":{"resource":"File:Foobar.jpg"}}'/></a><figcaption>
+  <!--cmt-->   
+<table>
+  
+ <tbody><tr><td>test
+   <!--cmt--></td></tr>
+</tbody></table></figcaption></figure>
+!! end
+
+!! test
+First line attributes should be handled by html2wt even without data-parsoid
+!! wikitext
+{|
+|- valign="top"
+|Bar
+|}
+!! html
+<table>
+
+<tbody><tr valign="top">
+<td>Bar
+</td></tr></tbody></table>
+!! end
+
+!! test
+Don't apply complex line-splitting heuristics in AttributeExpander for non-<table> tokens
+!! options
+parsoid=wt2html
+!! wikitext
+{{1x<invalid>
+|{{2x<invalid>y}}|
+}}
+
+{{1x<invalid>
+|{{2x<invalid>
+y}}|
+}}
+!! html/php
+<p>{{1x&lt;invalid&gt;
+|{{2x&lt;invalid&gt;y}}|
+}}
+</p><p>{{1x&lt;invalid&gt;
+|{{2x&lt;invalid&gt;
+y}}|
+}}
+</p>
+!! html/parsoid
+<p>{{1x&lt;invalid>
+|{{2x&lt;invalid>y}}|
+}}</p>
+
+<p>{{1x&lt;invalid>
+|{{2x&lt;invalid>
+y}}|
+}}</p>
+!! end
+
+!! test
+Autoinserted tr in html table
+!! wikitext
+<table>
+<td>a</td>
+</table>
+!! html/php
+<table>
+<tbody><tr><td>a</td>
+</tr></tbody></table>
+!! html/parsoid
+<table data-parsoid='{"stx":"html"}'>
+<tbody><tr data-parsoid='{"autoInsertedStart":true,"autoInsertedEnd":true}'><td data-parsoid='{"stx":"html"}'>a</td></tr>
+</tbody></table>
+!! end
+
+!! test
+AttributeExpander regression test: Class attributes should be properly applied
+!! wikitext
+{| {{1x|1=class="foo {{{class}}} <!--x--> bar" style="font-size: 95%;"}}
+|foo
+|}
+!! html/php
+<table class="foo &#123;&#123;&#123;class&#125;&#125;&#125; bar" style="font-size: 95%;">
+<tbody><tr>
+<td>foo
+</td></tr></tbody></table>
+!! html/parsoid+standalone
+<table class="foo {{{class}}}  bar" style="font-size: 95%;" about="#mwt2" typeof="mw:ExpandedAttrs" data-mw='{"attribs":[[{"txt":"class","html":"&lt;span about=\"#mwt1\" typeof=\"mw:Transclusion\" data-parsoid=&apos;{\"pi\":[[{\"k\":\"1\",\"named\":true}]]}&apos; data-mw=&apos;{\"parts\":[{\"template\":{\"target\":{\"wt\":\"1x\",\"href\":\"./Template:1x\"},\"params\":{\"1\":{\"wt\":\"class=\\\"foo {{{class}}} &amp;lt;!--x--> bar\\\" style=\\\"font-size: 95%;\\\"\"}},\"i\":0}}]}&apos;>class=\"foo {{{class}}} &lt;/span>&lt;span about=\"#mwt1\">&lt;!--x-->&lt;/span>&lt;span about=\"#mwt1\"> bar\" style=\"font-size: 95%;\"&lt;/span>"},{"html":""}]]}'>
+<tbody><tr><td>foo</td></tr>
+</tbody></table>
+!! end
+
+## Note that we are choosing to support this in Parsoid
+## The legacy parser output is arbitrary
+!! test
+Exclamation points in wikilink content in table precedence
+!! wikitext
+{|
+![[Foo|Bar!!]]
+|}
+!! html/php
+<table>
+<tbody><tr>
+<th><a href="/index.php?title=Foo&amp;action=edit&amp;redlink=1" class="new" title="Foo (page does not exist)">Bar</a></th>
+<th>
+</th></tr></tbody></table>
+!! html/parsoid
+<table>
+<tbody><tr><th><a rel="mw:WikiLink" href="./Foo?action=edit&amp;redlink=1" title="Foo" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Foo"]}}'>Bar!!</a></th></tr>
+</tbody></table>
+!! end
+
+!! test
+Multi-line extension tags should not interrupt table-cell parsing in the same row
+!! options
+parsoid=wt2html,wt2wt
+!! wikitext
+{|
+|-
+|a1||b1 <spantag>
+{{1x|c1}}</spantag>||d1||e1
+|-
+|a2||[[Main Page]] <spantag>
+{{1x|c2}}</spantag>||d2||e2
+|}
+
+{|
+|-
+!a3!!b3 <spantag>
+{{1x|c3}}</spantag>!!d3!!e3
+|-
+!a4!![[Main Page]] <spantag>
+{{1x|c4}}</spantag>!!d4!!e4
+|}
+!! html/php
+<table>
+
+<tbody><tr>
+<td>a1</td>
+<td>b1 <span>
+c1</span></td>
+<td>d1</td>
+<td>e1
+</td></tr>
+<tr>
+<td>a2</td>
+<td><a href="/wiki/Main_Page" title="Main Page">Main Page</a> <span>
+c2</span></td>
+<td>d2</td>
+<td>e2
+</td></tr></tbody></table>
+<table>
+
+<tbody><tr>
+<th>a3</th>
+<th>b3 <span>
+c3</span></th>
+<th>d3</th>
+<th>e3
+</th></tr>
+<tr>
+<th>a4</th>
+<th><a href="/wiki/Main_Page" title="Main Page">Main Page</a> <span>
+c4</span></th>
+<th>d4</th>
+<th>e4
+</th></tr></tbody></table>
+!! html/parsoid
+<table>
+<tbody><tr>
+<td>a1</td><td data-parsoid='{"stx":"row"}'>b1 <span typeof="mw:Extension/spantag" about="#mwt2" data-mw='{"name":"spantag","attrs":{},"body":{"extsrc":"\n{{1x|c1}}"}}'>
+<span about="#mwt1" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"c1"}},"i":0}}]}'>c1</span></span></td><td data-parsoid='{"stx":"row"}'>d1</td><td data-parsoid='{"stx":"row"}'>e1</td></tr>
+<tr>
+<td>a2</td><td data-parsoid='{"stx":"row"}'><a rel="mw:WikiLink" href="./Main_Page" title="Main Page">Main Page</a> <span typeof="mw:Extension/spantag" about="#mwt4" data-mw='{"name":"spantag","attrs":{},"body":{"extsrc":"\n{{1x|c2}}"}}'>
+<span about="#mwt3" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"c2"}},"i":0}}]}'>c2</span></span></td><td data-parsoid='{"stx":"row"}'>d2</td><td data-parsoid='{"stx":"row"}'>e2</td></tr>
+</tbody></table>
+
+<table>
+<tbody><tr>
+<th>a3</th><th data-parsoid='{"stx":"row"}'>b3 <span typeof="mw:Extension/spantag" about="#mwt6" data-mw='{"name":"spantag","attrs":{},"body":{"extsrc":"\n{{1x|c3}}"}}'>
+<span about="#mwt5" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"c3"}},"i":0}}]}'>c3</span></span></th><th data-parsoid='{"stx":"row"}'>d3</th><th data-parsoid='{"stx":"row"}'>e3</th></tr>
+<tr>
+<th>a4</th><th data-parsoid='{"stx":"row"}'><a rel="mw:WikiLink" href="./Main_Page" title="Main Page">Main Page</a> <span typeof="mw:Extension/spantag" about="#mwt8" data-mw='{"name":"spantag","attrs":{},"body":{"extsrc":"\n{{1x|c4}}"}}'>
+<span about="#mwt7" typeof="mw:Transclusion" data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"c4"}},"i":0}}]}'>c4</span></span></th><th data-parsoid='{"stx":"row"}'>d4</th><th data-parsoid='{"stx":"row"}'>e4</th></tr>
+</tbody></table>
+!! end
+
+!! test
+Multi-line transclusions should not interrupt table-cell parsing in the same row
+!! wikitext
+{|
+! class="c1" |Col 1.1!! class="c2" |{{1x|
+1=Col 1.2}}!! class="c3" |Col 1.3!! class="c4" |Col 1.4
+! class="d1" |Col 2.1!! class="d2" |{{1x|
+1=Col 2.2}}!! class="d3" |Col 2.3! abcd!! class="d4" |Col 2.4
+| class="e1" |Col 3.1|| class="e2" |{{1x|
+1=Col 3.2}}|| class="e3" |Col 3.3| abcd|| class="e4" |Col 3.4
+|}
+!! html/php
+<table>
+<tbody><tr>
+<th class="c1">Col 1.1</th>
+<th class="c2">Col 1.2</th>
+<th class="c3">Col 1.3</th>
+<th class="c4">Col 1.4
+</th>
+<th class="d1">Col 2.1</th>
+<th class="d2">Col 2.2</th>
+<th class="d3">Col 2.3! abcd</th>
+<th class="d4">Col 2.4
+</th>
+<td class="e1">Col 3.1</td>
+<td class="e2">Col 3.2</td>
+<td class="e3">Col 3.3| abcd</td>
+<td class="e4">Col 3.4
+</td></tr></tbody></table>
+!! html/parsoid
+<table>
+<tbody><tr><th class="c1">Col 1.1</th><th class="c2" data-parsoid='{"stx":"row"}'><span about="#mwt1" typeof="mw:Transclusion" data-parsoid='{"pi":[[{"k":"1","named":true,"spc":["\n","","",""]}]]}' data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"Col 1.2"}},"i":0}}]}'>Col 1.2</span></th><th class="c3" data-parsoid='{"stx":"row"}'>Col 1.3</th><th class="c4" data-parsoid='{"stx":"row"}'>Col 1.4</th>
+<th class="d1">Col 2.1</th><th class="d2" data-parsoid='{"stx":"row"}'><span about="#mwt2" typeof="mw:Transclusion" data-parsoid='{"pi":[[{"k":"1","named":true,"spc":["\n","","",""]}]]}' data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"Col 2.2"}},"i":0}}]}'>Col 2.2</span></th><th class="d3" data-parsoid='{"stx":"row"}'>Col 2.3! abcd</th><th class="d4" data-parsoid='{"stx":"row"}'>Col 2.4</th>
+<td class="e1">Col 3.1</td><td class="e2" data-parsoid='{"stx":"row"}'><span about="#mwt3" typeof="mw:Transclusion" data-parsoid='{"pi":[[{"k":"1","named":true,"spc":["\n","","",""]}]]}' data-mw='{"parts":[{"template":{"target":{"wt":"1x","href":"./Template:1x"},"params":{"1":{"wt":"Col 3.2"}},"i":0}}]}'>Col 3.2</span></td><td class="e3" data-parsoid='{"stx":"row"}'>Col 3.3| abcd</td><td class="e4" data-parsoid='{"stx":"row"}'>Col 3.4</td></tr>
+</tbody></table>
+!! end
+
+!! test
+Row syntax td starting with closing curly brace
+!! wikitext
+{|
+|a||}||b
+|}
+!! html/php
+<table>
+<tbody><tr>
+<td>a</td>
+<td>}</td>
+<td>b
+</td></tr></tbody></table>
+!! html/parsoid
+<table>
+<tbody><tr><td>a</td><td data-parsoid='{"stx":"row"}'>}</td><td data-parsoid='{"stx":"row"}'>b</td></tr>
+</tbody></table>
+!! end
+
+!! article
+Template:Content_and_cell
+!! text
+test
+| 123
+!! endarticle
+
+!! test
+Newline constraint after multi-node template
+!! wikitext
+{|
+| {{content and cell}} || {{content and cell}}
+|}
+!! html/php
+<table>
+<tbody><tr>
+<td>test
+</td>
+<td>123</td>
+<td>test
+</td>
+<td>123
+</td></tr></tbody></table>
+!! html/parsoid
+<table>
+<tbody><tr><td about="#mwt1" typeof="mw:Transclusion" data-parsoid='{"firstWikitextNode":"TD"}' data-mw='{"parts":["| ",{"template":{"target":{"wt":"content and cell","href":"./Template:Content_and_cell"},"params":{},"i":0}}," "]}'>test</td><td about="#mwt1">123</td><td about="#mwt2" typeof="mw:Transclusion" data-parsoid='{"stx":"row","firstWikitextNode":"TD_row"}' data-mw='{"parts":["|| ",{"template":{"target":{"wt":"content and cell","href":"./Template:Content_and_cell"},"params":{},"i":0}}]}'>test</td><td about="#mwt2">123</td></tr>
+</tbody></table>
+!! end
+
+!! test
+Pipe within attribute without quotes
+!! options
+parsoid=wt2html
+!! wikitext
+{| style=font-size:85%|0 – 2
+|- style=font-size:85%|0 – 2
+| style=font-size:85%|0 – 2 hi
+|}
+!! html/php
+<table style="font-size:85%&#124;0">
+
+<tbody><tr style="font-size:85%&#124;0">
+<td style="font-size:85%">0 – 2 hi
+</td></tr></tbody></table>
+!! html/parsoid
+<table style="font-size:85%|0">
+<tbody>
+<tr style="font-size:85%|0">
+<td style="font-size:85%">0 – 2 hi</td>
+</tr>
+</tbody>
+</table>
+!! end
+
+!! test
+Pipe within attribute with single quotes
+!! options
+parsoid=wt2html
+!! wikitext
+{| style='font-size:85%|0 – 2'
+|- style='font-size:85%|0 – 2'
+| style='font-size:85%|0 – 2' hi
+|}
+!! html/php
+<table style="font-size:85%&#124;0 – 2">
+
+<tbody><tr style="font-size:85%&#124;0 – 2">
+<td style="font-size:85%">0 – 2' hi
+</td></tr></tbody></table>
+!! html/parsoid
+<table style="font-size:85%|0 – 2">
+<tbody>
+<tr style="font-size:85%|0 – 2">
+<td style="font-size:85%">0 – 2' hi</td>
+</tr>
+</tbody>
+</table>
+!! end
+
+!! test
+Pipe within attribute with double quotes
+!! wikitext
+{| style="font-size:85%|0 – 2"
+|- style="font-size:85%|0 – 2"
+|hi
+|}
+!! html/php
+<table style="font-size:85%&#124;0 – 2">
+
+<tbody><tr style="font-size:85%&#124;0 – 2">
+<td>hi
+</td></tr></tbody></table>
+!! html/parsoid
+<table style="font-size:85%|0 – 2">
+<tbody>
+<tr style="font-size:85%|0 – 2">
+<td>hi</td>
+</tr>
+</tbody>
+</table>
+!! end
+
+!! article
+Template:Asciiart
+!! text
+ |  |
+ |--|
+!! end
+
+!! test
+Asciiart template should display the right number of spaces
+!! wikitext
+{{Asciiart}}
+!! html/parsoid
+<pre data-mw='{"parts":[{"template":{"target":{"wt":"Asciiart","href":"./Template:Asciiart"},"params":{},"i":0}}]}' typeof="mw:Transclusion">|  |
+|--|</pre>
 !! end

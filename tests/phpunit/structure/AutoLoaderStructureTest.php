@@ -1,6 +1,9 @@
 <?php
 
+use MediaWiki\Autoload\AutoloadGenerator;
+
 /**
+ * @group Autoload
  * @coversNothing
  */
 class AutoLoaderStructureTest extends MediaWikiIntegrationTestCase {
@@ -25,7 +28,7 @@ class AutoLoaderStructureTest extends MediaWikiIntegrationTestCase {
 		$matches = [];
 		preg_match_all( '/
 				^ [\t ]* (?:
-					(?:final\s+)? (?:abstract\s+)? (?:class|interface|trait) \s+
+					(?:final\s+)? (?:abstract\s+)? (?:class|interface|trait|enum) \s+
 					(?P<class> \w+)
 				|
 					class_alias \s* \( \s*
@@ -133,12 +136,11 @@ class AutoLoaderStructureTest extends MediaWikiIntegrationTestCase {
 		$path = __DIR__ . '/../../..';
 		$oldAutoload = file_get_contents( $path . '/autoload.php' );
 		$generator = new AutoloadGenerator( $path, 'local' );
-		$generator->setPsr4Namespaces( AutoLoader::CORE_NAMESPACES );
 		$generator->initMediaWikiDefault();
-		$newAutoload = $generator->getAutoload( 'maintenance/generateLocalAutoload.php' );
+		$newAutoload = $generator->getAutoload( 'maintenance/generateAutoload.php' );
 
 		$this->assertEquals( $oldAutoload, $newAutoload, 'autoload.php does not match' .
-			' output of generateLocalAutoload.php script.' );
+			' output of generateAutoload.php script.' );
 	}
 
 	/**

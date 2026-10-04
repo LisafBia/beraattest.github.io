@@ -156,6 +156,28 @@ QUnit.module( 'mediawiki.util', QUnit.newMwEnvironment( {
 		href = util.getUrl( 'Sandbox', {} );
 		assert.strictEqual( href, '/wiki/Sandbox', 'title with empty query string' );
 
+		// T424249
+		mw.config.set( {
+			wgVariantArticlePath: '/$2/$1',
+			wgUserVariant: 'zh-my'
+		} );
+		href = util.getUrl( 'Sandbox' );
+		assert.strictEqual( href, '/zh-my/Sandbox', 'title with variant' );
+
+		href = util.getUrl( 'Sandbox', { variant: 'zh-cn' } );
+		assert.strictEqual( href, '/zh-cn/Sandbox', 'title with explicitly specified variant' );
+
+		href = util.getUrl( 'Sandbox', { action: 'edit' } );
+		assert.strictEqual( href, '/w/index.php?title=Sandbox&action=edit', 'title with action and variant fallback' );
+
+		href = util.getUrl( 'Sandbox', { action: 'edit', variant: 'zh-cn' } );
+		assert.strictEqual( href, '/w/index.php?title=Sandbox&action=edit&variant=zh-cn', 'title with action and explicitly specified variant fallback' );
+
+		mw.config.set( {
+			wgVariantArticlePath: false,
+			wgUserVariant: false
+		} );
+
 		href = util.getUrl( '#Fragment' );
 		assert.strictEqual( href, '#Fragment', 'empty title with fragment' );
 
@@ -203,7 +225,7 @@ QUnit.module( 'mediawiki.util', QUnit.newMwEnvironment( {
 		const $el = $( '<div>' ).attr( 'id', 'mw-addcsstest' ).appendTo( '#qunit-fixture' );
 		const style = util.addCSS( '#mw-addcsstest { visibility: hidden; }' );
 		assert.strictEqual( typeof style, 'object', 'addCSS returned an object' );
-		assert.strictEqual( style.disabled, false, 'property "disabled" is available and set to false' );
+		assert.false( style.disabled, 'property "disabled" is available and set to false' );
 
 		assert.strictEqual( $el.css( 'visibility' ), 'hidden', 'Added style properties are in effect' );
 
@@ -287,30 +309,48 @@ QUnit.module( 'mediawiki.util', QUnit.newMwEnvironment( {
 		assert.strictEqual( warningMessage.querySelector( '.cdx-message__content' ).textContent, 'hello world!' );
 	} );
 
-	QUnit.test( 'addPortlet does not append to DOM if no `before` is provided', ( assert ) => {
+	QUnit.test( 'addPortlet [no selectorHint]', ( assert ) => {
 		$( '#qunit-fixture' ).html(
-			'<div class="portlet" id="p-toolbox"></div>'
+			'<div class="portlet" id="p-tb"></div>'
 		);
 		const portlet = util.addPortlet( 'test', 'Hello' );
-		assert.true( portlet !== null, 'A portlet node is returned.' );
-		assert.true( portlet.parentNode === null, 'Portlet has no parent node' );
+		assert.true( !!portlet, 'portlet node' );
+		assert.false( !!portlet.parentNode, 'portlet connected' );
 	} );
 
-	QUnit.test( 'addPortlet returns null if bad selector given', ( assert ) => {
+	QUnit.test( 'addPortlet [invalid selectorHint]', ( assert ) => {
 		$( '#qunit-fixture' ).html(
-			'<div class="portlet" id="p-toolbox"></div>'
+			'<div class="portlet" id="p-tb"></div>'
 		);
-		const portlet = util.addPortlet( 'test', 'Hello', '#?saasp-toolbox' );
-		assert.true( portlet === null, 'No portlet created.' );
+		const portlet = util.addPortlet( 'test', 'Hello', '#?saasp-invalid' );
+		assert.false( !!portlet, 'portlet node' );
 	} );
 
-	QUnit.test( 'addPortlet appends to DOM if before provided', ( assert ) => {
+	QUnit.test( 'addPortlet [valid selectorHint found]', ( assert ) => {
 		$( '#qunit-fixture' ).html(
-			'<div class="portlet" id="p-toolbox"></div>'
+			'<div class="portlet" id="p-navigation"></div>' +
+				'<div class="portlet" id="p-tb"></div>' +
+				'<div class="portlet" id="p-lang"></div>'
 		);
-		const portlet = util.addPortlet( 'test', 'Hello', '#p-toolbox' );
-		assert.true( !!portlet, 'A portlet node is returned.' );
-		assert.true( portlet.parentNode !== null, 'It is appended to the DOM' );
+		const portlet = util.addPortlet( 'test', 'Hello', '#p-tb' );
+		const ids = $( '#qunit-fixture' ).children().get().map( ( el ) => el.id );
+
+		assert.true( !!portlet, 'portlet node' );
+		assert.true( !!portlet.parentNode, 'portlet connected' );
+		assert.deepEqual( ids, [ 'p-navigation', 'p-tb', 'test', 'p-lang' ], 'order' );
+	} );
+
+	QUnit.test( 'addPortlet [valid selectorHint not found]', ( assert ) => {
+		$( '#qunit-fixture' ).html(
+			'<div class="portlet" id="p-navigation"></div>' +
+				'<div class="portlet" id="p-tb"></div>' +
+				'<div class="portlet" id="p-lang"></div>'
+		);
+		const portlet = util.addPortlet( 'test', 'Hello', '#p-unknown' );
+		const ids = $( '#qunit-fixture' ).children().get().map( ( el ) => el.id );
+
+		assert.false( !!portlet, 'portlet node' );
+		assert.deepEqual( ids, [ 'p-navigation', 'p-tb', 'p-lang' ], 'order' );
 	} );
 
 	QUnit.test( 'addPortletLink (Vector list)', ( assert ) => {
@@ -410,8 +450,62 @@ QUnit.module( 'mediawiki.util', QUnit.newMwEnvironment( {
 		);
 	} );
 
+	QUnit.test( 'addPortletLink (config object)', ( assert ) => {
+		$( '#qunit-fixture' ).html( '<ul id="p-toolbox"></ul>' );
+
+		const link = util.addPortletLink( 'p-toolbox', {
+			href: '#',
+			text: 'Label',
+			id: 't-foo',
+			tooltip: 'Tooltip [shift-x]',
+			accesskey: 'z'
+		} );
+
+		assert.strictEqual(
+			link.querySelector( 'a' ).title,
+			'Tooltip [test-z]',
+			'Change a pre-existing accesskey in a tooltip using config object'
+		);
+		assert.domEqual(
+			link,
+			{
+				tagName: 'LI',
+				attributes: { id: 't-foo', class: 'mw-list-item mw-list-item-js' },
+				contents: [
+					{
+						tagName: 'A',
+						attributes: { href: '#', title: 'Tooltip [test-z]', accesskey: 'z' },
+						contents: [ 'Label' ]
+					}
+				]
+			},
+			'Link element created using config object'
+		);
+	} );
+
+	QUnit.test( 'addPortletLink (hook options)', ( assert ) => {
+		const done = assert.async();
+		$( '#qunit-fixture' ).html( '<ul id="p-toolbox"></ul>' );
+
+		const testOptions = {
+			href: '#',
+			text: 'Label',
+			id: 't-unique-hook-test',
+			customProperty: 'customValue'
+		};
+
+		mw.hook( 'util.addPortletLink' ).add( ( link, options ) => {
+			if ( options.id === 't-unique-hook-test' ) {
+				assert.strictEqual( options.customProperty, 'customValue', 'Custom options are passed in the hook' );
+				done();
+			}
+		} );
+
+		util.addPortletLink( 'p-toolbox', testOptions );
+	} );
+
 	QUnit.test( 'addPortletLink (nested list)', ( assert ) => {
-		// Regresion test for T37082
+		// Regression test for T37082
 		$( '#qunit-fixture' ).html(
 			'<ul id="p-toolbox">' +
 				'<li id="x-foo"><a href="#">Foo</a></li>' +
@@ -429,15 +523,15 @@ QUnit.module( 'mediawiki.util', QUnit.newMwEnvironment( {
 
 	QUnit.test( 'validateEmail', ( assert ) => {
 		assert.strictEqual( util.validateEmail( '' ), null, 'Should return null for empty string ' );
-		assert.strictEqual( util.validateEmail( 'user@localhost' ), true, 'Return true for a valid e-mail address' );
+		assert.true( util.validateEmail( 'user@localhost' ), 'Return true for a valid e-mail address' );
 
 		// testEmailWithCommasAreInvalids
-		assert.strictEqual( util.validateEmail( 'user,foo@example.org' ), false, 'Emails with commas are invalid' );
-		assert.strictEqual( util.validateEmail( 'userfoo@ex,ample.org' ), false, 'Emails with commas are invalid' );
+		assert.false( util.validateEmail( 'user,foo@example.org' ), 'Emails with commas are invalid' );
+		assert.false( util.validateEmail( 'userfoo@ex,ample.org' ), 'Emails with commas are invalid' );
 
 		// testEmailWithHyphens
-		assert.strictEqual( util.validateEmail( 'user-foo@example.org' ), true, 'Emails may contain a hyphen' );
-		assert.strictEqual( util.validateEmail( 'userfoo@ex-ample.org' ), true, 'Emails may contain a hyphen' );
+		assert.true( util.validateEmail( 'user-foo@example.org' ), 'Emails may contain a hyphen' );
+		assert.true( util.validateEmail( 'userfoo@ex-ample.org' ), 'Emails may contain a hyphen' );
 	} );
 
 	// Based on mediawiki/libs/IPUtils: provideInvalidIPv4Addresses
@@ -468,7 +562,7 @@ QUnit.module( 'mediawiki.util', QUnit.newMwEnvironment( {
 		false,
 		true,
 		':fc:100::', // starting with lone ":"
-		'fc:100:::', // ending with a tripple ":::"
+		'fc:100:::', // ending with a triple ":::"
 		'fc:300', // 2 words
 		'fc:100:300', // 3 words
 		'fc:100:a:d:1:e:ac:0::', // 8 words ending with "::"
@@ -479,7 +573,7 @@ QUnit.module( 'mediawiki.util', QUnit.newMwEnvironment( {
 		'::fc:100:a:d:1:e:ac:0:1', // 9 words
 		':fc::100', // starting with lone ":"
 		'fc::100:', // ending with lone ":"
-		'fc:::100', // tripple ":::" in the middle
+		'fc:::100', // triple ":::" in the middle
 		'fc::100:a:d:1:e:ac:0', // 8 words containing double "::"
 		'fc::100:a:d:1:e:ac:0:1' // 9 words
 	], ( assert, ip ) => {
@@ -630,6 +724,11 @@ QUnit.module( 'mediawiki.util', QUnit.newMwEnvironment( {
 		} else {
 			assert.strictEqual( data.resizeUrl, null, 'resizeUrl is not set' );
 		}
+
+		if ( !thisCase.url.includes( '?' ) ) {
+			const dataWithParams = mw.util.parseImageUrl( thisCase.url + '?foo=bar' );
+			assert.strictEqual( dataWithParams.name, thisCase.name, 'file name (with added query parameters)' );
+		}
 	} );
 
 	QUnit.test( 'parseImageUrl [no dynamic thumbnail generation]', function ( assert ) {
@@ -640,6 +739,47 @@ QUnit.module( 'mediawiki.util', QUnit.newMwEnvironment( {
 
 		assert.strictEqual( typeof resizeUrl, 'function', 'resizeUrl is set' );
 		assert.strictEqual( resizeUrl( 500 ), '/w?title=Special:Redirect/file/Princess_Alexandra_of_Denmark_(later_Queen_Alexandra,_wife_of_Edward_VII)_with_her_two_eldest_sons,_Prince_Albert_Victor_(Eddy)_and_George_Frederick_Ernest_Albert_(later_George_V).jpg&width=500', 'Resized URL is correct' );
+	} );
+
+	QUnit.test.each( 'adjustThumbWidthForSteps', {
+		'unchanged when disabled': {
+			enabled: false,
+			originalWidth: 500,
+			thumbWidth: 52,
+			expected: 52
+		},
+		'round up': {
+			enabled: true,
+			originalWidth: 500,
+			thumbWidth: 52,
+			expected: 100
+		},
+		'original width when first step beyond original width': {
+			enabled: true,
+			originalWidth: 90,
+			thumbWidth: 52,
+			expected: 90
+		},
+		'original width when no other step between requested & original width': {
+			enabled: true,
+			originalWidth: 180,
+			thumbWidth: 130,
+			expected: 180
+		},
+		'unchanged when beyond available steps': {
+			enabled: true,
+			originalWidth: 500,
+			thumbWidth: 252,
+			expected: 252
+		}
+	}, ( assert, data ) => {
+		// See also server-side logic test for File::adjustThumbWidthForSteps in FileTest.php
+		mw.util.setOptionsForTest( {
+			ThumbnailSteps: data.enabled ? [ 100, 200 ] : []
+		} );
+
+		const actual = mw.util.adjustThumbWidthForSteps( data.thumbWidth, data.originalWidth );
+		assert.strictEqual( actual, data.expected );
 	} );
 
 	QUnit.test( 'escapeRegExp [normal]', ( assert ) => {

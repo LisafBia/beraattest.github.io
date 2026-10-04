@@ -135,7 +135,7 @@
 	"underline-always": "Пыр",
 	"tog-showhiddencats": "Петкӧдлыны сайӧдӧм категорияяссӧ",
 	"tog-showrollbackconfirmation": "Корны эскӧдӧм косӧдан ыстӧг вылӧ личкигӧн",
-	"tog-forcesafemode": "Пыр лэдзны [[mw:Manual:Safemode|ӧпастӧм режим]]",
+	"tog-forcesafemode": "Пыр лэдзны [[mw:Special:MyLanguage/Manual:Safemode|ӧпастӧм режим]]",
 	"prefs-help-forcesafemode": "Викиысь скриптъяс да стиль табличаяс тупкӧмаӧсь.",
 	"prefs-editing": "Вежӧм",
 	"prefs-description-editing": "Ладмӧдӧй, кыдзи ті пыртанныд, видзӧданныд да видлаланныд вежӧмъяссӧ.",
@@ -218,6 +218,7 @@
 	"search-thumbnail-extra-namespaces-label": "Петкӧдлыны миниатюрасӧ Special:Search-ын пызанвывса версияын",
 	"search-thumbnail-extra-namespaces-message": "Петкӧдлӧ аддзӧмтор миниатюраяссӧ $1 {{PLURAL:$2|ним пространстволы|ним пространствояслы}} {{#special:search}} лист бокын",
 	"prefs-advancedsearchoptions": "Паськӧдӧм параметръяс",
+	"prefs-misc": "Мӧдтор",
 	"prefs-reset-intro": "Ті верманныд вӧдитчыны тайӧ лист бокӧн, медым вежны ассьыныд ладмӧдӧмъяссӧ стандартнӧйяс вылӧ.\nТайӧ вӧчӧмторсӧ киритны оз позь.",
 	"prefs-reset-confirm": "Да, ме кӧсъя чӧвтны ассьым ладмӧдӧмъяс.",
 	"restoreprefs": "Бӧр вайӧдны висьтавтӧг став ладмӧдӧмсӧ"

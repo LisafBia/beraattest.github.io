@@ -301,15 +301,15 @@ FiltersViewModel.prototype.initializeFilters = function ( filterGroups, views ) 
 		};
 
 		// Title is a msg-key
-		// eslint-disable-next-line mediawiki/msg-doc
+
 		data.title = data.title ? mw.msg( data.title ) : data.name;
 
 		// Filters are given to us with msg-keys, we need
 		// to translate those before we hand them off
 		for ( i = 0; i < data.filters.length; i++ ) {
-			// eslint-disable-next-line mediawiki/msg-doc
+
 			data.filters[ i ].label = data.filters[ i ].label ? mw.msg( data.filters[ i ].label ) : data.filters[ i ].name;
-			// eslint-disable-next-line mediawiki/msg-doc
+
 			data.filters[ i ].description = data.filters[ i ].description ? mw.msg( data.filters[ i ].description ) : '';
 		}
 	} );
@@ -858,7 +858,7 @@ FiltersViewModel.prototype.getCurrentlyUsedHighlightColors = function () {
 		this.getHighlightedItems().forEach( ( filterItem ) => {
 			const color = filterItem.getHighlightColor();
 
-			if ( result.indexOf( color ) === -1 ) {
+			if ( !result.includes( color ) ) {
 				result.push( color );
 			}
 		} );
@@ -929,6 +929,21 @@ FiltersViewModel.prototype.areNamespacesEffectivelyInverted = function () {
 FiltersViewModel.prototype.areTagsEffectivelyInverted = function () {
 	return this.getTagsInvertModel().isSelected() &&
 		this.findSelectedItems().some( ( itemModel ) => itemModel.getGroupModel().getName() === 'tagfilter' );
+};
+
+/**
+ * Check whether the label invert state is a valid one. A valid invert state is one
+ * where there are actual labels selected.
+ *
+ * This is done to compare states to previous ones that may have had the invert model
+ * selected but effectively had no tags, so are not effectively different than
+ * ones where invert is not selected.
+ *
+ * @return {boolean} Invert is effectively selected
+ */
+FiltersViewModel.prototype.areWLLabelsEffectivelyInverted = function () {
+	return this.getWLLabelsInvertModel().isSelected() &&
+		this.findSelectedItems().some( ( itemModel ) => itemModel.getGroupModel().getName() === 'wllabel' );
 };
 
 /**
@@ -1035,11 +1050,11 @@ FiltersViewModel.prototype.findMatches = function ( query, returnFlat ) {
 	for ( let i = 0; i < items.length; i++ ) {
 		if (
 			searchIsEmpty ||
-			items[ i ].getLabel().toLowerCase().indexOf( query ) === 0 ||
+			items[ i ].getLabel().toLowerCase().startsWith( query ) ||
 			(
 				// For tags, we want the parameter name to be included in the search
 				view === 'tags' &&
-				items[ i ].getParamName().toLowerCase().indexOf( query ) > -1
+				items[ i ].getParamName().toLowerCase().includes( query )
 			)
 		) {
 			result[ items[ i ].getGroupName() ] = result[ items[ i ].getGroupName() ] || [];
@@ -1054,13 +1069,13 @@ FiltersViewModel.prototype.findMatches = function ( query, returnFlat ) {
 			const groupTitle = items[ i ].getGroupModel().getTitle();
 			if (
 				searchIsEmpty ||
-				items[ i ].getLabel().toLowerCase().indexOf( query ) > -1 ||
-				items[ i ].getDescription().toLowerCase().indexOf( query ) > -1 ||
-				groupTitle.toLowerCase().indexOf( query ) > -1 ||
+				items[ i ].getLabel().toLowerCase().includes( query ) ||
+				items[ i ].getDescription().toLowerCase().includes( query ) ||
+				groupTitle.toLowerCase().includes( query ) ||
 				(
 					// For tags, we want the parameter name to be included in the search
 					view === 'tags' &&
-					items[ i ].getParamName().toLowerCase().indexOf( query ) > -1
+					items[ i ].getParamName().toLowerCase().includes( query )
 				)
 			) {
 				result[ items[ i ].getGroupName() ] = result[ items[ i ].getGroupName() ] || [];
@@ -1198,7 +1213,7 @@ FiltersViewModel.prototype.setSearch = function ( searchQuery ) {
 		// eslint-disable-next-line no-jquery/no-each-util
 		$.each( this.getFilterGroups(), ( groupName, groupModel ) => {
 			// Check if the group is visible at all
-			groupModel.toggleVisible( visibleGroupNames.indexOf( groupName ) !== -1 );
+			groupModel.toggleVisible( visibleGroupNames.includes( groupName ) );
 			groupModel.setVisibleItems( visibleGroups[ groupName ] || [] );
 		} );
 
@@ -1264,6 +1279,16 @@ FiltersViewModel.prototype.toggleInvertedTags = function ( enable ) {
 };
 
 /**
+ * Toggle the inverted labels property on and off.
+ * Propagate the change to tag filter items.
+ *
+ * @param {boolean} enable Inverted property is enabled
+ */
+FiltersViewModel.prototype.toggleInvertedWLLabels = function ( enable ) {
+	this.toggleFilterSelected( this.getWLLabelsInvertModel().getName(), enable );
+};
+
+/**
  * Toggle the inverted namespaces property on and off.
  * Propagate the change to namespace filter items.
  *
@@ -1287,12 +1312,15 @@ FiltersViewModel.prototype.getInvertModel = function ( view ) {
 	if ( view === 'tags' ) {
 		return this.getTagsInvertModel();
 	}
+	if ( view === 'wllabels' ) {
+		return this.getWLLabelsInvertModel();
+	}
 
 	return null;
 };
 
 /**
- * Get the model object that represents the 'invert' filter
+ * Get the model object that represents the 'invert' filter for namespaces
  *
  * @ignore
  * @return {mw.rcfilters.dm.FilterItem}
@@ -1302,13 +1330,23 @@ FiltersViewModel.prototype.getNamespacesInvertModel = function () {
 };
 
 /**
- * Get the model object that represents the 'invert' filter
+ * Get the model object that represents the 'invert' filter for tags
  *
  * @ignore
  * @return {mw.rcfilters.dm.FilterItem}
  */
 FiltersViewModel.prototype.getTagsInvertModel = function () {
 	return this.getGroup( 'invertTagsGroup' ).getItemByParamName( 'inverttags' );
+};
+
+/**
+ * Get the model object that represents the 'invert' filter for labels
+ *
+ * @ignore
+ * @return {mw.rcfilters.dm.FilterItem}
+ */
+FiltersViewModel.prototype.getWLLabelsInvertModel = function () {
+	return this.getGroup( 'invertWLLabelsGroup' ).getItemByParamName( 'invertwllabels' );
 };
 
 /**

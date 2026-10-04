@@ -87,7 +87,7 @@ const util = {
 	 * @param {string} str String to encode
 	 * @return {string} Encoded string
 	 */
-	escapeIdForAttribute: function ( str ) {
+	escapeIdForAttribute( str ) {
 		return escapeIdInternal( str, config.FragmentMode[ 0 ] );
 	},
 
@@ -100,7 +100,7 @@ const util = {
 	 * @param {string} str String to encode
 	 * @return {string} Encoded string
 	 */
-	escapeIdForLink: function ( str ) {
+	escapeIdForLink( str ) {
 		return escapeIdInternal( str, config.FragmentMode[ 0 ] );
 	},
 
@@ -123,7 +123,7 @@ const util = {
 	 *  Taken from location.hash if omitted.
 	 * @return {HTMLElement|null} Element, if found
 	 */
-	getTargetFromFragment: function ( hash ) {
+	getTargetFromFragment( hash ) {
 		hash = hash || location.hash.slice( 1 );
 		if ( !hash ) {
 			// Firefox emits a console warning if you pass an empty string
@@ -159,7 +159,7 @@ const util = {
 	 * @param {string} text Text to decode
 	 * @return {string|null} Decoded text, null if decoding failed
 	 */
-	percentDecodeFragment: function ( text ) {
+	percentDecodeFragment( text ) {
 		const params = new URLSearchParams(
 			'q=' +
 			text
@@ -189,7 +189,7 @@ const util = {
 	 * @param {boolean} [immediate] Trigger on leading edge
 	 * @return {Function} Debounced function
 	 */
-	debounce: function ( func, wait, immediate ) {
+	debounce( func, wait, immediate ) {
 		// Old signature (wait, func).
 		if ( typeof func === 'number' ) {
 			const tmpWait = wait;
@@ -231,7 +231,7 @@ const util = {
 	 * @param {number} wait Throttle window length, in milliseconds
 	 * @return {Function} Throttled function
 	 */
-	throttle: function ( func, wait ) {
+	throttle( func, wait ) {
 		let context, args, timeout,
 			previous = Date.now() - wait;
 		const run = function () {
@@ -279,7 +279,7 @@ const util = {
 	 *  e.g. `{ action: 'edit' }`
 	 * @return {string} URL, relative to `wgServer`.
 	 */
-	getUrl: function ( pageName, params ) {
+	getUrl( pageName, params ) {
 		let url, query, fragment,
 			title = typeof pageName === 'string' ? pageName : mw.config.get( 'wgPageName' );
 
@@ -291,9 +291,20 @@ const util = {
 			title = title.slice( 0, fragmentIdx );
 		}
 
+		const variantArticlePath = mw.config.get( 'wgVariantArticlePath' );
+		let variant = mw.config.get( 'wgUserVariant' );
+		let isVariantOnly = false;
+
 		// Produce query string
 		if ( params ) {
-			query = $.param( params );
+			if ( variantArticlePath && params.variant && Object.keys( params ).length === 1 ) {
+				variant = params.variant;
+				isVariantOnly = true;
+			} else {
+				query = $.param( params );
+			}
+		} else if ( variantArticlePath && variant ) {
+			isVariantOnly = true;
 		}
 
 		if ( !title && fragment ) {
@@ -303,6 +314,12 @@ const util = {
 			url = title ?
 				util.wikiScript() + '?title=' + util.wikiUrlencode( title ) + '&' + query :
 				util.wikiScript() + '?' + query;
+		} else if ( isVariantOnly ) {
+			// Specify a function as the replacement,
+			// so that "$" characters in title are not interpreted.
+			url = variantArticlePath
+				.replace( '$2', () => util.wikiUrlencode( variant ) )
+				.replace( '$1', () => util.wikiUrlencode( title ) );
 		} else {
 			// Specify a function as the replacement,
 			// so that "$" characters in title are not interpreted.
@@ -327,7 +344,7 @@ const util = {
 	 * @param {string} [str="index"] Name of entry point (e.g. 'index' or 'api')
 	 * @return {string} URL to the script file (e.g. `/w/api.php`)
 	 */
-	wikiScript: function ( str ) {
+	wikiScript( str ) {
 		if ( !str || str === 'index' ) {
 			return mw.config.get( 'wgScript' );
 		} else if ( str === 'load' ) {
@@ -358,7 +375,7 @@ const util = {
 	 * @param {string} text CSS to be appended
 	 * @return {CSSStyleSheet} The sheet object
 	 */
-	addCSS: function ( text ) {
+	addCSS( text ) {
 		const s = mw.loader.addStyleTag( text );
 		return s.sheet;
 	},
@@ -375,7 +392,7 @@ const util = {
 	 * @param {string} [url=location.href] URL to search through, defaulting to the current browsing location.
 	 * @return {string|null} Parameter value, or null if parameter was not found.
 	 */
-	getParamValue: function ( param, url ) {
+	getParamValue( param, url ) {
 		// Get last match, stop at hash
 
 		const re = new RegExp( '^[^#]*[&?]' + util.escapeRegExp( param ) + '=([^&#]*)' ),
@@ -409,7 +426,7 @@ const util = {
 	 * @param {URLSearchParams} [params] Parsed URL parameters to search through, defaulting to the current browsing location.
 	 * @return {string[]|null} Parameter value, or null if parameter was not found.
 	 */
-	getArrayParam: function ( param, params ) {
+	getArrayParam( param, params ) {
 
 		const paramRe = new RegExp( '^' + util.escapeRegExp( param ) + '\\[(\\d*)\\]$' );
 
@@ -459,7 +476,7 @@ const util = {
 	 *
 	 * @param {string} portletId ID of the target portlet (e.g. 'p-cactions' or 'p-personal')
 	 */
-	hidePortlet: function ( portletId ) {
+	hidePortlet( portletId ) {
 		const portlet = document.getElementById( portletId );
 		if ( portlet ) {
 			portlet.classList.add( 'emptyPortlet' );
@@ -472,7 +489,7 @@ const util = {
 	 * @param {string} portletId ID of the target portlet (e.g. 'p-cactions' or 'p-personal')
 	 * @return {boolean}
 	 */
-	isPortletVisible: function ( portletId ) {
+	isPortletVisible( portletId ) {
 		const portlet = document.getElementById( portletId );
 		return portlet && !portlet.classList.contains( 'emptyPortlet' );
 	},
@@ -482,7 +499,7 @@ const util = {
 	 *
 	 * @param {string} portletId ID of the target portlet (e.g. 'p-cactions' or 'p-personal')
 	 */
-	showPortlet: function ( portletId ) {
+	showPortlet( portletId ) {
 		const portlet = document.getElementById( portletId );
 		if ( portlet ) {
 			portlet.classList.remove( 'emptyPortlet' );
@@ -493,7 +510,7 @@ const util = {
 	 * Clears the entire subtitle if present in the page. Used for refreshing subtitle
 	 * after edit with response from parse API.
 	 */
-	clearSubtitle: function () {
+	clearSubtitle() {
 		const subtitle = document.getElementById( 'mw-content-subtitle' );
 		if ( subtitle ) {
 			subtitle.innerHTML = '';
@@ -510,11 +527,11 @@ const util = {
 	 * @param {boolean} [inline] whether the notice should be inline.
 	 * @return {Element}
 	 */
-	messageBox: function ( textOrElement, type = 'notice', inline = false ) {
+	messageBox( textOrElement, type = 'notice', inline = false ) {
 		const msgBoxElement = document.createElement( 'div' );
 		msgBoxElement.classList.add( 'cdx-message' );
 
-		if ( [ 'error', 'warning', 'success', 'notice' ].indexOf( type ) > -1 ) {
+		if ( [ 'error', 'warning', 'success', 'notice' ].includes( type ) ) {
 			// The following CSS classes are used here:
 			// * cdx-message--notice
 			// * cdx-message--warning
@@ -548,49 +565,72 @@ const util = {
 	 * Add content to the subtitle of the skin.
 	 *
 	 * @param {HTMLElement|string} nodeOrHTMLString
+	 * @return {boolean} Whether the subtitle was updated
 	 */
-	addSubtitle: function ( nodeOrHTMLString ) {
+	addSubtitle( nodeOrHTMLString ) {
 		const subtitle = document.getElementById( 'mw-content-subtitle' );
-		if ( subtitle ) {
-			if ( typeof nodeOrHTMLString === 'string' ) {
-				subtitle.innerHTML += nodeOrHTMLString;
-			} else {
-				subtitle.appendChild( nodeOrHTMLString );
-			}
-		} else {
-			throw new Error( 'This skin does not support additions to the subtitle.' );
+		if ( !subtitle ) {
+			return false;
 		}
+		if ( typeof nodeOrHTMLString === 'string' ) {
+			subtitle.innerHTML += nodeOrHTMLString;
+		} else {
+			subtitle.appendChild( nodeOrHTMLString );
+		}
+		return true;
 	},
+
+	/**
+	 * @typedef {Object} PortletOptions
+	 * @property {string} [label] Label of the new portlet.
+	 * @property {string} [selectorHint] Selector of the element the new portlet would like to be
+	 *  inserted near. Typically the portlet will be inserted after this selector, but in some
+	 *  skins, the skin may relocate the element to another available space.
+	 *
+	 *  When provided, skins can use the parameter to infer information about how the user intended
+	 *  the menu to be rendered. For example, in vector and vector-2022 targeting `#p-cactions` will
+	 *  result in the creation of a dropdown menu.
+	 *
+	 *  If this argument is not passed, then the caller is responsible for appending the element to
+	 *  the DOM before using addPortletLink.
+	 *
+	 *  To add a portlet in an exact position do not rely on this parameter, instead assign the
+	 *  returned element to a variable, and use `yourTarget.appendChild( portlet );`
+	 * @property {boolean} [useDivLabel] Set to `true` to use a `<div>` for the portlet label
+	 *  instead of a `<label>` element. (Using a `<label>` is only valid within a `<form>`.)
+	 */
 
 	/**
 	 * Creates a detached portlet Element in the skin with no elements.
 	 *
 	 * @example
-	 * // Create a portlet with 2 menu items that is styled as a dropdown in certain skins.
-	 * const p = mw.util.addPortlet( 'p-myportlet', 'My label', '#p-cactions' );
-	 * mw.util.addPortletLink( 'p-myportlet', '#', 'Link 1' );
-	 * mw.util.addPortletLink( 'p-myportlet', '#', 'Link 2' );
-	 * @param {string} id of the new portlet.
-	 * @param {string} [label] of the new portlet.
-	 * @param {string} [selectorHint] selector of the element the new portlet would like to
-	 *  be inserted near. Typically the portlet will be inserted after this selector, but in some
-	 *  skins, the skin may relocate the element when provided to the closest available space.
-	 *  If this argument is not passed then the caller is responsible for appending the element
-	 *  to the DOM before using addPortletLink.
-	 *  To add a portlet in an exact position do not rely on this parameter, instead using the return
-	 *  element (make sure to also assign the result to a variable), use
-	 *  ```p.parentNode.appendChild( p );```
-	 *  When provided, skins can use the parameter to infer information about how the user intended
-	 *  the menu to be rendered. For example, in vector and vector-2022 targeting '#p-cactions' will
-	 *  result in the creation of a dropdown.
+	 * // Create a portlet with 2 menu items that uses a <div> label
+	 * // and is styled as a dropdown in certain skins.
+	 * mw.util.addPortlet( 'p-myportlet', {
+	 *     label: 'My label',
+	 *     selectorHint: '#p-cactions'
+	 * } );
+	 * mw.util.addPortletLink( 'p-myportlet', { href: '#', text: 'Link 1' } );
+	 * mw.util.addPortletLink( 'p-myportlet', { href: '#', text: 'Link 2' } );
+	 *
+	 * @param {string} id ID of the new portlet.
+	 * @param {PortletOptions|string} [labelOrOptions] Options for the portlet. If a string, this
+	 *  will fall back to label for backwards compatibility.
+	 * @param {string} [_selectorHint] For backwards compatibility. See PortletOptions for
+	 *  documentation.
 	 * @fires Hooks~'util.addPortlet'
-	 * @return {HTMLElement|null} will be null if it was not possible to create an portlet with
-	 *  the required information e.g. the selector given in `selectorHint` parameter could not be resolved
-	 *  to an existing element in the page.
+	 * @return {HTMLElement|null} will be null if it was not possible to create an portlet with the
+	 *  required information e.g. the selector given in `selectorHint` parameter could not be
+	 *  resolved to an existing element in the page.
 	 */
-	addPortlet: function ( id, label, selectorHint ) {
+	addPortlet( id, labelOrOptions, _selectorHint ) {
+		const options = $.isPlainObject( labelOrOptions ) ? labelOrOptions : {
+			label: labelOrOptions,
+			selectorHint: _selectorHint
+		};
+		const { label, selectorHint, useDivLabel } = options;
 		const portlet = document.createElement( 'div' );
-		// These classes should be kept in sync with includes/skins/components/SkinComponentMenu.php.
+		// These classes should be kept in sync with includes/Skin/Components/SkinComponentMenu.php.
 		// eslint-disable-next-line mediawiki/class-doc
 		portlet.classList.add( 'mw-portlet', 'mw-portlet-' + id, 'emptyPortlet',
 			// Additional class is added to allow skins to track portlets added via this mechanism.
@@ -598,7 +638,7 @@ const util = {
 		);
 		portlet.id = id;
 		if ( label ) {
-			const labelNode = document.createElement( 'label' );
+			const labelNode = document.createElement( useDivLabel ? 'div' : 'label' );
 			labelNode.textContent = label;
 			portlet.appendChild( labelNode );
 		}
@@ -614,8 +654,7 @@ const util = {
 				// CSS selector not supported by browser.
 			}
 			if ( referenceNode ) {
-				const parentNode = referenceNode.parentNode;
-				parentNode.insertBefore( portlet, referenceNode );
+				referenceNode.after( portlet );
 			} else {
 				return null;
 			}
@@ -636,70 +675,107 @@ const util = {
 		mw.hook( 'util.addPortlet' ).fire( portlet, selectorHint );
 		return portlet;
 	},
+
+	/**
+	 * @typedef {Object} PortletLinkOptions
+	 * @property {string} href Link URL
+	 * @property {string} text Link text
+	 * @property {string} [id] ID of the list item, should be unique and preferably have the
+	 *  appropriate prefix ('ca-', 'pt-', 'n-' or 't-')
+	 * @property {string} [tooltip] Text to show when hovering over the link, without accesskey
+	 *  suffix
+	 * @property {string} [accesskey] Access key to activate this link. One character only, avoid
+	 *  conflicts with other links. Use `$( '[accesskey=x]' )` in the console to see if 'x' is
+	 *  already used.
+	 * @property {HTMLElement|jQuery|string} [nextnode] Element that the new item should be added
+	 *  before. Must be another item in the same list, it will be ignored otherwise. Can be
+	 *  specified as DOM reference, as jQuery object, or as CSS selector string.
+	 * @property {string} [icon] Name of the Codex icon name this menu should use if skin supports
+	 *  this.
+	 */
+
 	/**
 	 * Add a link to a portlet menu on the page.
 	 *
 	 * The portlets that are supported include:
 	 *
-	 * - p-cactions (Content actions)
-	 * - p-personal (Personal tools)
-	 * - p-navigation (Navigation)
-	 * - p-tb (Toolbox)
-	 * - p-associated-pages (For namespaces and special page tabs on supported skins)
-	 * - p-namespaces (For namespaces on legacy skins)
+	 * - `p-cactions` (Content actions)
+	 * - `p-personal` (Personal tools)
+	 * - `p-navigation` (Navigation)
+	 * - `p-tb` (Toolbox)
+	 * - `p-associated-pages` (For namespaces and special page tabs on supported skins)
+	 * - `p-dock-bottom` (A sticky menu fixed to bottom of viewport on supported skins)
+	 * - `p-namespaces` (For namespaces on legacy skins)
 	 *
 	 * Additional menus can be discovered through the following code:
 	 * ```$('.mw-portlet').toArray().map((el) => el.id);```
 	 *
 	 * Menu availability varies by skin, wiki, and current page.
 	 *
-	 * The first three parameters are required, the others are optional and
-	 * may be null. Though providing an id and tooltip is recommended.
+	 * The first three parameters are required, the others are optional and may be null. Though
+	 * providing an id and tooltip is recommended.
 	 *
-	 * By default, the new link will be added to the end of the menu. To
-	 * add the link before an existing item, pass the DOM node or a CSS selector
-	 * for that item, e.g. `'#foobar'` or `document.getElementById( 'foobar' )`.
+	 * By default, the new link will be added to the end of the menu. To add the link before an
+	 * existing item, pass the DOM node or a CSS selector for that item, e.g. `'#foobar'` or
+	 * `document.getElementById( 'foobar' )`.
 	 * ```
-	 * mw.util.addPortletLink(
-	 *     'p-tb', 'https://www.mediawiki.org/',
-	 *     'mediawiki.org', 't-mworg', 'Go to mediawiki.org', 'm', '#t-print'
-	 * );
+	 * mw.util.addPortletLink( 'p-tb', {
+	 *     href: 'https://www.mediawiki.org/',
+	 *     text: 'mediawiki.org',
+	 *     id: 't-mworg',
+	 *     tooltip: 'Go to mediawiki.org',
+	 *     accesskey: 'm',
+	 *     nextnode: '#t-print'
+	 * } );
 	 *
-	 * var node = mw.util.addPortletLink(
-	 *     'p-tb',
-	 *     mw.util.getUrl( 'Special:Example' ),
-	 *     'Example'
-	 * );
+	 * var node = mw.util.addPortletLink( 'p-tb', {
+	 *     href: mw.util.getUrl( 'Special:Example' ),
+	 *     text: 'Example'
+	 * } );
 	 * $( node ).on( 'click', function ( e ) {
 	 *     console.log( 'Example' );
 	 *     e.preventDefault();
 	 * } );
 	 * ```
 	 *
-	 * Remember that to call this inside a user script, you may have to ensure the
-	 * `mediawiki.util` is loaded first:
+	 * Remember that to call this inside a user script, you may have to ensure the `mediawiki.util`
+	 * is loaded first:
 	 * ```
 	 * $.when( mw.loader.using( [ 'mediawiki.util' ] ), $.ready ).then( function () {
-	 *      mw.util.addPortletLink( 'p-tb', 'https://www.mediawiki.org/', 'mediawiki.org' );
+	 *     mw.util.addPortletLink( 'p-tb', {
+	 *         href: 'https://www.mediawiki.org/',
+	 *         text: 'mediawiki.org'
+	 *     } );
 	 * } );
 	 * ```
 	 *
-	 * @param {string} portletId ID of the target portlet (e.g. 'p-cactions' or 'p-personal')
-	 * @param {string} href Link URL
-	 * @param {string} text Link text
-	 * @param {string} [id] ID of the list item, should be unique and preferably have
-	 *  the appropriate prefix ('ca-', 'pt-', 'n-' or 't-')
-	 * @param {string} [tooltip] Text to show when hovering over the link, without accesskey suffix
-	 * @param {string} [accesskey] Access key to activate this link. One character only,
-	 *  avoid conflicts with other links. Use `$( '[accesskey=x]' )` in the console to
-	 *  see if 'x' is already used.
-	 * @param {HTMLElement|jQuery|string} [nextnode] Element that the new item should be added before.
-	 *  Must be another item in the same list, it will be ignored otherwise.
-	 *  Can be specified as DOM reference, as jQuery object, or as CSS selector string.
+	 * @param {string} portletId ID of the target portlet (e.g. 'p-cactions' or 'p-personal').
+	 * @param {PortletLinkOptions|string} hrefOrOptions Portlet link options. If a string, this will
+	 *  fall back to href for backwards compatibility.
+	 * @param {string} [_text] For backwards compatibility. See PortletLinkOptions for
+	 *  documentation.
+	 * @param {string} [_id] For backwards compatibility. See PortletLinkOptions for documentation.
+	 * @param {string} [_tooltip] For backwards compatibility. See PortletLinkOptions for
+	 *  documentation.
+	 * @param {string} [_accesskey] For backwards compatibility. See PortletLinkOptions for
+	 *  documentation.
+	 * @param {HTMLElement|jQuery|string} [_nextnode] For backwards compatibility. See
+	 *  PortletLinkOptions for documentation.
 	 * @fires Hooks~'util.addPortletLink'
 	 * @return {HTMLElement|null} The added list item, or null if no element was added.
 	 */
-	addPortletLink: function ( portletId, href, text, id, tooltip, accesskey, nextnode ) {
+	addPortletLink( portletId, hrefOrOptions, _text, _id, _tooltip, _accesskey, _nextnode ) {
+		const options = $.isPlainObject( hrefOrOptions ) ? hrefOrOptions : {
+			href: hrefOrOptions,
+			text: _text,
+			id: _id,
+			tooltip: _tooltip,
+			accesskey: _accesskey,
+			nextnode: _nextnode
+		};
+		const { href, text, id, tooltip, accesskey } = options;
+		let { nextnode } = options;
+
 		if ( !portletId ) {
 			// Avoid confusing id="undefined" lookup
 			return null;
@@ -794,17 +870,16 @@ const util = {
 		 * @event ~'util.addPortletLink'
 		 * @memberof Hooks
 		 * @param {HTMLElement} item the portlet link that was created.
-		 * @param {Object} information about the item include id.
+		 * @param {PortletLinkOptions} options configuration options passed to addPortletLink.
 		 *
 		 * @example
-		 * mw.hook( 'util.addPortletLink' ).add( ( link ) => {
-		 *     const span = $( '<span class="icon">' );
-		 *     link.appendChild( span );
+		 * mw.hook( 'util.addPortletLink' ).add( ( link, options ) => {
+		 *     if ( options.id === 't-special-link' ) {
+		 *         link.classList.add( 'my-special-class' );
+		 *     }
 		 * } );
 		 */
-		mw.hook( 'util.addPortletLink' ).fire( item, {
-			id: id
-		} );
+		mw.hook( 'util.addPortletLink' ).fire( item, options );
 		return item;
 	},
 
@@ -819,7 +894,7 @@ const util = {
 	 * @param {string} email E-mail address
 	 * @return {boolean|null} True if valid, false if invalid, null if `email` was empty.
 	 */
-	validateEmail: function ( email ) {
+	validateEmail( email ) {
 		if ( email === '' ) {
 			return null;
 		}
@@ -892,7 +967,7 @@ const util = {
 	 * @param {boolean} [allowBlock=false]
 	 * @return {boolean}
 	 */
-	isIPv4Address: function ( address, allowBlock ) {
+	isIPv4Address( address, allowBlock ) {
 
 		if ( typeof address !== 'string' ) {
 			return false;
@@ -923,7 +998,7 @@ const util = {
 	 * @param {boolean} [allowBlock=false]
 	 * @return {boolean}
 	 */
-	isIPv6Address: function ( address, allowBlock ) {
+	isIPv6Address( address, allowBlock ) {
 		if ( typeof address !== 'string' ) {
 			return false;
 		}
@@ -973,7 +1048,7 @@ const util = {
 	 * @param {boolean} [allowBlock=false] If a block of IPs should be allowed
 	 * @return {boolean}
 	 */
-	isIPAddress: function ( address, allowBlock ) {
+	isIPAddress( address, allowBlock ) {
 		return util.isIPv4Address( address, allowBlock ) ||
 			util.isIPv6Address( address, allowBlock );
 	},
@@ -1001,7 +1076,7 @@ const util = {
 	 * @return {ResizeableThumbnailUrl|null} null if the URL is not a valid MediaWiki
 	 *   image/thumbnail URL.
 	 */
-	parseImageUrl: function ( url ) {
+	parseImageUrl( url ) {
 		let name, decodedName, width, urlTemplate;
 
 		// thumb.php-generated thumbnails
@@ -1018,20 +1093,20 @@ const util = {
 				// where <name*> could be the filename, 'thumbnail.<ext>' (for long filenames)
 				// or the base-36 SHA1 of the filename.
 
-				/\/[\da-f]\/[\da-f]{2}\/([^\s/]+)\/(?:[^\s/]+-)?(\d+)px-(?:\1|thumbnail|[a-z\d]{31})(\.[^\s/]+)?$/,
+				/\/[\da-f]\/[\da-f]{2}\/([^\s/]+)\/(?:[^\s/]+-)?(\d+)px-(?:\1|thumbnail|[a-z\d]{31})(?:\.[^\s/?]+)?(?:\?[^\s]+)?$/,
 
 				// Full size images
 				// /<hash prefix>/<name>
-				/\/[\da-f]\/[\da-f]{2}\/([^\s/]+)$/,
+				/\/[\da-f]\/[\da-f]{2}\/([^\s/?]+)(?:\?[^\s]+)?$/,
 
 				// Thumbnails in non-hashed upload directories
 				// /<name>/[<options>-]<width>-<name*>[.<ext>]
 
-				/\/([^\s/]+)\/(?:[^\s/]+-)?(\d+)px-(?:\1|thumbnail|[a-z\d]{31})[^\s/]*$/,
+				/\/([^\s/]+)\/(?:[^\s/]+-)?(\d+)px-(?:\1|thumbnail|[a-z\d]{31})[^\s/?]*(?:\?[^\s]+)?$/,
 
 				// Full-size images in non-hashed upload directories
 				// /<name>
-				/\/([^\s/]+)$/
+				/\/([^\s/?]+)(?:\?[^\s]+)?$/
 			];
 			for ( let i = 0; i < regexes.length; i++ ) {
 				const match = url.match( regexes[ i ] );
@@ -1066,12 +1141,46 @@ const util = {
 			return {
 				name: decodedName.replace( /_/g, ' ' ),
 				width,
-				resizeUrl: urlTemplate ? function ( w ) {
-					return urlTemplate.replace( '{width}', w );
-				} : null
+				resizeUrl: urlTemplate ? ( w ) => urlTemplate.replace( '{width}', w ) : null
 			};
 		}
 		return null;
+	},
+
+	/**
+	 * Adjust the thumbnail size to fit the width steps defined in config via
+	 * config.ThumbnailSteps
+	 *
+	 * This logic is duplicated server-side in File::adjustThumbWidthForSteps.
+	 *
+	 * @param {number} thumbWidth Target width in pixels
+	 * @param {number} originalWidth Original file width
+	 * @param {boolean} isVectorized whether the image is svg or similar
+	 * @return {number} Adjusted thumbnail width in pixels
+	 */
+	adjustThumbWidthForSteps(
+		thumbWidth,
+		originalWidth,
+		isVectorized = false
+	) {
+		const steps = config.ThumbnailSteps;
+		if ( !steps ) {
+			return thumbWidth;
+		}
+
+		for ( const widthStep of steps ) {
+			if ( widthStep > originalWidth && !isVectorized ) {
+				// Round up to original width if there is no step between
+				// desired thumb width & original file width
+				return originalWidth;
+			}
+			if ( widthStep >= thumbWidth ) {
+				return widthStep;
+			}
+		}
+
+		// If no step matched, default to target thumb width
+		return thumbWidth;
 	},
 
 	/**
@@ -1085,7 +1194,7 @@ const util = {
 	 * @param {string} str String to escape
 	 * @return {string} Escaped string
 	 */
-	escapeRegExp: function ( str ) {
+	escapeRegExp( str ) {
 		// eslint-disable-next-line no-useless-escape
 		return str.replace( /([\\{}()|.?*+\-^$\[\]])/g, '\\$1' );
 	},
@@ -1102,7 +1211,7 @@ const util = {
 	 * @param {string} ip IP address in quad or octet form (CIDR or not).
 	 * @return {string|null}
 	 */
-	sanitizeIP: function ( ip ) {
+	sanitizeIP( ip ) {
 		if ( typeof ip !== 'string' ) {
 			return null;
 		}
@@ -1151,14 +1260,14 @@ const util = {
 	 * @param {string} ip IP address in quad or octet form (CIDR or not).
 	 * @return {string|null}
 	 */
-	prettifyIP: function ( ip ) {
+	prettifyIP( ip ) {
 		ip = this.sanitizeIP( ip );
 		if ( ip === null ) {
 			return null;
 		}
 		if ( this.isIPv6Address( ip, true ) ) {
 			let cidr, replaceZeros;
-			if ( ip.indexOf( '/' ) !== -1 ) {
+			if ( ip.includes( '/' ) ) {
 				const ipCidrSplit = ip.split( '/', 2 );
 				ip = ipCidrSplit[ 0 ];
 				cidr = ipCidrSplit[ 1 ];
@@ -1192,7 +1301,7 @@ const util = {
 	 * @param {string|null} username
 	 * @return {boolean}
 	 */
-	isTemporaryUser: function ( username ) {
+	isTemporaryUser( username ) {
 		// Just return early if temporary accounts are not known about.
 		if ( !config.AutoCreateTempUser.enabled && !config.AutoCreateTempUser.known ) {
 			return false;
@@ -1221,10 +1330,10 @@ const util = {
 
 			let match = true;
 			if ( prefix !== '' ) {
-				match = ( username.indexOf( prefix ) === 0 );
+				match = username.startsWith( prefix );
 			}
 			if ( match && suffix !== '' ) {
-				match = ( username.slice( -suffix.length ) === suffix ) &&
+				match = ( username.endsWith( suffix ) ) &&
 					( username.length >= prefix.length + suffix.length );
 			}
 			if ( match ) {
@@ -1244,8 +1353,8 @@ const util = {
 	 * @return {boolean}
 	 * @stable
 	 */
-	isInfinity: function ( str ) {
-		return infinityValues.indexOf( str ) !== -1;
+	isInfinity( str ) {
+		return infinityValues.includes( str );
 	}
 };
 

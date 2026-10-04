@@ -22,9 +22,8 @@ use Wikimedia\Rdbms\IConnectionProvider;
 class EventDispatchEngine implements DomainEventDispatcher, DomainEventSource {
 
 	/**
-	 * An associative array mapping event names and invocation modes to
-	 * lists of listeners.
-	 * @var array<string,array<string,array<callable>>>
+	 * An associative array mapping event names to lists of listeners.
+	 * @var array<string,array<callable>>
 	 */
 	private array $listeners = [];
 
@@ -45,21 +44,25 @@ class EventDispatchEngine implements DomainEventDispatcher, DomainEventSource {
 	 * Emit the given event to any listeners that have been registered for
 	 * the respective event type.
 	 *
-	 * Dispatches the given event to any registered listeners, according to the
-	 * invocation mode specified when the listener was registered.
-	 * See the INVOKE_XXX constants on DomainEventSource for details.
+	 * Listeners are invoked through DeferredUpdates.
 	 */
 	public function dispatch( DomainEvent $event, IConnectionProvider $dbProvider ): void {
-		$this->resolveSubscribers( $event->getEventType() );
-		$listeners = $this->listeners[ $event->getEventType() ] ?? [];
-
-		// Invoke listeners registered for handling DURING_TRANSACTION.
-		foreach ( $listeners[ DomainEventSource::INVOKE_BEFORE_COMMIT ] ?? [] as $callback ) {
-			$this->invoke( $callback, $event, $dbProvider );
+		foreach ( $event->getEventTypeChain() as $type ) {
+			$this->dispatchAs( $type, $event, $dbProvider );
 		}
+	}
+
+	private function dispatchAs( string $type, DomainEvent $event, IConnectionProvider $dbProvider ): void {
+		$this->resolveSubscribers( $type );
+		$listeners = $this->listeners[ $type ] ?? [];
+
+		// NOTE: If we want to introduce a synchronous or pre-commit invocation mode
+		//       here, it should only be used if the emitter opts into this.
+		//       The contract of the dispatch() method doesn't allow listeners
+		//       to be invoked within the current transaction.
 
 		// Push a DeferredUpdate for listeners registered for handling AFTER_COMMIT.
-		foreach ( $listeners[ DomainEventSource::INVOKE_AFTER_COMMIT ] ?? [] as $callback ) {
+		foreach ( $listeners ?? [] as $callback ) {
 			$this->push( $callback, $event, $dbProvider );
 		}
 	}
@@ -69,24 +72,19 @@ class EventDispatchEngine implements DomainEventDispatcher, DomainEventSource {
 	 *
 	 * @param string $eventType
 	 * @param callable $listener
-	 * @param array $options Options that control how the listener is invoked.
-	 *        Well known keys:
-	 *        - self::DISPATCH_MODE: one of the invocation mode constants defined
-	 *          in DomainEventSource, e.g. self::AFTER_COMMIT.
+	 * @param array $options Currently unused. In the future, $options may
+	 *        convey things like the listener priority or error handling.
 	 */
 	public function registerListener(
 		string $eventType,
 		$listener,
 		array $options = self::DEFAULT_LISTENER_OPTIONS
 	): void {
-		$options += self::DEFAULT_LISTENER_OPTIONS;
-		$mode = $options[ self::INVOCATION_MODE ];
-
 		if ( !is_callable( $listener ) ) {
 			throw new InvalidArgumentException( '$listener must be callable' );
 		}
 
-		$this->listeners[$eventType][$mode][] = $listener;
+		$this->listeners[$eventType][] = $listener;
 	}
 
 	/**
@@ -160,6 +158,7 @@ class EventDispatchEngine implements DomainEventDispatcher, DomainEventSource {
 
 		if ( $this->pendingSubscribers[$eventType] ) {
 			// If more pending subscribers got added, recurse!
+			// @phan-suppress-next-line PhanPossiblyInfiniteRecursionSameParams We've changed the data
 			$this->resolveSubscribers( $eventType );
 		}
 	}
@@ -191,8 +190,8 @@ class EventDispatchEngine implements DomainEventDispatcher, DomainEventSource {
 		// the current transactional context!
 		$dbw = $dbProvider->getPrimaryDatabase();
 		DeferredUpdates::addUpdate( new MWCallableUpdate(
-			function () use ( $callback, $event, $dbProvider ) {
-				$this->invoke( $callback, $event, $dbProvider );
+			function () use ( $callback, $event ) {
+				$this->invoke( $callback, $event );
 			},
 			__METHOD__,
 			[ $dbw ]
@@ -202,12 +201,8 @@ class EventDispatchEngine implements DomainEventDispatcher, DomainEventSource {
 	/**
 	 * Invokes the given listener on the given event
 	 */
-	private function invoke(
-		callable $callback,
-		DomainEvent $event,
-		IConnectionProvider $dbProvider
-	) {
-		$callback( $event, $dbProvider );
+	private function invoke( callable $callback, DomainEvent $event ) {
+		$callback( $event );
 	}
 
 }

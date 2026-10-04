@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Categories
  */
@@ -49,21 +35,6 @@ class TrackingCategories {
 		MainConfigNames::EnableMagicLinks,
 	];
 
-	/** @var ServiceOptions */
-	private $options;
-
-	/** @var NamespaceInfo */
-	private $namespaceInfo;
-
-	/** @var TitleParser */
-	private $titleParser;
-
-	/** @var ExtensionRegistry */
-	private $extensionRegistry;
-
-	/** @var LoggerInterface */
-	private $logger;
-
 	/**
 	 * Tracking categories that exist in core
 	 */
@@ -88,23 +59,20 @@ class TrackingCategories {
 		'unstrip-depth-category',
 		'unstrip-size-category',
 		'bad-language-code-category',
+		'bad-double-underscore-category',
 		'double-px-category',
+		# Emitted in Parsoid
+		'media-limit-reached',
 	];
 
 	public function __construct(
-		ServiceOptions $options,
-		NamespaceInfo $namespaceInfo,
-		TitleParser $titleParser,
-		LoggerInterface $logger
+		private readonly ServiceOptions $options,
+		private readonly ExtensionRegistry $extensionRegistry,
+		private readonly NamespaceInfo $namespaceInfo,
+		private readonly TitleParser $titleParser,
+		private readonly LoggerInterface $logger,
 	) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
-		$this->options = $options;
-		$this->namespaceInfo = $namespaceInfo;
-		$this->titleParser = $titleParser;
-		$this->logger = $logger;
-
-		// TODO convert ExtensionRegistry to a service and inject it
-		$this->extensionRegistry = ExtensionRegistry::getInstance();
 	}
 
 	/**
@@ -114,8 +82,7 @@ class TrackingCategories {
 	 * MediaWikiServices, resulting in calls like:
 	 * MediaWikiServices::getInstance()->getTrackingCategories()->getTrackingCategories()
 	 *
-	 * @return array[] [ 'msg' => LinkTarget, 'cats' => LinkTarget[] ]
-	 * @phan-return array<string,array{msg:LinkTarget,cats:LinkTarget[]}>
+	 * @return array<string,array{cats: LinkTarget[], msg: LinkTarget}>
 	 */
 	public function getTrackingCategories() {
 		$categories = array_merge(
@@ -257,6 +224,3 @@ class TrackingCategories {
 		return true;
 	}
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( TrackingCategories::class, 'TrackingCategories' );

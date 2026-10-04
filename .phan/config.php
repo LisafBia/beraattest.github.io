@@ -1,35 +1,16 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 $cfg = require __DIR__ . '/../vendor/mediawiki/mediawiki-phan-config/src/config.php';
 
-// Whilst MediaWiki is still supporting PHP 7.4+, this lets us run phan on higher versions of PHP
-// like 8.0 without phan trying to get us to make PHP 7.4-incompatible changes. This value should
-// match the PHP version specified in composer.json and PHPVersionCheck.php.
-$cfg['minimum_target_php_version'] = '7.4.3';
+// Unset the default value to make sure we use that from composer.json.
+unset( $cfg['minimum_target_php_version'] );
 
 $cfg['file_list'] = array_merge(
 	$cfg['file_list'],
-	class_exists( Socket::class ) ? [] : [ '.phan/stubs/Socket.php' ],
-	class_exists( AllowDynamicProperties::class ) ? [] : [ '.phan/stubs/AllowDynamicProperties.php' ],
-	class_exists( WeakMap::class ) ? [] : [ '.phan/stubs/WeakMap.php' ],
 	[
 		// This makes constants and globals known to Phan before processing all other files.
 		// You can check the parser order with --dump-parsed-file-list
@@ -52,20 +33,6 @@ $cfg['exclude_file_list'] = array_merge(
 	]
 );
 
-if ( PHP_VERSION_ID >= 80000 ) {
-	// Exclude PHP 8.0 polyfills if PHP 8.0+ is running
-	$cfg['exclude_file_list'] = array_merge(
-		$cfg['exclude_file_list'],
-		[
-			'vendor/symfony/polyfill-php80/Resources/stubs/Attribute.php',
-			'vendor/symfony/polyfill-php80/Resources/stubs/PhpToken.php',
-			'vendor/symfony/polyfill-php80/Resources/stubs/Stringable.php',
-			'vendor/symfony/polyfill-php80/Resources/stubs/UnhandledMatchError.php',
-			'vendor/symfony/polyfill-php80/Resources/stubs/ValueError.php',
-		]
-	);
-}
-
 $cfg['autoload_internal_extension_signatures'] = [
 	'excimer' => '.phan/internal_stubs/excimer.phan_php',
 	'imagick' => '.phan/internal_stubs/imagick.phan_php',
@@ -75,7 +42,8 @@ $cfg['autoload_internal_extension_signatures'] = [
 	'redis' => '.phan/internal_stubs/redis.phan_php',
 	'sockets' => '.phan/internal_stubs/sockets.phan_php',
 	'tideways_xhprof' => '.phan/internal_stubs/tideways_xhprof.phan_php',
-	'wikidiff2' => '.phan/internal_stubs/wikidiff.php'
+	'wikidiff2' => '.phan/internal_stubs/wikidiff.php',
+	'xhprof' => '.phan/internal_stubs/xhprof.phan_php',
 ];
 
 $cfg['directory_list'] = [
@@ -84,7 +52,7 @@ $cfg['directory_list'] = [
 	'maintenance/',
 	'mw-config/',
 	'resources/',
-	'tests/common/',
+	'tests/Common/',
 	'tests/parser/',
 	'tests/phan',
 	'tests/phpunit/mocks/',
@@ -114,6 +82,7 @@ $indirectDeps = [
 	'doctrine/dbal',
 	'doctrine/sql-formatter',
 	'guzzlehttp/psr7',
+	'okvpn/clock-lts',
 	'pear/net_url2',
 	'pear/pear-core-minimal',
 	'phpunit/phpunit',
@@ -135,11 +104,9 @@ $cfg['exclude_analysis_directory_list'] = [
 	'tests/phpunit/',
 	// The referenced classes are not available in vendor, only when
 	// included from composer.
-	'includes/composer/',
-	// Directly references classes that only exist in Translate extension
-	'maintenance/language/',
+	'includes/Composer/',
 	// External class
-	'includes/libs/objectcache/utils/MemcachedClient.php',
+	'includes/libs/ObjectCache/Utils/MemcachedClient.php',
 	// File may be valid, but may contain numerous "errors" such as iterating over an
 	// empty array due to the version checking in T246594 not being currently used.
 	'includes/PHPVersionCheck.php',
@@ -152,7 +119,7 @@ $cfg['enable_class_alias_support'] = true;
 // Exclude Parsoid's src/DOM in favor of .phan/stubs/DomImpl.php
 $cfg['exclude_file_list'] = array_merge(
 	$cfg['exclude_file_list'],
-	array_map( fn ( $f ) => "vendor/wikimedia/parsoid/src/DOM/{$f}.php", [
+	array_map( static fn ( $f ) => "vendor/wikimedia/parsoid/src/DOM/{$f}.php", [
 		'Attr', 'CharacterData', 'Comment', 'Document', 'DocumentFragment',
 		'DocumentType', 'Element', 'Node', 'ProcessingInstruction', 'Text',
 	] )
@@ -173,6 +140,7 @@ $cfg['globals_type_map'] = array_merge( $cfg['globals_type_map'], [
 	'wgNamespaceProtection' => 'array<int,string|string[]>',
 	'wgNamespaceAliases' => 'array<string,int>',
 	'wgLockManagers' => 'array[]',
+	'wgLocalFileRepo' => 'array',
 	'wgForeignFileRepos' => 'array[]',
 	'wgDefaultUserOptions' => 'array',
 	'wgSkipSkins' => 'string[]',
@@ -181,7 +149,6 @@ $cfg['globals_type_map'] = array_merge( $cfg['globals_type_map'], [
 	'wgLogHeaders' => 'array<string,string>',
 	'wgLogActionsHandlers' => 'array<string,class-string>',
 	'wgPasswordPolicy' => 'array<string,array<string,string|array>>',
-	'wgVirtualRestConfig' => 'array<string,array>',
 	'wgLocalInterwikis' => 'string[]',
 	'wgDebugLogGroups' => 'string|false|array{destination:string,sample?:int,level:int}',
 	'wgCookiePrefix' => 'string|false',

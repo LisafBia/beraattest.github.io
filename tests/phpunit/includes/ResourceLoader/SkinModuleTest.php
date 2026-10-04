@@ -188,15 +188,11 @@ class SkinModuleTest extends ResourceLoaderTestCase {
 				'features' => [],
 				'logo' => [
 					'1x' => '/logo.png',
-					'1.5x' => '/logo@1.5x.png',
 					'2x' => '/logo@2x.png',
 				],
 				'expected' => [
 					'all' => [
 						'.mw-wiki-logo { background-image: url(/logo.png); }',
-					],
-					'(-webkit-min-device-pixel-ratio: 1.5), (min-resolution: 1.5dppx), (min-resolution: 144dpi)' => [
-						'.mw-wiki-logo { background-image: url(/logo@1.5x.png);background-size: 135px auto; }',
 					],
 					'(-webkit-min-device-pixel-ratio: 2), (min-resolution: 2dppx), (min-resolution: 192dpi)' => [
 						'.mw-wiki-logo { background-image: url(/logo@2x.png);background-size: 135px auto; }',
@@ -229,9 +225,7 @@ class SkinModuleTest extends ResourceLoaderTestCase {
 			->getMock();
 		$module->expects( $this->atLeast( 1 ) )->method( 'getLogoData' )
 			->willReturn( $logo );
-		$module->setConfig( new HashConfig( [
-			MainConfigNames::ParserEnableLegacyMediaDOM => false,
-		] + self::getSettings() ) );
+		$module->setConfig( new HashConfig( self::getSettings() ) );
 
 		$ctx = $this->createMock( Context::class );
 
@@ -320,13 +314,11 @@ class SkinModuleTest extends ResourceLoaderTestCase {
 					MainConfigNames::ResourceBasePath => '/w',
 					MainConfigNames::Logos => [
 						'1x' => '/img/default.png',
-						'1.5x' => '/img/one-point-five.png',
 						'2x' => '/img/two-x.png',
 					],
 				],
 				'expected' => [
 					'1x' => '/img/default.png',
-					'1.5x' => '/img/one-point-five.png',
 					'2x' => '/img/two-x.png',
 				],
 			],
@@ -348,7 +340,6 @@ class SkinModuleTest extends ResourceLoaderTestCase {
 					MainConfigNames::ResourceBasePath => '/w',
 					MainConfigNames::Logos => [
 						'1x' => '/img/default.png',
-						'1.5x' => '/img/one-point-five.png',
 						'2x' => '/img/two-x.png',
 						'svg' => '/img/vector.svg',
 					],
@@ -392,15 +383,12 @@ class SkinModuleTest extends ResourceLoaderTestCase {
 				[
 					MainConfigNames::Logos => [
 						'1x' => '/img/default.png',
-						'1.5x' => '/img/one-point-five.png',
 						'2x' => '/img/two-x.png',
 					],
 				],
 				'en',
 				'Link: </img/default.png>;rel=preload;as=image;media=' .
-				'not all and (min-resolution: 1.5dppx),' .
-				'</img/one-point-five.png>;rel=preload;as=image;media=' .
-				'(min-resolution: 1.5dppx) and (max-resolution: 1.999999dppx),' .
+				'not all and (min-resolution: 2dppx),' .
 				'</img/two-x.png>;rel=preload;as=image;media=(min-resolution: 2dppx)'
 			],
 			[
@@ -445,21 +433,17 @@ class SkinModuleTest extends ResourceLoaderTestCase {
 				[
 					MainConfigNames::Logos => [
 						'1x' => '/img/default.png',
-						'1.5x' => '/img/one-point-five.png',
 						'2x' => '/img/two-x.png',
 						'variants' => [
 							'zh-hans' => [
 								'1x' => '/img/default-zh-hans.png',
-								'1.5x' => '/img/one-point-five-zh-hans.png',
 							]
 						]
 					],
 				],
 				'zh-hans',
 				'Link: </img/default-zh-hans.png>;rel=preload;as=image;media=' .
-				'not all and (min-resolution: 1.5dppx),' .
-				'</img/one-point-five-zh-hans.png>;rel=preload;as=image;media=' .
-				'(min-resolution: 1.5dppx) and (max-resolution: 1.999999dppx),' .
+				'not all and (min-resolution: 2dppx),' .
 				'</img/two-x.png>;rel=preload;as=image;media=(min-resolution: 2dppx)'
 			],
 		];

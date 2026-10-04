@@ -8,12 +8,14 @@ class Stream extends Psr7\Stream implements CopyableStreamInterface {
 	/** @var resource */
 	private $stream;
 
+	/** @inheritDoc */
 	public function __construct( $stream, $options = [] ) {
 		$this->stream = $stream;
 		parent::__construct( $stream, $options );
 	}
 
-	public function copyToStream( $target ) {
-		stream_copy_to_stream( $this->stream, $target );
+	/** @inheritDoc */
+	public function copyToStream( $stream ) {
+		stream_copy_to_stream( $this->stream, $stream );
 	}
 }

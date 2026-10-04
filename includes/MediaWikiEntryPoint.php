@@ -1,54 +1,34 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki;
 
-use Exception;
-use HttpStatus;
-use JobQueueGroup;
-use JobRunner;
-use Liuggio\StatsdClient\Sender\SocketSender;
-use Liuggio\StatsdClient\StatsdClient;
 use LogicException;
 use MediaWiki\Block\BlockManager;
 use MediaWiki\Config\Config;
-use MediaWiki\Config\ConfigException;
 use MediaWiki\Context\IContextSource;
 use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\Deferred\TransactionRoundDefiningUpdate;
-use MediaWiki\HookContainer\ProtectedHookAccessorTrait;
+use MediaWiki\Exception\MWExceptionHandler;
+use MediaWiki\JobQueue\JobQueueGroup;
 use MediaWiki\JobQueue\JobQueueGroupFactory;
+use MediaWiki\JobQueue\JobRunner;
+use MediaWiki\Language\MessageCache;
 use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\Profiler\Profiler;
 use MediaWiki\Request\WebRequest;
 use MediaWiki\Request\WebResponse;
 use MediaWiki\SpecialPage\SpecialPageFactory;
 use MediaWiki\Specials\SpecialRunJobs;
 use MediaWiki\Utils\UrlUtils;
 use MediaWiki\WikiMap\WikiMap;
-use MessageCache;
-use MWExceptionHandler;
-use Profiler;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Throwable;
-use Wikimedia\AtEase\AtEase;
+use Wikimedia\Http\HttpStatus;
 use Wikimedia\Rdbms\ChronologyProtector;
 use Wikimedia\Rdbms\LBFactory;
 use Wikimedia\Rdbms\ReadOnlyMode;
@@ -57,11 +37,12 @@ use Wikimedia\Stats\IBufferingStatsdDataFactory;
 use Wikimedia\Stats\StatsFactory;
 use Wikimedia\Telemetry\SpanInterface;
 use Wikimedia\Telemetry\TracerState;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 /**
  * @defgroup entrypoint Entry points
  *
- * Web entry points reside in top-level MediaWiki directory (i.e. installation path).
+ * Web entry points reside in the top-level MediaWiki directory (i.e., installation path).
  * These entry points handle web requests to interact with the wiki. Other PHP files
  * in the repository are not accessed directly from the web, but instead included by
  * an entry point.
@@ -70,15 +51,13 @@ use Wikimedia\Telemetry\TracerState;
 /**
  * Base class for entry point handlers.
  *
- * @note: This is not stable to extend by extensions, because MediaWiki does not
+ * @note This is not stable to extend by extensions, because MediaWiki does not
  * allow extensions to define new entry points.
  *
  * @ingroup entrypoint
  * @since 1.42, factored out of the previously existing MediaWiki class.
  */
 abstract class MediaWikiEntryPoint {
-	use ProtectedHookAccessorTrait;
-
 	private IContextSource $context;
 	private Config $config;
 	private ?int $outputCaptureLevel = null;
@@ -101,7 +80,7 @@ abstract class MediaWikiEntryPoint {
 
 	protected EntryPointEnvironment $environment;
 
-	private MediaWikiServices $mediaWikiServices;
+	protected MediaWikiServices $mediaWikiServices;
 
 	/**
 	 * @param IContextSource $context
@@ -151,7 +130,7 @@ abstract class MediaWikiEntryPoint {
 		// TODO: move ob_start( [ MediaWiki\Output\OutputHandler::class, 'handle' ] ) here
 		// TODO: move MW_NO_OUTPUT_COMPRESSION handling here.
 		// TODO: move HeaderCallback::register() here
-		// TODO: move SessionManager::getGlobalSession() here (from Setup.php)
+		// TODO: move RequestContext::getMain()->getRequest()->getSession() here (from Setup.php)
 		// TODO: move AuthManager::autoCreateUser here (from Setup.php)
 		// TODO: move pingback here (from Setup.php)
 	}
@@ -216,8 +195,6 @@ abstract class MediaWikiEntryPoint {
 	 * Subclasses in core may override this to handle errors according
 	 * to the expected output format.
 	 * This method is not safe to override for extensions.
-	 *
-	 * @param Throwable $e
 	 */
 	protected function handleTopLevelError( Throwable $e ) {
 		// Type errors and such: at least handle it now and clean up the LBFactory state
@@ -352,8 +329,8 @@ abstract class MediaWikiEntryPoint {
 				if ( $output->getRedirect() ) {
 					$url = $output->getRedirect();
 					if ( $lbFactory->hasStreamingReplicaServers() ) {
-						$url = strpos( $url, '?' ) === false
-							? "$url?cpPosIndex=$cpIndex" : "$url&cpPosIndex=$cpIndex";
+						$url .= str_contains( $url, '?' ) ? '&' : '?';
+						$url .= 'cpPosIndex=' . $cpIndex;
 					}
 					$output->redirect( $url );
 				} else {
@@ -375,6 +352,14 @@ abstract class MediaWikiEntryPoint {
 						$config->get( MainConfigNames::DataCenterUpdateStickTTL )
 					);
 				$options = [ 'prefix' => '' ];
+				// SameSite none requires the Secure attribute, and that means https. If
+				// $wgCookieSecure is set to true for a site using http only, this won't work.
+				// maybe we shouldn't even try to set the cookie in that case. oh well
+				if ( $config->get( MainConfigNames::CookieSecure ) ||
+					$config->get( MainConfigNames::ForceHTTPS ) ) {
+					$options[ 'sameSite' ] = 'none';
+					$options[ 'secure' ] = true;
+				}
 				$request->response()->setCookie( 'UseDC', 'master', $expires, $options );
 			}
 
@@ -679,11 +664,7 @@ abstract class MediaWikiEntryPoint {
 		// Any embedded profiler outputs were already processed in outputResponsePayload().
 		$profiler->logData();
 
-		self::emitBufferedStats(
-			$this->getStatsFactory(),
-			$this->getStatsdDataFactory(),
-			$this->config
-		);
+		self::emitBufferedStats( $this->getStatsFactory() );
 
 		// Commit and close up!
 		$lbFactory->commitPrimaryChanges( __METHOD__ );
@@ -711,46 +692,24 @@ abstract class MediaWikiEntryPoint {
 	 * following heuristics:
 	 *
 	 * - Long-running scripts that involve database writes often use transactions
-	 *   to commit chunks of work. We flush from IDatabase::setTransactionListener,
-	 *   as wired up by MWLBFactory::applyGlobalState.
+	 *   to commit chunks of work. We flush from Maintenance::commitTransaction and
+	 *   Maintenance::commitTransactionRound().
 	 *
 	 * - Long-running scripts that involve database writes but don't need any
 	 *   transactions will still periodically wait for replication to be
-	 *   graceful to the databases. We flush from ILBFactory::setWaitForReplicationListener
-	 *   as wired up by MWLBFactory::applyGlobalState.
+	 *   graceful to the databases. We flush from Maintenance::waitForReplication().
 	 *
 	 * - Any other long-running scripts will probably report progress to stdout
 	 *   in some way. We also flush from Maintenance::output().
 	 *
 	 * @param StatsFactory $statsFactory
-	 * @param IBufferingStatsdDataFactory $stats
-	 * @param Config $config
-	 * @throws ConfigException
 	 * @since 1.31 (formerly one the MediaWiki class)
 	 */
 	public static function emitBufferedStats(
-		StatsFactory $statsFactory,
-		IBufferingStatsdDataFactory $stats,
-		Config $config
+		StatsFactory $statsFactory
 	) {
 		// Send metrics gathered by StatsFactory
 		$statsFactory->flush();
-
-		if ( $config->get( MainConfigNames::StatsdServer ) && $stats->hasData() ) {
-			try {
-				$stats->updateCount( 'stats.statsdclient.buffered', $stats->getDataCount() );
-				$statsdServer = explode( ':', $config->get( MainConfigNames::StatsdServer ), 2 );
-				$statsdHost = $statsdServer[0];
-				$statsdPort = $statsdServer[1] ?? 8125;
-				$statsdSender = new SocketSender( $statsdHost, $statsdPort );
-				$statsdClient = new StatsdClient( $statsdSender, true, false );
-				$statsdClient->send( $stats->getData() );
-			} catch ( Exception $e ) {
-				MWExceptionHandler::logException( $e, MWExceptionHandler::CAUGHT_BY_ENTRYPOINT );
-			}
-		}
-		// empty buffer for the next round
-		$stats->clearData();
 	}
 
 	/**
@@ -768,6 +727,15 @@ abstract class MediaWikiEntryPoint {
 	 * @return bool Success
 	 */
 	protected function triggerAsyncJobs( $n, LoggerInterface $runJobsLogger ) {
+		if ( $this->postSendStrategy === self::DEFER_SET_LENGTH_AND_FLUSH ) {
+			// Do not trigger jobs for common HTTP responses without a body.
+			// Since Content-Length cannot be sent, then DEFER_SET_LENGTH_AND_FLUSH
+			// will cause the client to wait while PHP runs deferred updates.
+			if ( !in_array( http_response_code(), [ 200, 404 ], true ) ) {
+				return true;
+			}
+		}
+
 		// Do not send request if there are probably no jobs
 		$group = $this->getJobQueueGroupFactory()->makeJobQueueGroup();
 		if ( !$group->queuesHaveJobs( JobQueueGroup::TYPE_DEFAULT ) ) {
@@ -785,8 +753,8 @@ abstract class MediaWikiEntryPoint {
 		$host = $info['host'] ?? null;
 		$port = $info['port'] ?? ( $https ? 443 : 80 );
 
-		AtEase::suppressWarnings();
-		$sock = $host ? fsockopen(
+		// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+		$sock = $host ? @fsockopen(
 			$https ? 'tls://' . $host : $host,
 			$port,
 			$errno,
@@ -794,7 +762,6 @@ abstract class MediaWikiEntryPoint {
 			// If it takes more than 100ms to connect to ourselves there is a problem...
 			0.100
 		) : false;
-		AtEase::restoreWarnings();
 
 		$invokedWithSuccess = true;
 		if ( $sock ) {
@@ -818,9 +785,9 @@ abstract class MediaWikiEntryPoint {
 			} else {
 				// Do not wait for the response (the script should handle client aborts).
 				// Make sure that we don't close before that script reaches ignore_user_abort().
-				$start = microtime( true );
+				$start = ConvertibleTimestamp::hrtime();
 				$status = fgets( $sock );
-				$sec = microtime( true ) - $start;
+				$sec = ( ConvertibleTimestamp::hrtime() - $start ) / 1e9;
 				if ( !preg_match( '#^HTTP/\d\.\d 202 #', $status ) ) {
 					$invokedWithSuccess = false;
 					$runJobsLogger->error( "Failed to start cron API: received '$status' ($sec)" );
@@ -841,8 +808,6 @@ abstract class MediaWikiEntryPoint {
 	 * This is intended as a stepping stone for migration.
 	 * Ideally, individual service objects should be injected
 	 * via the constructor.
-	 *
-	 * @return MediaWikiServices
 	 */
 	protected function getServiceContainer(): MediaWikiServices {
 		return $this->mediaWikiServices;
@@ -900,6 +865,9 @@ abstract class MediaWikiEntryPoint {
 		return $this->getRequest()->response();
 	}
 
+	/**
+	 * @return mixed
+	 */
 	protected function getConfig( string $key ) {
 		return $this->config->get( $key );
 	}
@@ -912,11 +880,16 @@ abstract class MediaWikiEntryPoint {
 		return $this->environment->hasFastCgi();
 	}
 
+	/**
+	 * @param string $key
+	 * @param mixed|null $default
+	 * @return mixed|null
+	 */
 	protected function getServerInfo( string $key, $default = null ) {
 		return $this->environment->getServerInfo( $key, $default );
 	}
 
-	protected function print( $data ) {
+	protected function print( string $data ) {
 		if ( $this->inPostSendMode() ) {
 			throw new RuntimeException( 'Output already sent!' );
 		}
@@ -929,7 +902,7 @@ abstract class MediaWikiEntryPoint {
 	 *
 	 * @return never
 	 */
-	protected function exit( int $code = 0 ) {
+	protected function exit( int $code = 0 ): never {
 		$this->environment->exit( $code );
 	}
 
@@ -962,7 +935,7 @@ abstract class MediaWikiEntryPoint {
 	/**
 	 * Enable capturing of the current output buffer.
 	 *
-	 * There may be mutiple levels of output buffering. The level
+	 * There may be multiple levels of output buffering. The level
 	 * we are currently at, at the time of calling this method,
 	 * is the level that will be captured to later retrieve via
 	 * getCapturedOutput().

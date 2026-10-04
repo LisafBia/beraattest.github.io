@@ -21,9 +21,7 @@
  * @param {boolean} [config.deletable=true] Whether the table should provide deletion UI tools
  * for this row or not. Defaults to true.
  */
-mw.widgets.RowWidget = function MwWidgetsRowWidget( config ) {
-	config = config || {};
-
+mw.widgets.RowWidget = function MwWidgetsRowWidget( config = {} ) {
 	// Parent constructor
 	mw.widgets.RowWidget.super.call( this, config );
 
@@ -50,7 +48,8 @@ mw.widgets.RowWidget = function MwWidgetsRowWidget( config ) {
 			icon: 'trash',
 			classes: [ 'mw-widgets-rowWidget-delete-button' ],
 			flags: 'destructive',
-			title: mw.msg( 'mw-widgets-table-row-delete' )
+			label: mw.msg( 'mw-widgets-table-row-delete' ),
+			invisibleLabel: true
 		} );
 	}
 

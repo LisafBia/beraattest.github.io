@@ -3,13 +3,20 @@
 const slice = Array.prototype.slice;
 
 // Apply site-level data
-mw.config.set( require( './config.json' ) );
+// Allow page-specific configs (which were already set in startup.js)
+// to take precedence over site configs (T380552, T393256)
+const config = require( './config.json' );
+for ( const key in config ) {
+	if ( !mw.config.exists( key ) ) {
+		mw.config.set( key, config[ key ] );
+	}
+}
 
 require( './log.js' );
 
 /**
  * @class mw.Message
- * @classdesc Describes a translateable text or HTML string. Similar to the Message class in MediaWiki PHP.
+ * @classdesc Describes a translatable text or HTML string. Similar to the Message class in MediaWiki PHP.
  *
  * @example
  * var obj, str;
@@ -166,6 +173,30 @@ Message.prototype = /** @lends mw.Message.prototype */ {
 	},
 
 	/**
+	 * Parse message as wikitext and return a jQuery object.
+	 *
+	 * If jqueryMsg is loaded, this transforms text and parses a subset of supported wikitext
+	 * into a jQuery object. Without jqueryMsg, it is equivalent to {@link mw.Message#text},
+	 * wrapped in a text node inside a jQuery object.
+	 *
+	 * @example
+	 * const msg = mw.message( 'key' );
+	 * mw.loader.using(`mediawiki.jqueryMsg`).then(() => {
+	 *   if ( msg.isParseable() ) {
+	 *     const $node = msg.parseDom();
+	 *     $node.appendTo('body');
+	 *   }
+	 * })
+	 *
+	 * @since 1.27 if mediawiki.jqueryMsg is loaded
+	 * @since 1.46 in mediawiki.base
+	 * @return {jQuery} jQuery object of parsed message
+	 */
+	parseDom: function () {
+		return $( document.createTextNode( this.toString( 'text' ) ) );
+	},
+
+	/**
 	 * Return message plainly.
 	 *
 	 * This substitutes parameters, but otherwise does not transform the
@@ -261,7 +292,7 @@ mw.inspect = function ( ...reports ) {
  * @return {string} Transformed format string
  */
 mw.internalDoTransformFormatForQqx = function ( formatString, parameters ) {
-	if ( formatString.indexOf( '$*' ) !== -1 ) {
+	if ( formatString.includes( '$*' ) ) {
 		let replacement = '';
 		if ( parameters.length ) {
 			replacement = ': ' + parameters.map( ( _, i ) => '$' + ( i + 1 ) ).join( ', ' );
@@ -343,7 +374,7 @@ mw.message = function ( key ) {
 mw.msg = function ( key, ...parameters ) {
 	// Shortcut must process text transformations by default
 	// if mediawiki.jqueryMsg is loaded. (T46459)
-	// eslint-disable-next-line mediawiki/msg-doc
+
 	return mw.message( key, ...parameters ).text();
 };
 
@@ -412,7 +443,7 @@ mw.trackSubscribe = function ( topic, callback ) {
 	function handler( trackQueue ) {
 		for ( ; seen < trackQueue.length; seen++ ) {
 			const event = trackQueue[ seen ];
-			if ( event.topic.indexOf( topic ) === 0 ) {
+			if ( event.topic.startsWith( topic ) ) {
 				callback( event.topic, ...event.args );
 			}
 		}
@@ -502,6 +533,7 @@ const hooks = Object.create( null );
 mw.hook = function ( name ) {
 	return hooks[ name ] || ( hooks[ name ] = ( function () {
 		let memory;
+		let deprecated;
 		const fns = [];
 		function rethrow( e ) {
 			setTimeout( () => {
@@ -518,16 +550,19 @@ mw.hook = function ( name ) {
 			/**
 			 * Register a hook handler.
 			 *
-			 * @param {...Function} handler Function to bind.
+			 * @param {...Function} handlers Function(s) to bind.
 			 * @memberof Hook
 			 * @return {Hook}
 			 */
-			add: function () {
-				for ( let i = 0; i < arguments.length; i++ ) {
-					fns.push( arguments[ i ] );
-					if ( memory ) {
+			add: function ( ...handlers ) {
+				if ( deprecated ) {
+					deprecated();
+				}
+				fns.push( ...handlers );
+				if ( memory ) {
+					for ( const handler of handlers ) {
 						try {
-							arguments[ i ].apply( null, memory );
+							handler( ...memory );
 						} catch ( e ) {
 							rethrow( e );
 						}
@@ -538,17 +573,43 @@ mw.hook = function ( name ) {
 			/**
 			 * Unregister a hook handler.
 			 *
-			 * @param {...Function} handler Function to unbind.
+			 * @param {...Function} handlers Function(s) to unbind.
 			 * @memberof Hook
 			 * @return {Hook}
 			 */
-			remove: function () {
-				for ( let i = 0; i < arguments.length; i++ ) {
+			remove: function ( ...handlers ) {
+				for ( const handler of handlers ) {
 					let j;
-					while ( ( j = fns.indexOf( arguments[ i ] ) ) !== -1 ) {
+					while ( ( j = fns.indexOf( handler ) ) !== -1 ) {
 						fns.splice( j, 1 );
 					}
 				}
+				return this;
+			},
+			/**
+			 * Enable a deprecation warning, logged after registering a hook handler.
+			 *
+			 * @example
+			 * mw.hook( 'myhook' ).deprecate().fire( data );
+			 *
+			 * @example
+			 * mw.hook( 'myhook' )
+			 *   .deprecate( 'Use the "someother" hook instead.' )
+			 *   .fire( data );
+			 *
+			 * NOTE: This must be called before calling fire(), as otherwise some
+			 * hook handlers may be registered and fired without being reported.
+			 *
+			 * @memberof Hook
+			 * @param {string} msg Optional extra text to add to the deprecation warning
+			 * @return {Hook}
+			 * @chainable
+			 */
+			deprecate: function ( msg ) {
+				deprecated = mw.log.makeDeprecated(
+					`hook_${ name }`,
+					`mw.hook "${ name }" is deprecated.` + ( msg ? ' ' + msg : '' )
+				);
 				return this;
 			},
 			/**
@@ -559,15 +620,20 @@ mw.hook = function ( name ) {
 			 * @return {Hook}
 			 * @chainable
 			 */
-			fire: function () {
-				for ( let i = 0; i < fns.length; i++ ) {
+			fire: function ( ...data ) {
+				if ( deprecated && fns.length ) {
+					deprecated();
+				}
+
+				for ( const fn of fns ) {
 					try {
-						fns[ i ].apply( null, arguments );
+						fn.apply( null, arguments );
 					} catch ( e ) {
 						rethrow( e );
 					}
 				}
-				memory = slice.call( arguments );
+				memory = data;
+
 				return this;
 			}
 		};
@@ -853,7 +919,7 @@ mw.loader.using = function ( dependencies, ready, error ) {
  *     .then( function () {
  *         // Script succeeded. You can use X now.
  *     }, function ( e ) {
- *         // Script failed. X is not avaiable
+ *         // Script failed. X is not available
  *         mw.log.error( e.message ); // => "Failed to load script"
  *     } );
  * } );

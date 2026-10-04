@@ -1,19 +1,20 @@
 /**
  * In-progress edit recovery for action=edit
+ *
+ * @ignore
  */
-'use strict';
-
 const storage = require( './storage.js' );
 const LoadNotification = require( './LoadNotification.js' );
 
 const pageName = mw.config.get( 'wgPageName' );
+const wiki = mw.config.get( 'wgDBname' );
 const section = $( 'input[name="wpSection"]' ).val() || null;
 const inputFields = {};
 const fieldNamePrefix = 'field_';
 let originalData = {};
 let changeDebounceTimer = null;
 
-// Number of miliseconds to debounce form input.
+// Number of milliseconds to debounce form input.
 const debounceTime = 5000;
 
 // This module is loaded for every edit form, but not all should have Edit Recovery functioning.
@@ -23,7 +24,7 @@ const isOldRevision = $( 'input[name="oldid"]' ).val() > 0;
 const isConflict = mw.config.get( 'wgEditMessage' ) === 'editconflict';
 const useEditRecovery = !isUndo && !isOldRevision && !isConflict;
 if ( useEditRecovery ) {
-	mw.hook( 'wikipage.editform' ).add( onLoadHandler );
+	mw.hook( 'wikipage.editform' ).add( init );
 } else {
 	// Always remove the data-saved flag when editing without Edit Recovery.
 	// It may have been set by a previous editing session (within 5 minutes) that did use ER.
@@ -33,8 +34,14 @@ if ( useEditRecovery ) {
 const windowManager = OO.ui.getWindowManager();
 windowManager.addWindows( [ new mw.widgets.AbandonEditDialog() ] );
 
-function onLoadHandler( $editForm ) {
-	mw.hook( 'wikipage.editform' ).remove( onLoadHandler );
+/**
+ * Initialise when the wikipage.editform hook first fires
+ *
+ * @ignore
+ * @param {jQuery} $editForm
+ */
+function init( $editForm ) {
+	mw.hook( 'wikipage.editform' ).remove( init );
 
 	// Monitor all text-entry inputs for changes/typing.
 	const inputsToMonitorSelector = 'textarea, select, input:not([type="hidden"], [type="submit"])';
@@ -70,7 +77,7 @@ function onLoadHandler( $editForm ) {
 				// Other HTMLInputElements.
 				originalData[ fieldNamePrefix + fieldName ] = field.defaultValue;
 			}
-		} else if ( field.$input !== undefined ) {
+		} else if ( field.$input ) {
 			// OOUI widgets, which may not have been infused by this point.
 			if ( field.$input[ 0 ].type === 'checkbox' ) {
 				// Checkboxes.
@@ -90,7 +97,7 @@ function onLoadHandler( $editForm ) {
 	storage.openDatabase().then( () => {
 		// Check for and delete any expired data for any page, before loading any saved data for the current page.
 		storage.deleteExpiredData().then( () => {
-			storage.loadData( pageName, section ).then( onLoadData );
+			storage.loadData( pageName, section ).then( loadDataSuccess );
 		} );
 	} );
 
@@ -99,7 +106,7 @@ function onLoadHandler( $editForm ) {
 	cancelButton.on( 'click', () => {
 		windowManager.openWindow( 'abandonedit' ).closed.then( ( data ) => {
 			if ( data && data.action === 'discard' ) {
-				// Note that originalData is used below in onLoadData() but that's always called before this method.
+				// Note that originalData is used below in loadDataSuccess() but that's always called before this method.
 				// Here we set originalData to null in order to signal to saveFormData() to deleted the stored data.
 				originalData = null;
 				storage.deleteData( pageName, section ).finally( () => {
@@ -114,32 +121,35 @@ function onLoadHandler( $editForm ) {
 	} );
 }
 
-function track( metric, value ) {
-	const dbName = mw.config.get( 'wgDBname' );
-	mw.track( `counter.MediaWiki.edit_recovery.${ metric }.by_wiki.${ dbName }`, value );
-}
-
-function onLoadData( pageData ) {
+/**
+ * loadData promise resolved successfully
+ *
+ * @ignore
+ * @param {Object|undefined} pageData Page data, undefined if none found
+ */
+function loadDataSuccess( pageData ) {
 	if ( wasPosted ) {
 		// If this is a POST request, save the current data (e.g. from a preview).
 		saveFormData();
 	}
 	// If there is data stored, load it into the form.
-	if ( !wasPosted && pageData !== undefined && !isSameAsOriginal( pageData, true ) ) {
+	if ( !wasPosted && pageData && !isSameAsOriginal( pageData, true ) ) {
 		const loadNotification = new LoadNotification( {
 			differentRev: originalData.field_parentRevId !== pageData.field_parentRevId
 		} );
 
 		// statsv: Track the number of times the edit recovery notification is shown.
-		track( 'show', 1 );
+		mw.track( `counter.MediaWiki.edit_recovery.show.by_wiki.${ wiki }` );
+		mw.track( 'stats.mediawiki_editrecovery_prompt_total', 1, { action: 'show', wiki } );
 
 		const notification = loadNotification.getNotification();
 		// On 'restore changes'.
 		loadNotification.getRecoverButton().on( 'click', () => {
-			loadData( pageData );
+			recover( pageData );
 			notification.close();
 			// statsv: Track the number of times the edit recovery data is recovered.
-			track( 'recover', 1 );
+			mw.track( `counter.MediaWiki.edit_recovery.recover.by_wiki.${ wiki }` );
+			mw.track( 'stats.mediawiki_editrecovery_prompt_total', 1, { action: 'recover', wiki } );
 		} );
 		// On 'discard changes'.
 		loadNotification.getDiscardButton().on( 'click', () => {
@@ -147,14 +157,15 @@ function onLoadData( pageData ) {
 				notification.close();
 			} );
 			// statsv: Track the number of times the edit recovery data is discarded.
-			track( 'discard', 1 );
+			mw.track( `counter.MediaWiki.edit_recovery.discard.by_wiki.${ wiki }` );
+			mw.track( 'stats.mediawiki_editrecovery_prompt_total', 1, { action: 'discard', wiki } );
 		} );
 	}
 
 	// Add change handlers.
 	for ( const fieldName in inputFields ) {
 		const field = inputFields[ fieldName ];
-		if ( field.nodeName !== undefined && field.nodeName === 'TEXTAREA' ) {
+		if ( field.nodeName === 'TEXTAREA' ) {
 			field.addEventListener( 'input', fieldChangeHandler );
 		} else if ( field instanceof OO.ui.Widget ) {
 			field.on( 'change', fieldChangeHandler );
@@ -178,10 +189,16 @@ function onLoadData( pageData ) {
 	mw.hook( 'editRecovery.loadEnd' ).fire( { fieldChangeHandler: fieldChangeHandler } );
 }
 
-function loadData( pageData ) {
+/**
+ * Recover specified page data
+ *
+ * @ignore
+ * @param {Object} pageData Page data
+ */
+function recover( pageData ) {
 	for ( const fieldName in inputFields ) {
 		if ( pageData[ fieldNamePrefix + fieldName ] === undefined ) {
-			return;
+			continue;
 		}
 		const field = inputFields[ fieldName ];
 		const $field = $( field );
@@ -203,6 +220,11 @@ function loadData( pageData ) {
 	}
 }
 
+/**
+ * Handle an edit form field changing
+ *
+ * @ignore
+ */
 function fieldChangeHandler() {
 	clearTimeout( changeDebounceTimer );
 	changeDebounceTimer = setTimeout( saveFormData, debounceTime );
@@ -221,13 +243,14 @@ function isSameAsOriginal( pageData, ignoreRevIds = false ) {
 		if ( ignoreRevIds && ( fieldName === 'editRevId' || fieldName === 'parentRevId' ) ) {
 			continue;
 		}
-		// Trim trailing whitespace from string fields, to approximate what PHP does when saving.
 		let currentVal = pageData[ fieldNamePrefix + fieldName ];
-		if ( typeof currentVal === 'string' ) {
-			currentVal = currentVal.replace( /\s+$/, '' );
-		}
 		let originalVal = originalData[ fieldNamePrefix + fieldName ];
-		if ( typeof originalVal === 'string' ) {
+		// Trim trailing whitespace from string fields, to approximate what PHP does when saving.
+		// Performance optimization: Pointless when already identical, or when one is not a string
+		if ( currentVal !== originalVal &&
+			typeof currentVal === 'string' && typeof originalVal === 'string'
+		) {
+			currentVal = currentVal.replace( /\s+$/, '' );
 			originalVal = originalVal.replace( /\s+$/, '' );
 		}
 		if ( currentVal !== originalVal ) {
@@ -237,9 +260,14 @@ function isSameAsOriginal( pageData, ignoreRevIds = false ) {
 	return true;
 }
 
+/**
+ * Save the current edit form state in the storage backend
+ *
+ * @ignore
+ */
 function saveFormData() {
 	const pageData = getFormData();
-	if ( ( originalData === null || isSameAsOriginal( pageData ) ) && !wasPosted ) {
+	if ( ( !originalData || isSameAsOriginal( pageData ) ) && !wasPosted ) {
 		// Delete the stored data if there's no change,
 		// or if we've flagged originalData as irrelevant,
 		// or if we can't determine this because this page was POSTed.
@@ -263,7 +291,7 @@ function getFormData() {
 	for ( const fieldName in inputFields ) {
 		const field = inputFields[ fieldName ];
 		let newValue = null;
-		if ( !( field instanceof OO.ui.Widget ) && field.nodeName !== undefined && field.nodeName === 'TEXTAREA' ) {
+		if ( !( field instanceof OO.ui.Widget ) && field.nodeName === 'TEXTAREA' ) {
 			// Text areas.
 			newValue = $( field ).textSelection( 'getContents' );
 		} else if ( field instanceof OO.ui.CheckboxInputWidget ) {

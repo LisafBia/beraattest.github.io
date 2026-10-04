@@ -1,21 +1,7 @@
 <?php
 
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -24,6 +10,7 @@ namespace MediaWiki\Request;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
 use Wikimedia\IPSet;
+use Wikimedia\ObjectCache\BagOStuff;
 
 /**
  * @since 1.28
@@ -42,19 +29,44 @@ class ProxyLookup {
 	/** @var HookRunner */
 	private $hookRunner;
 
+	/** @var BagOStuff */
+	private $cache;
+
 	/**
 	 * @param string[] $proxyServers Simple list of IPs
 	 * @param string[] $proxyServersComplex Complex list of IPs/ranges
 	 * @param HookContainer $hookContainer
+	 * @param BagOStuff $cache In-process cache for the IPSet object
 	 */
 	public function __construct(
 		$proxyServers,
 		$proxyServersComplex,
-		HookContainer $hookContainer
+		HookContainer $hookContainer,
+		BagOStuff $cache
 	) {
 		$this->proxyServers = $proxyServers;
 		$this->proxyServersComplex = $proxyServersComplex;
 		$this->hookRunner = new HookRunner( $hookContainer );
+		$this->cache = $cache;
+	}
+
+	/**
+	 * Get or create the IPSet object, using cache if available
+	 *
+	 * @return IPSet
+	 */
+	private function getIPSet() {
+		if ( $this->proxyIPSet ) {
+			return $this->proxyIPSet;
+		}
+
+		$this->proxyIPSet = $this->cache->getWithSetCallback(
+			$this->cache->makeGlobalKey( 'ProxyLookup', 'ipset', crc32( json_encode( $this->proxyServersComplex ) ) ),
+			BagOStuff::TTL_INDEFINITE,
+			fn () => new IPSet( $this->proxyServersComplex )
+		);
+
+		return $this->proxyIPSet;
 	}
 
 	/**
@@ -70,10 +82,7 @@ class ProxyLookup {
 		}
 
 		// Check against addresses and CIDR nets in the complex list
-		if ( !$this->proxyIPSet ) {
-			$this->proxyIPSet = new IPSet( $this->proxyServersComplex );
-		}
-		return $this->proxyIPSet->match( $ip );
+		return $this->getIPSet()->match( $ip );
 	}
 
 	/**

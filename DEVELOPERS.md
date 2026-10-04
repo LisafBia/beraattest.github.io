@@ -1,7 +1,7 @@
 # MediaWiki Developers
 
 Welcome to the MediaWiki community! Please see [How to become a MediaWiki
-hacker](https://www.mediawiki.org/wiki/How_to_become_a_MediaWiki_hacker) for
+hacker](https://www.mediawiki.org/wiki/Special:MyLanguage/How_to_become_a_MediaWiki_hacker) for
 general information on contributing to MediaWiki.
 
 ## Development environment
@@ -11,12 +11,12 @@ Apache, Xdebug and a SQLite database.
 
 **Do not use the development environment to serve a public website! Bad things would happen!**
 
-More documentation, examples, and configuration recipes are available at [mediawiki.org/wiki/MediaWiki-Docker][mw-docker].
+More documentation, examples, and configuration recipes are available at [mediawiki.org/wiki/Special:MyLanguage/MediaWiki-Docker][mw-docker].
 
 Support is available on the [Libera IRC network][libera-home] in the [#mediawiki channel][libera-webchat], and on
 Phabricator by creating tasks with the [MediaWiki-Docker][mw-docker-phab] tag.
 
-[mw-docker]: https://www.mediawiki.org/wiki/MediaWiki-Docker
+[mw-docker]: https://www.mediawiki.org/wiki/Special:MyLanguage/MediaWiki-Docker
 [mw-docker-phab]: https://phabricator.wikimedia.org/tag/mediawiki-docker/
 [libera-home]: https://libera.chat/
 [libera-webchat]: https://web.libera.chat/#mediawiki
@@ -33,6 +33,8 @@ You'll need to have Docker installed:
 [docker-install]: https://docs.docker.com/get-docker/
 [docker-linux]: https://docs.docker.com/engine/install/
 
+The container images provided by Wikimedia use an AMD64 Debian runtime and are not currently available in ARM64 or any 32-bit processor variants. ARM64 MacOS computers have been reported to work with these images via Rosetta AMD64 emulation.
+
 **Linux users**:
 
 * We recommend installing `docker-ce`, `docker-ce-cli`, `containerd.io`, and `docker-compose-plugin` by [downloading the server
@@ -47,10 +49,6 @@ You'll need to have Docker installed:
 
 Running Docker from a Windows terminal and using the Windows file system will result in MediaWiki being very slow. For Windows 10 and higher, we recommend configuring Docker and Windows to use the [Windows Subsystem for Linux (WSL)](https://en.wikipedia.org/wiki/Windows_Subsystem_for_Linux). Turn on WSL in your Windows settings, then run the following commands: `wsl --install -d ubuntu` and `wsl --set-version ubuntu 2`. Then go into Docker -> Settings -> General -> tick "Use the WSL 2 based engine", then go into Docker -> Settings -> Resources -> WSL Integration -> tick "Ubuntu". `git clone` the mediawiki repository into a WSL folder such as `home/yourusername/mediawiki` so that the files are inside WSL. Then you can run most of the commands in this tutorial outside of WSL, by opening PowerShell, navigating to the WSL directory with `cd \\wsl.localhost\Ubuntu\home\yourusername\mediawiki`, and executing shell commands as normal. To access WSL from PowerShell (rare but may be needed sometimes), you can use the command `ubuntu` to turn a PowerShell console into a WSL console. To navigate to WSL folders in [File Explorer](https://en.wikipedia.org/wiki/File_Explorer), show the Navigation Pane, then towards the bottom, look for "Linux" (it will be close to "This PC").
 
-**Mac users**:
-
-If you're using Docker Desktop and have the `Use Rosetta for x86/amd64 emulation on Apple Silicon` setting enabled, you may encounter an issue where loading the wiki results in a blank page or a 503 error. To resolve this, disable the setting and restart Docker Desktop. See [this page](https://phabricator.wikimedia.org/P49617) for more information.
-
 ### 2. Download MediaWiki files
 
 Download the latest MediaWiki files to your computer. One way to download the latest alpha version of MediaWiki is to
@@ -60,7 +58,7 @@ Download the latest MediaWiki files to your computer. One way to download the la
 Optional: If you plan to submit patches to this repository, you will probably want to [create a Gerrit account](https://wikitech.wikimedia.org/wiki/Help:Create_a_Wikimedia_developer_account),
 then type `git remote set-url origin ssh://YOUR-GERRIT-USERNAME-HERE@gerrit.wikimedia.org:29418/mediawiki/core`,
 replacing YOUR-GERRIT-USERNAME-HERE with your Gerrit username. Please see the official
-[MediaWiki Gerrit tutorial](https://www.mediawiki.org/wiki/Gerrit/Tutorial) for more information.
+[MediaWiki Gerrit tutorial](https://www.mediawiki.org/wiki/Special:MyLanguage/Gerrit/Tutorial) for more information.
 
 ### 3. Prepare `.env` file
 
@@ -163,7 +161,7 @@ instance:/w/tests/phpunit$ composer phpunit -- path/to/my/test/
 
 See [PHPUnit on mediawiki.org][phpunit-testing] for more examples.
 
-[phpunit-testing]: https://www.mediawiki.org/wiki/Manual:PHP_unit_testing/Running_the_tests
+[phpunit-testing]: https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:PHP_unit_testing/Running_the_tests
 
 ### Selenium
 
@@ -176,7 +174,7 @@ npm ci
 npm run selenium-test
 ```
 
-[selenium-dedicated]: https://www.mediawiki.org/wiki/Selenium/Getting_Started/Run_tests_using_Fresh
+[selenium-dedicated]: https://www.mediawiki.org/wiki/Special:MyLanguage/Selenium/Getting_Started/Run_tests_using_Fresh
 
 ### API Testing
 
@@ -190,13 +188,13 @@ export MEDIAWIKI_USER=Admin
 export MEDIAWIKI_PASSWORD=dockerpass
 fresh-node -env -net
 # Create .api-testing.config.json as documented on
-# https://www.mediawiki.org/wiki/MediaWiki_API_integration_tests
+# https://www.mediawiki.org/wiki/Special:MyLanguage/MediaWiki_API_integration_tests
 npm ci
 npm run api-testing
 ```
 
 [fresh]: https://github.com/wikimedia/fresh
-[api-dedicated]: https://www.mediawiki.org/wiki/MediaWiki_API_integration_tests
+[api-dedicated]: https://www.mediawiki.org/wiki/Special:MyLanguage/MediaWiki_API_integration_tests
 
 ## Modify the development environment
 
@@ -250,10 +248,23 @@ To install the EventLogging extension:
     `docker-compose.override.yml`. This is comparable to a symlink, but those are not well-supported in Docker.
 
     ```yaml
-   services:
-     mediawiki:
-       volumes:
-         - ~/Code/EventLogging:/var/www/html/w/extensions/EventLogging:cached
+    services:
+      mediawiki:
+        volumes:
+          - ~/Code/EventLogging:/var/www/html/w/extensions/EventLogging:cached
+      mediawiki-jobrunner:
+        volumes:
+          - ~/Code/EventLogging:/var/www/html/w/extensions/EventLogging:cached
+    ```
+
+    Note: If the extension serves static assets directly (e.g., images, fonts), you may also
+    need to mount the volume to the `mediawiki-web` service:
+
+    ```yaml
+    services:
+      mediawiki-web:
+        volumes:
+          - ~/Code/EventLogging:/var/www/html/w/extensions/EventLogging:cached
     ```
 
 2. Enable the extension, by adding the following to `LocalSettings.php`:
@@ -326,6 +337,11 @@ when testing how changes in Codex affect Codex-based features in MediaWiki.
 5. Every time you make a change to your local copy of Codex (or download a Gerrit change), you
    have to rerun Codex's build process for these changes to take effect. To do this, run
    `npm run build-all` in the Codex directory.
+
+**Note:** if your local changes only affect `.vue` or `.ts` files, you can run `npm run quick-build`
+instead of the full build, which will be much faster. This won't rebuild TypeScript definitions or
+design token values, icons or i18n messages but can be handy for re-building small changes. If it
+is the first time you build Codex locally, running `npm run build-all` is still necessary.
 
 ### Stop or recreate environment
 

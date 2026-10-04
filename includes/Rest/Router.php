@@ -2,21 +2,25 @@
 
 namespace MediaWiki\Rest;
 
-use HttpStatus;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\HookContainer\HookContainer;
+use MediaWiki\Http\Telemetry;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MainConfigSchema;
 use MediaWiki\Permissions\Authority;
 use MediaWiki\Rest\BasicAccess\BasicAuthorizerInterface;
 use MediaWiki\Rest\Module\ExtraRoutesModule;
 use MediaWiki\Rest\Module\Module;
+use MediaWiki\Rest\Module\ModuleManager;
 use MediaWiki\Rest\Module\SpecBasedModule;
 use MediaWiki\Rest\PathTemplateMatcher\ModuleConfigurationException;
 use MediaWiki\Rest\Reporter\ErrorReporter;
 use MediaWiki\Rest\Validator\Validator;
 use MediaWiki\Session\Session;
+use MediaWiki\Utils\UrlUtils;
 use Throwable;
+use UnexpectedValueException;
+use Wikimedia\Assert\Assert;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ObjectCache\BagOStuff;
 use Wikimedia\ObjectFactory\ObjectFactory;
@@ -28,13 +32,20 @@ use Wikimedia\Stats\StatsFactory;
  * and executing the relevant module for a request.
  */
 class Router {
-	private const PREFIX_PATTERN = '!^/([-_.\w]+(?:/v\d+)?)(/.*)$!';
+	public const ROUTE_MODULE_SPEC = '/specs/v0/module/{module}';
+
+	private const PREFIX_PATTERN = '!^/([-_.\w]+(?:/v[-_.\w]+)?)(/.*)$!';
+
+	public const DEFAULT_ERROR_SCHEMA = '1.0';
+
+	private const ERROR_FORMATTERS = [
+		'restbase' => [ 'class' => RestbaseCompatErrorFormatter::class ],
+		'1.0' => [ 'class' => ErrorFormatterV1::class ],
+		'2.0' => [ 'class' => ErrorFormatterV2::class ],
+	];
 
 	/** @var string[] */
 	private $routeFiles;
-
-	/** @var array[] */
-	private $extraRoutes;
 
 	/** @var null|array[] */
 	private $moduleMap = null;
@@ -61,17 +72,7 @@ class Router {
 	private $configHash = null;
 
 	/** @var CorsUtils|null */
-	private $cors;
-
-	private BagOStuff $cacheBag;
-	private ResponseFactory $responseFactory;
-	private BasicAuthorizerInterface $basicAuth;
-	private Authority $authority;
-	private ObjectFactory $objectFactory;
-	private Validator $restValidator;
-	private ErrorReporter $errorReporter;
-	private HookContainer $hookContainer;
-	private Session $session;
+	private $cors = null;
 
 	/** @var ?StatsFactory */
 	private $stats = null;
@@ -84,14 +85,18 @@ class Router {
 		MainConfigNames::InternalServer,
 		MainConfigNames::RestPath,
 		MainConfigNames::ScriptPath,
+		MainConfigNames::Sitename,
+		MainConfigNames::EmergencyContact,
+		MainConfigNames::RestTermsOfServiceUrl,
 	];
 
 	/**
-	 * @param string[] $routeFiles
+	 * @param ModuleManager $moduleManager
 	 * @param array[] $extraRoutes
 	 * @param ServiceOptions $options
 	 * @param BagOStuff $cacheBag A cache in which to store the matcher trees
-	 * @param ResponseFactory $responseFactory
+	 * @param array $textFormatters
+	 * @param bool $showExceptionDetails
 	 * @param BasicAuthorizerInterface $basicAuth
 	 * @param Authority $authority
 	 * @param ObjectFactory $objectFactory
@@ -99,39 +104,34 @@ class Router {
 	 * @param ErrorReporter $errorReporter
 	 * @param HookContainer $hookContainer
 	 * @param Session $session
+	 * @param UrlUtils $urlUtils
 	 * @internal
 	 */
 	public function __construct(
-		array $routeFiles,
-		array $extraRoutes,
-		ServiceOptions $options,
-		BagOStuff $cacheBag,
-		ResponseFactory $responseFactory,
-		BasicAuthorizerInterface $basicAuth,
-		Authority $authority,
-		ObjectFactory $objectFactory,
-		Validator $restValidator,
-		ErrorReporter $errorReporter,
-		HookContainer $hookContainer,
-		Session $session
+		private readonly ModuleManager $moduleManager,
+		private readonly array $extraRoutes,
+		private readonly ServiceOptions $options,
+		private readonly BagOStuff $cacheBag,
+		private readonly array $textFormatters,
+		private readonly bool $showExceptionDetails,
+		private readonly BasicAuthorizerInterface $basicAuth,
+		private readonly Authority $authority,
+		private readonly ObjectFactory $objectFactory,
+		private readonly Validator $restValidator,
+		private ErrorReporter $errorReporter,
+		private readonly HookContainer $hookContainer,
+		private readonly Session $session,
+		private readonly UrlUtils $urlUtils,
 	) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
 
-		$this->routeFiles = $routeFiles;
-		$this->extraRoutes = $extraRoutes;
+		$this->routeFiles = $moduleManager->getRouteFiles();
 		$this->baseUrl = $options->get( MainConfigNames::CanonicalServer );
 		$this->privateBaseUrl = $options->get( MainConfigNames::InternalServer );
 		$this->rootPath = $options->get( MainConfigNames::RestPath );
 		$this->scriptPath = $options->get( MainConfigNames::ScriptPath );
-		$this->cacheBag = $cacheBag;
-		$this->responseFactory = $responseFactory;
-		$this->basicAuth = $basicAuth;
-		$this->authority = $authority;
-		$this->objectFactory = $objectFactory;
-		$this->restValidator = $restValidator;
-		$this->errorReporter = $errorReporter;
-		$this->hookContainer = $hookContainer;
-		$this->session = $session;
+
+		Assert::parameter( count( $textFormatters ) > 0, '$textFormatters', 'must not be empty' );
 	}
 
 	/**
@@ -196,8 +196,6 @@ class Router {
 
 	/**
 	 * Get the cache data, or false if it is missing or invalid
-	 *
-	 * @return ?array
 	 */
 	private function fetchCachedModuleMap(): ?array {
 		$moduleMapCacheKey = $this->getModuleMapCacheKey();
@@ -236,7 +234,7 @@ class Router {
 	}
 
 	private function getModuleMapCacheKey(): string {
-		return $this->cacheBag->makeKey( __CLASS__, 'map', '1' );
+		return $this->cacheBag->makeKey( __CLASS__, 'map', '2' );
 	}
 
 	/**
@@ -276,7 +274,8 @@ class Router {
 				$moduleInfo = [
 					'class' => SpecBasedModule::class,
 					'pathPrefix' => $id,
-					'specFile' => $file
+					'specFile' => $file,
+					'errorSchemaVersion' => $spec['errorSchemaVersion'] ?? null,
 				];
 			} else {
 				// Old-style route file containing a flat list of routes.
@@ -285,10 +284,15 @@ class Router {
 			}
 
 			if ( $moduleInfo ) {
-				if ( isset( $modules[$id] ) ) {
-					$otherFiles = implode( ' and ', $modules[$id]['routeFiles'] );
+				// Config and ModuleManager's CORE_ROUTE_FILES may legitimately refer to the same
+				// module file by different routes. The same moduleId in files with different
+				// names is almost certainly an error.
+				if (
+					isset( $modules[$id] ) &&
+					basename( $modules[$id]['specFile'] ) !== basename( $file )
+				) {
 					throw new ModuleConfigurationException(
-						"Duplicate module $id in $file, also used in $otherFiles"
+						"Duplicate module $id in $file"
 					);
 				}
 
@@ -305,6 +309,7 @@ class Router {
 				'pathPrefix' => '',
 				'routeFiles' => $noPrefixFiles,
 				'extraRoutes' => $this->extraRoutes,
+				'errorSchemaVersion' => null,
 			];
 		}
 
@@ -340,9 +345,16 @@ class Router {
 		return $this->moduleMap;
 	}
 
-	private function getModuleInfo( $module ): ?array {
+	private function getModuleInfo( string $module ): ?array {
 		$map = $this->getModuleMap();
 		return $map[$module] ?? null;
+	}
+
+	/**
+	 * @return ModuleManager
+	 */
+	public function getModuleManager(): ModuleManager {
+		return $this->moduleManager;
 	}
 
 	/**
@@ -352,11 +364,59 @@ class Router {
 		return array_keys( $this->getModuleMap() );
 	}
 
+	/**
+	 * Returns an uninitialized module by full path.
+	 * @deprecated since 1.47, use getModuleForRequest() instead.
+	 */
 	public function getModuleForPath( string $fullPath ): ?Module {
+		wfDeprecated( __METHOD__, '1.47' );
+
 		[ $moduleName, ] = $this->splitPath( $fullPath );
 		return $this->getModule( $moduleName );
 	}
 
+	/**
+	 * Returns a module suitable for handling the given request.
+	 *
+	 * @param RequestInterface $request
+	 * @param string|null $name The module name, if known. Will be derived from
+	 *        $request if not given.
+	 *
+	 * @return Module|null
+	 * @since since 1.47
+	 */
+	public function getModuleForRequest( RequestInterface $request, ?string $name ): ?Module {
+		if ( $name === null ) {
+			$fullPath = $request->getUri()->getPath();
+			[ $name, ] = $this->splitPath( $fullPath );
+		}
+
+		$module = $this->getModule( $name );
+		$info = $this->getModuleInfo( $name );
+
+		if ( !$module || !$info ) {
+			return null;
+		}
+
+		$responseFactory = $this->getModuleResponseFactory( $info, $request );
+		$module->initForExecute( $responseFactory );
+
+		if ( $this->cors ) {
+			$module->setCors( $this->cors );
+		}
+
+		if ( $this->stats ) {
+			$module->setStats( $this->stats );
+		}
+
+		return $module;
+	}
+
+	/**
+	 * Returns an uninitialized module by name.
+	 * @note To get a module that can be used for handling a request,
+	 * use getModuleForRequest() instead.
+	 */
 	public function getModule( string $name ): ?Module {
 		if ( isset( $this->modules[$name] ) ) {
 			return $this->modules[$name];
@@ -383,54 +443,118 @@ class Router {
 			$this->cacheModuleData( $name, $cacheData );
 		}
 
-		if ( $this->cors ) {
-			$module->setCors( $this->cors );
-		}
-
-		if ( $this->stats ) {
-			$module->setStats( $this->stats );
-		}
-
 		$this->modules[$name] = $module;
 		return $module;
 	}
 
 	/**
 	 * @since 1.42
+	 * @todo This should be called getRelativeRouteUrl() since query parameters are included
 	 */
 	public function getRoutePath(
-		string $routeWithModulePrefix,
+		string $pathWithModulePrefix,
 		array $pathParams = [],
 		array $queryParams = []
 	): string {
-		$routeWithModulePrefix = $this->substPathParams( $routeWithModulePrefix, $pathParams );
-		$path = $this->rootPath . $routeWithModulePrefix;
+		$pathWithModulePrefix = self::substPathParams( $pathWithModulePrefix, $pathParams );
+		$path = $this->rootPath . $pathWithModulePrefix;
 		return wfAppendQuery( $path, $queryParams );
 	}
 
 	public function getRouteUrl(
-		string $routeWithModulePrefix,
+		string $pathWithModulePrefix,
 		array $pathParams = [],
 		array $queryParams = []
 	): string {
-		return $this->baseUrl . $this->getRoutePath( $routeWithModulePrefix, $pathParams, $queryParams );
+		return $this->baseUrl . $this->getRoutePath( $pathWithModulePrefix, $pathParams, $queryParams );
 	}
 
 	public function getPrivateRouteUrl(
-		string $routeWithModulePrefix,
+		string $pathWithModulePrefix,
 		array $pathParams = [],
 		array $queryParams = []
 	): string {
-		return $this->privateBaseUrl . $this->getRoutePath( $routeWithModulePrefix, $pathParams, $queryParams );
+		return $this->privateBaseUrl . $this->getRoutePath( $pathWithModulePrefix, $pathParams, $queryParams );
 	}
 
 	/**
-	 * @param string $route
+	 * Gets the absolute base URL for a given module ID.
+	 *
+	 * For external modules, UrlUtils expands any relative URL.
+	 * For local modules, the route URL is generated from the module ID.
+	 *
+	 * @param string $moduleId The module ID
+	 * @return string|null The absolute base URL, or null if the module is unresolvable
+	 * @throws UnexpectedValueException If an external module has no base URL configured
+	 * @since 1.47
+	 */
+	public function getModuleBaseUrl( string $moduleId ): ?string {
+		$info = $this->moduleManager->getModuleInfo( $moduleId );
+		if ( !$info ) {
+			return null;
+		}
+
+		if ( $info->isExternal() ) {
+			$baseUrl = $info->getExternalBaseUrl();
+			if ( $baseUrl === null ) {
+				throw new UnexpectedValueException(
+					"External module '$moduleId' has no base URL configured"
+				);
+			}
+			return $this->urlUtils->expand( $baseUrl );
+		}
+
+		return $this->getRouteUrl( '/' . $moduleId );
+	}
+
+	/**
+	 * Gets the absolute OpenAPI specification URL for a given module ID.
+	 *
+	 * For external modules, UrlUtils expands the spec URL.
+	 * For local modules, returns the default route URL defined by self::ROUTE_MODULE_SPEC.
+	 *
+	 * @param string $moduleId The module ID
+	 * @return string|null The absolute spec URL, or null if the module is unresolvable
+	 * @throws UnexpectedValueException If an external module has no spec URL configured
+	 * @since 1.47
+	 */
+	public function getModuleSpecUrl( string $moduleId ): ?string {
+		$info = $this->moduleManager->getModuleInfo( $moduleId );
+		if ( !$info ) {
+			return null;
+		}
+
+		if ( $info->isExternal() ) {
+			$specUrl = $info->getExternalSpecUrl();
+			if ( $specUrl === null ) {
+				throw new UnexpectedValueException(
+					"External module '$moduleId' has no spec URL configured"
+				);
+			}
+			return $this->urlUtils->expand( $specUrl );
+		} elseif ( $moduleId === '' ) {
+			return $this->getRouteUrl( self::ROUTE_MODULE_SPEC, [ 'module' => '-' ] );
+		}
+
+		$specPath = $info->getLocalDescriptionSpecPath();
+		return ( $specPath !== null )
+			? $this->getRouteUrl( '/' . $moduleId . $specPath )
+			: $this->getRouteUrl( self::ROUTE_MODULE_SPEC, [ 'module' => $moduleId ] );
+	}
+
+	/**
+	 * Substitute parameters into a template string, following the
+	 * requirements for path parameters: Spaces are encoded as %20 (not +)
+	 * and slashes are encoded as %2F, other characters with special meaning
+	 * are encoded as they would be for query parameters.
+	 *
+	 * @param string $route A path with {placeholders}
 	 * @param array $pathParams
 	 *
 	 * @return string
+	 * @since 1.47 (was protected/internal before that)
 	 */
-	protected function substPathParams( string $route, array $pathParams ): string {
+	public static function substPathParams( string $route, array $pathParams ): string {
 		foreach ( $pathParams as $param => $value ) {
 			// NOTE: we use rawurlencode here, since execute() uses rawurldecode().
 			// Spaces in path params must be encoded to %20 (not +).
@@ -445,23 +569,36 @@ class Router {
 			$fullPath = $request->getUri()->getPath();
 			$response = $this->doExecute( $fullPath, $request );
 		} catch ( HttpException $e ) {
-			$extraData = [];
-			if ( $this->isRestbaseCompatEnabled( $request )
-				&& $e instanceof LocalizedHttpException
-			) {
-				$extraData = $this->getRestbaseCompatErrorData( $request, $e );
-			}
-			$response = $this->responseFactory->createFromException( $e, $extraData );
+			$response = $this->createResponseFromException( $e, $request );
 		} catch ( Throwable $e ) {
 			$this->errorReporter->reportError( $e, null, $request );
-			$response = $this->responseFactory->createFromException( $e );
+			$response = $this->createResponseFromException( $e, $request );
 		}
 
 		// TODO: Only send the vary header for handlers that opt into
 		//       restbase compat!
 		$this->varyOnRestbaseCompat( $response );
 
+		// Apply CORS headers to every response, including router-level errors
+		// (unknown module, prefix mismatch), redirects, and top-level
+		// exceptions that never reach a Module. Preflight responses created in
+		// Module::throwNoMatch() also pass through here to gain their
+		// Access-Control-Allow-Origin header.
+		if ( $this->cors ) {
+			$this->cors->modifyResponse( $request, $response );
+		}
+
 		return $response;
+	}
+
+	private function createResponseFromException( Throwable $e, RequestInterface $request ): ResponseInterface {
+		$responseFactory = $this->getModuleResponseFactory( [], $request );
+		return $responseFactory->createFromException( $e );
+	}
+
+	private function createRedirectResponse( string $target, int $code, RequestInterface $request ): ResponseInterface {
+		$responseFactory = $this->getModuleResponseFactory( [], $request );
+		return $responseFactory->createRedirect( $target, $code );
 	}
 
 	private function doExecute( string $fullPath, RequestInterface $request ): ResponseInterface {
@@ -471,10 +608,10 @@ class Router {
 		// That's the minimal path that can be routed.
 		if ( $modulePrefix === '' && $path === '' ) {
 			$target = $this->getRoutePath( '/' );
-			return $this->responseFactory->createRedirect( $target, 308 );
+			return $this->createRedirectResponse( $target, 308, $request );
 		}
 
-		$module = $this->getModule( $modulePrefix );
+		$module = $this->getModuleForRequest( $request, $modulePrefix );
 
 		if ( !$module ) {
 			throw new LocalizedHttpException(
@@ -498,17 +635,12 @@ class Router {
 		// them into each Module.
 		$handler->initServices(
 			$this->authority,
-			$this->responseFactory,
 			$this->hookContainer
 		);
 
 		$handler->initSession( $this->session );
 	}
 
-	/**
-	 * @param CorsUtils $cors
-	 * @return self
-	 */
 	public function setCors( CorsUtils $cors ): self {
 		$this->cors = $cors;
 
@@ -528,32 +660,37 @@ class Router {
 		return $this;
 	}
 
-	/**
-	 * @param array $info
-	 * @param string $name
-	 */
 	private function instantiateModule( array $info, string $name ): Module {
+		// NOTE: $this->textFormatters are in the order of preference.
+		//       See EntryPoint::getTextFormaters().
+		//       Use the first one.
+		$defaultFormatter = array_first( $this->textFormatters );
+		$jsonLocalizer = new JsonLocalizer( $defaultFormatter );
+
 		if ( $info['class'] === SpecBasedModule::class ) {
 			$module = new SpecBasedModule(
 				$info['specFile'],
 				$this,
 				$info['pathPrefix'] ?? $name,
-				$this->responseFactory,
+				$jsonLocalizer,
 				$this->basicAuth,
 				$this->objectFactory,
 				$this->restValidator,
-				$this->errorReporter
+				$this->errorReporter,
+				$this->hookContainer
 			);
 		} else {
 			$module = new ExtraRoutesModule(
 				$info['routeFiles'] ?? [],
 				$info['extraRoutes'] ?? [],
 				$this,
-				$this->responseFactory,
+				$jsonLocalizer,
 				$this->basicAuth,
 				$this->objectFactory,
 				$this->restValidator,
-				$this->errorReporter
+				$this->errorReporter,
+				$this->hookContainer,
+				new ServiceOptions( ExtraRoutesModule::CONSTRUCTOR_OPTIONS, $this->options )
 			);
 		}
 
@@ -576,22 +713,55 @@ class Router {
 	}
 
 	/**
-	 * @internal
-	 *
-	 * @return array
+	 * Provide information about the request, for use by ErrorFormatters.
+	 * All data returned by this method may be sent to the client verbatim.
+	 * However, the content of this array is not an API contract, it may
+	 * change at any time. It's intended for diagnostic purposes on the
+	 * client side, and, more importantly, when clients report errors
+	 * upstream.
 	 */
-	public function getRestbaseCompatErrorData( RequestInterface $request, LocalizedHttpException $e ): array {
-		$msg = $e->getMessageValue();
-
-		// Match error fields emitted by the RESTBase endpoints.
-		// EntryPoint::getTextFormatters() ensures 'en' is always available.
-		return [
-			'type' => "MediaWikiError/" .
-				str_replace( ' ', '_', HttpStatus::getMessage( $e->getCode() ) ),
-			'title' => $msg->getKey(),
-			'method' => strtolower( $request->getMethod() ),
-			'detail' => $this->responseFactory->getFormattedMessage( $msg, 'en' ),
-			'uri' => (string)$request->getUri()
+	private function getTracingData( string $method, string $uri ): array {
+		$tracingData = [
+			'module' => 'mediawiki',
+			'method' => strtolower( $method ),
+			'uri' => $uri,
+			'request_id' => Telemetry::getInstance()->getRequestId()
 		];
+
+		$url = $this->urlUtils->expand( $uri, PROTO_CANONICAL );
+		if ( $url !== null ) {
+			$tracingData['url'] = $url;
+		}
+
+		return $tracingData;
+	}
+
+	private function getModuleResponseFactory( array $moduleInfo, RequestInterface $request ): ResponseFactory {
+		$schemaVer = $moduleInfo['errorSchemaVersion'] ?? null;
+
+		if ( $this->isRestbaseCompatEnabled( $request ) ) {
+			$schemaVer = 'restbase';
+		}
+
+		$schemaVer ??= self::DEFAULT_ERROR_SCHEMA;
+		$formatterSpec = self::ERROR_FORMATTERS[ $schemaVer ] ?? null;
+
+		if ( !$formatterSpec ) {
+			throw new ModuleConfigurationException( "Unsupported errorSchemaVersion: $schemaVer" );
+		}
+
+		$errorFormatter = $this->objectFactory->createObject(
+			$formatterSpec,
+			[
+				'assertClass' => ErrorFormatter::class,
+				'extraArgs' => [
+					$this->textFormatters,
+					$this->showExceptionDetails,
+					$this->getTracingData( $request->getMethod(), (string)$request->getUri() )
+				],
+			]
+		);
+
+		return new ResponseFactory( $this->textFormatters, $errorFormatter );
 	}
 }

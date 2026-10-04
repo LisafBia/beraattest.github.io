@@ -2,8 +2,8 @@
 
 namespace MediaWiki\Rest;
 
-use HttpStatus;
 use Psr\Http\Message\StreamInterface;
+use Wikimedia\Http\HttpStatus;
 
 class Response implements ResponseInterface {
 
@@ -47,14 +47,17 @@ class Response implements ResponseInterface {
 		return $resp;
 	}
 
-	public function getStatusCode() {
+	/** @inheritDoc */
+	public function getStatusCode(): int {
 		return $this->statusCode;
 	}
 
-	public function getReasonPhrase() {
+	/** @inheritDoc */
+	public function getReasonPhrase(): string {
 		return $this->reasonPhrase;
 	}
 
+	/** @inheritDoc */
 	public function setStatus( $code, $reasonPhrase = '' ) {
 		$this->statusCode = $code;
 		if ( $reasonPhrase === '' ) {
@@ -63,54 +66,67 @@ class Response implements ResponseInterface {
 		$this->reasonPhrase = $reasonPhrase;
 	}
 
-	public function getProtocolVersion() {
+	/** @inheritDoc */
+	public function getProtocolVersion(): string {
 		return $this->protocolVersion;
 	}
 
-	public function getHeaders() {
+	/** @inheritDoc */
+	public function getHeaders(): array {
 		return $this->headerContainer->getHeaders();
 	}
 
-	public function hasHeader( $name ) {
+	/** @inheritDoc */
+	public function hasHeader( string $name ): bool {
 		return $this->headerContainer->hasHeader( $name );
 	}
 
-	public function getHeader( $name ) {
+	/** @inheritDoc */
+	public function getHeader( string $name ): array {
 		return $this->headerContainer->getHeader( $name );
 	}
 
-	public function getHeaderLine( $name ) {
+	/** @inheritDoc */
+	public function getHeaderLine( string $name ): string {
 		return $this->headerContainer->getHeaderLine( $name );
 	}
 
-	public function getBody() {
+	/** @inheritDoc */
+	public function getBody(): StreamInterface {
 		return $this->body;
 	}
 
+	/** @inheritDoc */
 	public function setProtocolVersion( $version ) {
 		$this->protocolVersion = $version;
 	}
 
+	/** @inheritDoc */
 	public function setHeader( $name, $value ) {
 		$this->headerContainer->setHeader( $name, $value );
 	}
 
+	/** @inheritDoc */
 	public function addHeader( $name, $value ) {
 		$this->headerContainer->addHeader( $name, $value );
 	}
 
+	/** @inheritDoc */
 	public function removeHeader( $name ) {
 		$this->headerContainer->removeHeader( $name );
 	}
 
-	public function setBody( StreamInterface $body ) {
+	/** @inheritDoc */
+	public function setBody( StreamInterface|string $body ) {
 		$this->body = $body;
 	}
 
+	/** @inheritDoc */
 	public function getRawHeaderLines() {
 		return $this->headerContainer->getRawHeaderLines();
 	}
 
+	/** @inheritDoc */
 	public function setCookie( $name, $value, $expire = 0, $options = [] ) {
 		$this->cookies[] = [
 			'name' => $name,
@@ -120,6 +136,7 @@ class Response implements ResponseInterface {
 		];
 	}
 
+	/** @inheritDoc */
 	public function getCookies() {
 		return $this->cookies;
 	}

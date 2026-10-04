@@ -18,8 +18,8 @@ use ReflectionType;
  * They usually have one method like this for each service they register:
  *
  * ```php
- * public static function getService1( ContainerInterface $services = null ): Service1 {
- * 	return ( $services ?: MediaWikiServices::getInstance() )
+ * public static function getService1( ?ContainerInterface $services = null ): Service1 {
+ * 	return ( $services ?? MediaWikiServices::getInstance() )
  * 		->get( 'ExtensionName.Service1' );
  * }
  * ```
@@ -35,7 +35,7 @@ abstract class ExtensionServicesTestBase extends MediaWikiIntegrationTestCase {
 	 * @var string The name of the ExtensionServices class.
 	 * (A fully qualified name, usually specified via ::class syntax.)
 	 */
-	protected string $className;
+	protected static string $className;
 
 	/**
 	 * @var string The prefix of the services in the service wiring.
@@ -72,7 +72,7 @@ abstract class ExtensionServicesTestBase extends MediaWikiIntegrationTestCase {
 		$expectedService = $this->createValue( $method->getReturnType() );
 		$this->setService( $serviceName, $expectedService );
 
-		$actualService = $this->className::$methodName();
+		$actualService = static::$className::$methodName();
 
 		$this->assertSame( $expectedService, $actualService,
 			'should return service from MediaWikiServices' );
@@ -89,14 +89,14 @@ abstract class ExtensionServicesTestBase extends MediaWikiIntegrationTestCase {
 			->with( $serviceName )
 			->willReturn( $expectedService );
 
-		$actualService = $this->className::$methodName( $services );
+		$actualService = static::$className::$methodName( $services );
 
 		$this->assertSame( $expectedService, $actualService,
 			'should return service from injected container' );
 	}
 
-	public function provideMethods(): iterable {
-		$reflectionClass = new ReflectionClass( $this->className );
+	public static function provideMethods(): iterable {
+		$reflectionClass = new ReflectionClass( static::$className );
 		$methods = $reflectionClass->getMethods();
 
 		foreach ( $methods as $method ) {
@@ -141,7 +141,7 @@ abstract class ExtensionServicesTestBase extends MediaWikiIntegrationTestCase {
 			return;
 		}
 
-		$reflectionClass = new ReflectionClass( $this->className );
+		$reflectionClass = new ReflectionClass( static::$className );
 		foreach ( $this->getServiceContainer()->getServiceNames() as $serviceName ) {
 			if ( in_array( $serviceName, $this->serviceNamesWithoutMethods, true ) ) {
 				continue;
@@ -154,5 +154,4 @@ abstract class ExtensionServicesTestBase extends MediaWikiIntegrationTestCase {
 
 		$this->assertTrue( true, 'test did not throw' );
 	}
-
 }

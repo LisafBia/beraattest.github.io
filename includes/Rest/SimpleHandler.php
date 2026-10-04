@@ -12,9 +12,9 @@ use LogicException;
  * here because it has a variable parameter list.
  *
  * @stable to extend
- * @package MediaWiki\Rest
  */
 abstract class SimpleHandler extends Handler {
+	/** @inheritDoc */
 	public function execute() {
 		$paramSettings = $this->getParamSettings();
 		$validatedParams = $this->getValidatedParams();

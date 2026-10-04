@@ -5,9 +5,7 @@ namespace MediaWiki\Rest\Handler\Helper;
 use MediaWiki\ChangeTags\ChangeTagsStore;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Content\TextContent;
-use MediaWiki\Content\WikitextContent;
 use MediaWiki\MainConfigNames;
-use MediaWiki\Message\Message;
 use MediaWiki\Page\ExistingPageRecord;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageLookup;
@@ -21,12 +19,14 @@ use MediaWiki\Revision\RevisionLookup;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Revision\SuppressedDataException;
-use MediaWiki\Title\Title;
+use MediaWiki\ShadowPage\ShadowPage;
+use MediaWiki\ShadowPage\ShadowPageLoader;
 use MediaWiki\Title\TitleFactory;
 use MediaWiki\Title\TitleFormatter;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\Rdbms\IConnectionProvider;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * @internal for use by core REST infrastructure
@@ -54,14 +54,6 @@ class PageContentHelper {
 		MainConfigNames::RightsText,
 	];
 
-	protected ServiceOptions $options;
-	protected RevisionLookup $revisionLookup;
-	protected TitleFormatter $titleFormatter;
-	protected PageLookup $pageLookup;
-	private TitleFactory $titleFactory;
-	private IConnectionProvider $dbProvider;
-	private ChangeTagsStore $changeTagsStore;
-
 	/** @var Authority|null */
 	protected $authority = null;
 
@@ -77,22 +69,19 @@ class PageContentHelper {
 	/** @var PageIdentity|false|null */
 	private $pageIdentity = false;
 
+	/** @var ShadowPage|false|null */
+	private $shadowPage = false;
+
 	public function __construct(
-		ServiceOptions $options,
-		RevisionLookup $revisionLookup,
-		TitleFormatter $titleFormatter,
-		PageLookup $pageLookup,
-		TitleFactory $titleFactory,
-		IConnectionProvider $dbProvider,
-		ChangeTagsStore $changeTagsStore
+		protected ServiceOptions $options,
+		protected RevisionLookup $revisionLookup,
+		protected TitleFormatter $titleFormatter,
+		protected PageLookup $pageLookup,
+		private TitleFactory $titleFactory,
+		private IConnectionProvider $dbProvider,
+		private ChangeTagsStore $changeTagsStore,
+		private ShadowPageLoader $shadowPageLoader,
 	) {
-		$this->options = $options;
-		$this->revisionLookup = $revisionLookup;
-		$this->titleFormatter = $titleFormatter;
-		$this->pageLookup = $pageLookup;
-		$this->titleFactory = $titleFactory;
-		$this->dbProvider = $dbProvider;
-		$this->changeTagsStore = $changeTagsStore;
 	}
 
 	/**
@@ -111,9 +100,6 @@ class PageContentHelper {
 		return $this->parameters['title'] ?? null;
 	}
 
-	/**
-	 * @return ExistingPageRecord|null
-	 */
 	public function getPage(): ?ExistingPageRecord {
 		if ( $this->pageRecord === false ) {
 			$titleText = $this->getTitleText();
@@ -188,12 +174,12 @@ class PageContentHelper {
 			if ( !( $content instanceof TextContent ) ) {
 				throw new LocalizedHttpException( MessageValue::new( 'rest-page-source-type-error' ), 400 );
 			}
-		} catch ( SuppressedDataException $e ) {
+		} catch ( SuppressedDataException ) {
 			throw new LocalizedHttpException(
 				MessageValue::new( 'rest-permission-denied-revision' )->numParams( $revision->getId() ),
 				403
 			);
-		} catch ( RevisionAccessException $e ) {
+		} catch ( RevisionAccessException ) {
 			throw new LocalizedHttpException(
 				MessageValue::new( 'rest-nonexistent-revision' )->numParams( $revision->getId() ),
 				404
@@ -202,34 +188,47 @@ class PageContentHelper {
 		return $content;
 	}
 
-	/**
-	 * @return bool
-	 */
 	public function isAccessible(): bool {
 		$page = $this->getPageIdentity();
 		return $page && $this->authority->probablyCan( 'read', $page );
 	}
 
 	/**
-	 * Returns an ETag representing a page's source. The ETag assumes a page's source has changed
-	 * if the latest revision of a page has been made private, un-readable for another reason,
-	 * or a newer revision exists.
-	 * @return string|null
+	 * Returns an ETag representing a page's source. The ETag assumes a page's source has changed if:
+	 * - The latest revision of a page has been made private or un-readable for another reason
+	 * - A newer revision exists
+	 * - The visible tags on the revision have changed
+	 *
+	 * @param string $suffix A suffix to attach to the etag.
+	 *        Must consist of characters that are legal in ETags.
 	 */
-	public function getETag(): ?string {
+	public function getETag( string $suffix = '' ): ?string {
 		$revision = $this->getTargetRevision();
 		$revId = $revision ? $revision->getId() : 'e0';
 
 		$isAccessible = $this->isAccessible();
 		$accessibleTag = $isAccessible ? 'a1' : 'a0';
 
-		$revisionTag = $revId . $accessibleTag;
-		return '"' . sha1( $revisionTag ) . '"';
+		$tagsOnRevision = [];
+		if ( $revision ) {
+			$tagsOnRevision = $this->changeTagsStore->getViewableTags(
+				$this->dbProvider->getReplicaDatabase(),
+				$this->authority,
+				null,
+				$revision->getId()
+			);
+		}
+
+		$revisionTag = $revId . $accessibleTag . implode( ', ', $tagsOnRevision );
+		$etag = sha1( $revisionTag );
+
+		if ( $suffix !== '' ) {
+			$etag .= '/' . $suffix;
+		}
+
+		return '"' . $etag . '"';
 	}
 
-	/**
-	 * @return string|null
-	 */
 	public function getLastModified(): ?string {
 		if ( !$this->isAccessible() ) {
 			return null;
@@ -244,16 +243,11 @@ class PageContentHelper {
 
 	/**
 	 * Checks whether content exists. Permission checks are not considered.
-	 *
-	 * @return bool
 	 */
 	public function hasContent(): bool {
-		return $this->useDefaultSystemMessage() || (bool)$this->getPage();
+		return $this->useShadowContent() || (bool)$this->getPage();
 	}
 
-	/**
-	 * @return array
-	 */
 	public function constructMetadata(): array {
 		$revision = $this->getRevisionRecordForMetadata();
 
@@ -264,7 +258,7 @@ class PageContentHelper {
 			'title' => $this->titleFormatter->getPrefixedText( $page ),
 			'latest' => [
 				'id' => $revision->getId(),
-				'timestamp' => wfTimestampOrNull( TS_ISO_8601, $revision->getTimestamp() )
+				'timestamp' => wfTimestampOrNull( TS::ISO_8601, $revision->getTimestamp() )
 			],
 			'content_model' => $revision->getMainContentModel(),
 			'license' => [
@@ -274,17 +268,15 @@ class PageContentHelper {
 		];
 	}
 
-	/**
-	 * @return array
-	 */
 	public function constructRestbaseCompatibleMetadata(): array {
 		$revision = $this->getRevisionRecordForMetadata();
 
 		$page = $revision->getPage();
 		$title = $this->titleFactory->newFromPageIdentity( $page );
 
-		$tags = $this->changeTagsStore->getTags(
+		$tags = $this->changeTagsStore->getViewableTags(
 			$this->dbProvider->getReplicaDatabase(),
+			$this->authority,
 			null, $revision->getId(), null
 		);
 
@@ -298,6 +290,9 @@ class PageContentHelper {
 			$restrictions[] = 'userhidden';
 		}
 
+		$publicUser = $revision->getUser();
+		$publicComment = $revision->getComment();
+
 		return [
 			'title' => $title->getPrefixedDBkey(),
 			'page_id' => $page->getId(),
@@ -310,10 +305,10 @@ class PageContentHelper {
 			'tid' => 'DUMMY',
 
 			'namespace' => $page->getNamespace(),
-			'user_id' => $revision->getUser( RevisionRecord::RAW )->getId(),
-			'user_text' => $revision->getUser( RevisionRecord::FOR_PUBLIC )->getName(),
-			'timestamp' => wfTimestampOrNull( TS_ISO_8601, $revision->getTimestamp() ),
-			'comment' => $revision->getComment()->text,
+			'user_id' => $publicUser?->getId(),
+			'user_text' => $publicUser?->getName(),
+			'comment' => $publicComment ? $publicComment->text : null,
+			'timestamp' => wfTimestampOrNull( TS::ISO_8601, $revision->getTimestamp() ),
 			'tags' => $tags,
 			'restrictions' => $restrictions,
 			'page_language' => $title->getPageLanguage()->getCode(),
@@ -331,6 +326,7 @@ class PageContentHelper {
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-page-content-title' ),
+				Handler::PARAM_EXAMPLE => 'Earth',
 			],
 			'redirect' => [
 				Handler::PARAM_SOURCE => 'query',
@@ -338,6 +334,7 @@ class PageContentHelper {
 				ParamValidator::PARAM_REQUIRED => false,
 				ParamValidator::PARAM_DEFAULT => true,
 				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-page-content-redirect' ),
+				Handler::PARAM_EXAMPLE => true,
 			]
 		];
 	}
@@ -348,8 +345,6 @@ class PageContentHelper {
 	 *
 	 * Handlers that can follow wiki redirects can use this to give clients
 	 * control over the redirect handling behavior.
-	 *
-	 * @return bool
 	 */
 	public function getRedirectsAllowed(): bool {
 		return $this->parameters['redirect'] ?? true;
@@ -373,32 +368,49 @@ class PageContentHelper {
 	}
 
 	/**
-	 * If the page is a system message page. When the content gets
+	 * If the page is a shadow page. When the content gets
 	 * overridden to create an actual page, this method returns false.
-	 *
-	 * @return bool
 	 */
-	public function useDefaultSystemMessage(): bool {
-		return $this->getDefaultSystemMessage() !== null && $this->getPage() === null;
+	public function useShadowContent(): bool {
+		return $this->getShadowPage()?->hasPreloadContent() && $this->getPage() === null;
 	}
 
 	/**
-	 * @return Message|null
+	 * Get the shadow page, if any
+	 * @return ShadowPage|null
 	 */
-	public function getDefaultSystemMessage(): ?Message {
-		$title = Title::newFromText( $this->getTitleText() );
-
-		return $title ? $title->getDefaultSystemMessage() : null;
+	public function getShadowPage(): ?ShadowPage {
+		if ( $this->shadowPage === false ) {
+			$page = $this->getPageIdentity();
+			if ( $page ) {
+				$this->shadowPage = $this->shadowPageLoader->get( $page );
+			} else {
+				$this->shadowPage = null;
+			}
+		}
+		return $this->shadowPage;
 	}
 
 	/**
-	 * @throws LocalizedHttpException if access is not allowed
+	 * @throws LocalizedHttpException 404 if the requested title does not address a
+	 *         page, 403 if that page may not be read
 	 */
 	public function checkAccessPermission() {
 		$titleText = $this->getTitleText() ?? '';
+		$page = $this->getPageIdentity();
 
-		// @phan-suppress-next-line PhanTypeMismatchArgumentNullable Validated by hasContent
-		if ( !$this->isAccessible() || !$this->authority->authorizeRead( 'read', $this->getPageIdentity() ) ) {
+		// A title that does not address a page at all (an unparseable title, or one
+		// of a special page) leaves nothing to authorize against, so report it as
+		// missing rather than as forbidden. Checked here and not just in
+		// checkHasContent(), so that callers may run the two checks in either order.
+		if ( !$page ) {
+			throw new LocalizedHttpException(
+				MessageValue::new( 'rest-invalid-title' )->plaintextParams( $titleText ),
+				404
+			);
+		}
+
+		if ( !$this->isAccessible() || !$this->authority->authorizeRead( 'read', $page ) ) {
 			throw new LocalizedHttpException(
 				MessageValue::new( 'rest-permission-denied-title' )->plaintextParams( $titleText ),
 				403
@@ -407,9 +419,14 @@ class PageContentHelper {
 	}
 
 	/**
+	 * @param bool $allowShadowContent Whether the content of a "shadow page" (a
+	 *        page that is known but has no stored content, such as a system
+	 *        message page) satisfies this check. Routes that do not serve shadow
+	 *        content treat such a page as missing.
+	 *
 	 * @throws LocalizedHttpException if no content is available
 	 */
-	public function checkHasContent() {
+	public function checkHasContent( bool $allowShadowContent = true ) {
 		$titleText = $this->getTitleText() ?? '';
 
 		$page = $this->getPageIdentity();
@@ -420,7 +437,9 @@ class PageContentHelper {
 			);
 		}
 
-		if ( !$this->hasContent() ) {
+		$useShadowContent = $allowShadowContent && $this->useShadowContent();
+
+		if ( !$useShadowContent && !$this->getPage() ) {
 			// needs to check if it's possibly a variant title
 			throw new LocalizedHttpException(
 				MessageValue::new( 'rest-nonexistent-title' )->plaintextParams( $titleText ),
@@ -429,7 +448,7 @@ class PageContentHelper {
 		}
 
 		$revision = $this->getTargetRevision();
-		if ( !$revision && !$this->useDefaultSystemMessage() ) {
+		if ( !$revision && !$useShadowContent ) {
 			throw new LocalizedHttpException(
 				MessageValue::new( 'rest-no-revision' )->plaintextParams( $titleText ),
 				404
@@ -449,10 +468,10 @@ class PageContentHelper {
 	 * @return MutableRevisionRecord|RevisionRecord|null
 	 */
 	private function getRevisionRecordForMetadata() {
-		if ( $this->useDefaultSystemMessage() ) {
-			$title = Title::newFromText( $this->getTitleText() );
-			$content = new WikitextContent( $title->getDefaultMessageText() );
-			$revision = new MutableRevisionRecord( $title );
+		$pageIdentity = $this->getPageIdentity();
+		$content = $this->getShadowPage()?->getPreloadContent();
+		if ( $pageIdentity && $content ) {
+			$revision = new MutableRevisionRecord( $pageIdentity );
 			$revision->setPageId( 0 );
 			$revision->setId( 0 );
 			$revision->setContent(

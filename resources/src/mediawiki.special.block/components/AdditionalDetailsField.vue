@@ -5,7 +5,7 @@
 			v-model="autoBlock"
 			input-value="wpAutoBlock"
 		>
-			{{ $i18n( 'ipbenableautoblock', autoBlockExpiry ) }}
+			<div v-i18n-html:ipbenableautoblock="[ autoBlockExpiry ]"></div>
 		</cdx-checkbox>
 		<cdx-checkbox
 			v-if="hideUserVisible"

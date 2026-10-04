@@ -5,21 +5,7 @@
  * Copyright © 2004 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Testing
  */
@@ -27,15 +13,18 @@
 require_once __DIR__ . '/../../maintenance/Maintenance.php';
 
 use MediaWiki\Maintenance\Maintenance;
-use MediaWiki\MediaWikiServices;
 use MediaWiki\Settings\SettingsBuilder;
 use MediaWiki\Specials\SpecialVersion;
-use MediaWiki\Tests\AnsiTermColorer;
-use MediaWiki\Tests\DummyTermColorer;
+use MediaWiki\Tests\Common\Parser\AnsiTermColorer;
+use MediaWiki\Tests\Common\Parser\DbTestPreviewer;
+use MediaWiki\Tests\Common\Parser\DbTestRecorder;
+use MediaWiki\Tests\Common\Parser\DummyTermColorer;
+use MediaWiki\Tests\Common\Parser\MultiTestRecorder;
+use MediaWiki\Tests\Common\Parser\ParserTestPrinter;
+use MediaWiki\Tests\Common\Parser\ParserTestRunner;
 use Wikimedia\Parsoid\Utils\ScriptUtils;
 
 define( 'MW_AUTOLOAD_TEST_CLASSES', true );
-define( 'MW_PARSER_TEST', true );
 
 class ParserTestsMaintenance extends Maintenance {
 
@@ -51,7 +40,7 @@ class ParserTestsMaintenance extends Maintenance {
 			false, true );
 		$this->addOption( 'regex', 'Only run tests whose descriptions which match given regex',
 			false, true );
-		$this->addOption( 'filter', 'Alias for --regex', false, true );
+		$this->addOption( 'filter', 'Only run tests whose description contains the given string', false, true );
 		$this->addOption( 'file', 'Run test cases from a custom file instead of parserTests.txt',
 			false, true, false, true );
 		$this->addOption( 'dir', 'Run test cases for all *.txt files in a directory',
@@ -104,53 +93,45 @@ class ParserTestsMaintenance extends Maintenance {
 		$this->addOption( 'update-tests',
 			'Update parserTests.txt with results from wt2html fails.  Note that editTests.php exists ' .
 				'for finer grained editing of tests.' );
+		$this->addOption( 'update-unexpected',
+			'Update parserTests.txt with results from unexpected wt2html fails.'
+		);
+		$this->addOption( 'update-format', 'format with which to update tests; only useful in conjunction ' .
+			'with update-tests or update-unexpected and --parsoid. Values: raw, noDsr, actualNormalized.' );
 	}
 
 	public function finalSetup( SettingsBuilder $settingsBuilder ) {
 		// Some methods which are discouraged for normal code throw exceptions unless
 		// we declare this is just a test.
-		define( 'MW_PARSER_TEST', true );
+		define( 'MW_PHPUNIT_TEST', true );
 
 		parent::finalSetup( $settingsBuilder );
 		TestSetup::applyInitialConfig();
 	}
 
 	public function execute() {
-		global $wgDBtype;
-
-		// Cases of weird db corruption were encountered when running tests on earlyish
-		// versions of SQLite
-		if ( $wgDBtype == 'sqlite' ) {
-			$dbw = MediaWikiServices::getInstance()->getConnectionProvider()->getPrimaryDatabase();
-			$version = $dbw->getServerVersion();
-			if ( version_compare( $version, '3.6' ) < 0 ) {
-				die( "Parser tests require SQLite version 3.6 or later, you have $version\n" );
-			}
-		}
-
 		// Print out software version to assist with locating regressions
 		$version = SpecialVersion::getVersion( 'nodb' );
 		echo "This is MediaWiki version {$version}.\n\n";
 
-		// Only colorize output if stdout is a terminal.
-		$color = !wfIsWindows() && Maintenance::posix_isatty( 1 );
-
 		if ( $this->hasOption( 'color' ) ) {
-			switch ( $this->getOption( 'color' ) ) {
-				case 'no':
-					$color = false;
-					break;
-				case 'yes':
-				default:
-					$color = true;
-					break;
-			}
+			$color = $this->getOption( 'color' ) !== 'no';
+		} else {
+			// Only colorize output if stdout is a terminal.
+			$color = !wfIsWindows() && Maintenance::posix_isatty( 1 );
 		}
 
 		$record = $this->hasOption( 'record' );
 		$compare = $this->hasOption( 'compare' );
 
-		$regex = $this->getOption( 'filter', $this->getOption( 'regex', false ) );
+		if ( $this->hasOption( 'filter' ) ) {
+			$regex = preg_quote( $this->getOption( 'filter' ), '/' );
+			if ( $this->hasOption( 'regex' ) ) {
+				echo "Warning: --regex cannot be used with --filter, disabling --regexp\n";
+			}
+		} else {
+			$regex = $this->getOption( 'regex', false );
+		}
 		if ( $regex !== false ) {
 			$regex = "/$regex/i";
 
@@ -212,7 +193,14 @@ class ParserTestsMaintenance extends Maintenance {
 
 		// Default parser tests and any set from extensions or local config
 		$dirs = $this->getOption( 'dir', [] );
-		$files = $this->getOption( 'file', ParserTestRunner::getParserTestFiles( $dirs ) );
+		if ( $this->hasOption( 'file' ) ) {
+			$files = [];
+			foreach ( $this->getOption( 'file' ) as $file ) {
+				array_push( $files, ...glob( $file ) );
+			}
+		} else {
+			$files = ParserTestRunner::getParserTestFiles( $dirs );
+		}
 		$norm = $this->hasOption( 'norm' ) ? explode( ',', $this->getOption( 'norm' ) ) : [];
 
 		$selserOpt = $this->getOption( 'selser', false ); /* can also be 'noauto' */
@@ -246,7 +234,9 @@ class ParserTestsMaintenance extends Maintenance {
 			'updateKnownFailures' => $this->hasOption( 'updateKnownFailures' ),
 			'traceFlags' => $traceFlags,
 			'dumpFlags' => $dumpFlags,
+			'update-format' => $this->getOption( 'update-format' ),
 			'update-tests' => $this->hasOption( 'update-tests' ),
+			'update-unexpected' => $this->hasOption( 'update-unexpected' ),
 		] );
 
 		$ok = $tester->runTestsFromFiles( $files );

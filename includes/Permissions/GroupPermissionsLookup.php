@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -26,7 +12,7 @@ use MediaWiki\MainConfigNames;
 /**
  * A service class for looking up permissions bestowed to groups, groups bestowed with
  * permissions, and permissions bestowed by membership in a combination of groups, solely
- * according to site configuration for group permissions and inheritence thereof.
+ * according to site configuration for group permissions and inheritance thereof.
  *
  * This class does *not* account for implicit rights (which are not associated with groups).
  * Callers might want to use {@see PermissionManager} if this is an issue.
@@ -35,7 +21,6 @@ use MediaWiki\MainConfigNames;
  * (e.g. 'user'). Callers must account for this when using {@see self::getGroupPermissions()}.
  *
  * @since 1.36
- * @package MediaWiki\Permissions
  */
 class GroupPermissionsLookup {
 
@@ -57,9 +42,6 @@ class GroupPermissionsLookup {
 	/** @var string[] */
 	private $groupInheritance;
 
-	/**
-	 * @param ServiceOptions $options
-	 */
 	public function __construct( ServiceOptions $options ) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
 		$this->groupPermissions = $options->get( MainConfigNames::GroupPermissions );
@@ -126,7 +108,7 @@ class GroupPermissionsLookup {
 			);
 		}
 
-		return array_unique( $rights );
+		return array_values( array_unique( $rights ) );
 	}
 
 	/**
@@ -147,7 +129,7 @@ class GroupPermissionsLookup {
 			);
 		}
 
-		return array_unique( $rights );
+		return array_values( array_unique( $rights ) );
 	}
 
 	/**
@@ -190,7 +172,7 @@ class GroupPermissionsLookup {
 				);
 			}
 		}
-		return array_unique( $rights );
+		return array_values( array_unique( $rights ) );
 	}
 
 	/**

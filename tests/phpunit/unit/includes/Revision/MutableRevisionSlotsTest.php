@@ -20,21 +20,21 @@ class MutableRevisionSlotsTest extends RevisionSlotsTest {
 	 * @param SlotRecord[] $slots
 	 * @return RevisionSlots
 	 */
-	protected function newRevisionSlots( $slots = [] ) {
+	protected static function newRevisionSlots( $slots = [] ) {
 		return new MutableRevisionSlots( $slots );
 	}
 
-	public static function provideConstructorFailue() {
+	public static function provideConstructorFailure() {
 		yield 'array or the wrong thing' => [
 			[ 1, 2, 3 ]
 		];
 	}
 
 	/**
-	 * @dataProvider provideConstructorFailue
+	 * @dataProvider provideConstructorFailure
 	 * @param array $slots
 	 */
-	public function testConstructorFailue( $slots ) {
+	public function testConstructorFailure( $slots ) {
 		$this->expectException( InvalidArgumentException::class );
 
 		new MutableRevisionSlots( $slots );

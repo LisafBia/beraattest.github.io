@@ -5,12 +5,14 @@
 			"Milicevic01"
 		]
 	},
+	"cdx-breadcrumb-overflow-label": "Још навигационих опција",
 	"cdx-chip-input-chip-added": "Чип $1 додат.",
 	"cdx-chip-input-chip-removed": "Чип $1 уклоњен.",
 	"cdx-input-chip-aria-description": "Притисните Enter да уредите или Delete да уклоните.",
 	"cdx-dialog-close-button-label": "Затвори",
 	"cdx-label-optional-flag": "(необавезно)",
 	"cdx-message-dismiss-button-label": "Затвори",
+	"cdx-popover-close-button-label": "Затвори",
 	"cdx-search-input-search-button-label": "Претрага",
 	"cdx-table-select-all-label": "Изабери све редове",
 	"cdx-table-select-row-label": "Изаберите ред $1 од $2",

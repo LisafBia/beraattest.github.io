@@ -1,10 +1,12 @@
 <?php
+declare( strict_types = 1 );
 
 namespace MediaWiki\Tests\OutputTransform\Stages;
 
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\OutputTransform\OutputTransformStage;
 use MediaWiki\OutputTransform\Stages\RenderDebugInfo;
+use MediaWiki\Parser\ParserOptions;
 use MediaWiki\Parser\ParserOutput;
 use MediaWiki\Tests\OutputTransform\OutputTransformStageTestBase;
 use Psr\Log\NullLogger;
@@ -22,16 +24,16 @@ class RenderDebugInfoTest extends OutputTransformStageTestBase {
 		);
 	}
 
-	public function provideShouldRun(): array {
+	public static function provideShouldRun(): array {
 		return [
-			[ new ParserOutput(), null, [ 'includeDebugInfo' => true ] ],
+			[ new ParserOutput(), ParserOptions::newFromAnon(), [ 'includeDebugInfo' => true ] ],
 		];
 	}
 
-	public function provideShouldNotRun(): array {
+	public static function provideShouldNotRun(): array {
 		return [
-			[ new ParserOutput(), null, [] ],
-			[ new ParserOutput(), null, [ 'includeDebugInfo' => false ] ],
+			[ new ParserOutput(), ParserOptions::newFromAnon(), [] ],
+			[ new ParserOutput(), ParserOptions::newFromAnon(), [ 'includeDebugInfo' => false ] ],
 		];
 	}
 
@@ -39,19 +41,42 @@ class RenderDebugInfoTest extends OutputTransformStageTestBase {
 	 * TODO this only covers the addition of the report, not the content of the report itself. Expanding this
 	 * test may be a good idea.
 	 */
-	public function provideTransform(): array {
+	public static function provideTransform(): array {
 		$text = <<<EOF
-<!DOCTYPE html>
-<html><head><title>Main Page</title></head><body data-parsoid='{"dsr":[0,6,0,0]}' lang="en"><p data-parsoid='{"dsr":[0,5,0,0]}'>hello</p>
-</body></html>
+<p data-parsoid='{"dsr":[0,5,0,0]}'>hello</p>
 EOF;
 		$expectedText = $text . "\n<!-- \nNewPP limit report\nComplications: []\n-->\n";
 		$po = new ParserOutput( $text );
+		$po->getContentHolder()->setAsHtmlString( 'some fragment', 'hello' );
 		$po->setLimitReportData( 'test', 'limit' );
 		$expected = new ParserOutput( $expectedText );
 		$expected->setLimitReportData( 'test', 'limit' );
+		$expected->getContentHolder()->setAsHtmlString( 'some fragment', 'hello' );
+
+		$expectedTextWithSource = $text .
+			"\n<!-- \nNewPP limit report\nCache expiry source: somesource\nComplications: []\n-->\n";
+		$poWithSource = new ParserOutput( $text );
+		$poWithSource->setLimitReportData( 'test', 'limit' );
+		$poWithSource->setLimitReportData( 'cachereport-expiry-source', 'somesource' );
+		$expectedWithSource = new ParserOutput( $expectedTextWithSource );
+		$expectedWithSource->setLimitReportData( 'test', 'limit' );
+		$expectedWithSource->setLimitReportData( 'cachereport-expiry-source', 'somesource' );
+
+		// DOM format ContentHolders
+		$po2 = clone $po;
+		$po2->getContentHolder()->getAsDom();
+		$poWithSource2 = clone $poWithSource;
+		$poWithSource2->getContentHolder()->getAsDom();
+
 		return [
-			[ $po, null, [], $expected ],
+			'text, no source' =>
+				[ $po, ParserOptions::newFromAnon(), [], $expected ],
+			'text, with source' =>
+				[ $poWithSource, ParserOptions::newFromAnon(), [], $expectedWithSource ],
+			'dom, no source' =>
+				[ $po2, ParserOptions::newFromAnon(), [], $expected ],
+			'dom, with source' =>
+				[ $poWithSource2, ParserOptions::newFromAnon(), [], $expectedWithSource ],
 		];
 	}
 }

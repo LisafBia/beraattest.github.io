@@ -14,7 +14,7 @@ use MediaWikiIntegrationTestCase;
 class PageUpdaterFactoryIntegrationTest extends MediaWikiIntegrationTestCase {
 
 	/**
-	 * @covers \WikiPage::newPageUpdater
+	 * @covers \MediaWiki\Page\WikiPage::newPageUpdater
 	 */
 	public function testNewPageUpdater() {
 		$page = $this->getExistingTestPage();
@@ -40,7 +40,7 @@ class PageUpdaterFactoryIntegrationTest extends MediaWikiIntegrationTestCase {
 		$this->assertSame( $content->getText(), $pstContent->getText() );
 
 		$pout = $update->getCanonicalParserOutput();
-		$this->assertStringContainsString( 'dolor sit amet', $pout->getRawText() );
+		$this->assertStringContainsString( 'dolor sit amet', $pout->getContentHolderText() );
 	}
 
 }

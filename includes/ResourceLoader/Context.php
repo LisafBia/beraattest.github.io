@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @author Trevor Parscal
  * @author Roan Kattouw
@@ -22,6 +8,8 @@
 
 namespace MediaWiki\ResourceLoader;
 
+use MediaWiki\Language\LanguageCode;
+use MediaWiki\Language\LocalizationContext;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Message\Message;
@@ -31,8 +19,9 @@ use MediaWiki\Request\WebRequest;
 use MediaWiki\User\User;
 use MediaWiki\User\UserIdentity;
 use MediaWiki\User\UserRigorOptions;
-use MessageLocalizer;
 use Psr\Log\LoggerInterface;
+use Wikimedia\Bcp47Code\Bcp47Code;
+use Wikimedia\Bcp47Code\Bcp47CodeValue;
 use Wikimedia\Message\MessageParam;
 use Wikimedia\Message\MessageSpecifier;
 
@@ -43,16 +32,13 @@ use Wikimedia\Message\MessageSpecifier;
  * @ingroup ResourceLoader
  * @since 1.17
  */
-class Context implements MessageLocalizer {
+class Context implements LocalizationContext {
 	public const DEFAULT_LANG = 'qqx';
 	public const DEFAULT_SKIN = 'fallback';
 
 	/** @internal For use in ResourceLoader classes. */
 	public const DEBUG_OFF = 0;
-	/** @internal For use in ResourceLoader classes. */
-	public const DEBUG_LEGACY = 1;
-	/** @internal For use in SpecialJavaScriptTest. */
-	public const DEBUG_MAIN = 2;
+	private const DEBUG_MAIN = 2;
 
 	/** @var ResourceLoader */
 	protected $resourceLoader;
@@ -152,10 +138,8 @@ class Context implements MessageLocalizer {
 	 */
 	public static function debugFromString( ?string $debug ): int {
 		// The canonical way to enable debug mode is via debug=true
-		// This continues to map to v1 until v2 is ready (T85805).
-		if ( $debug === 'true' || $debug === '1' ) {
-			$ret = self::DEBUG_LEGACY;
-		} elseif ( $debug === '2' ) {
+		// Support debug=1 as alias for debug=true for consistency with MediaWiki (T367441).
+		if ( $debug === 'true' || $debug === '1' || $debug === '2' ) {
 			$ret = self::DEBUG_MAIN;
 		} else {
 			$ret = self::DEBUG_OFF;
@@ -170,8 +154,6 @@ class Context implements MessageLocalizer {
 	 *
 	 * Use cases:
 	 * - Unit tests (deprecated, create empty instance directly or use RLTestCase).
-	 *
-	 * @return Context
 	 */
 	public static function newDummyContext(): Context {
 		// This currently creates a non-empty instance of ResourceLoader (all modules registered),
@@ -199,7 +181,7 @@ class Context implements MessageLocalizer {
 	 * @since 1.27
 	 * @return LoggerInterface
 	 */
-	public function getLogger() {
+	public function getLogger(): LoggerInterface {
 		return $this->logger;
 	}
 
@@ -225,16 +207,16 @@ class Context implements MessageLocalizer {
 		return $this->language;
 	}
 
+	/** @inheritDoc */
+	public function getLanguageCode(): Bcp47Code {
+		return new Bcp47CodeValue( LanguageCode::bcp47( $this->getLanguage() ) );
+	}
+
 	public function getDirection(): string {
 		if ( $this->direction === null ) {
-			$direction = $this->getRequest()->getRawVal( 'dir' );
-			if ( $direction === 'ltr' || $direction === 'rtl' ) {
-				$this->direction = $direction;
-			} else {
-				// Determine directionality based on user language (T8100)
-				$this->direction = MediaWikiServices::getInstance()->getLanguageFactory()
-					->getLanguage( $this->getLanguage() )->getDir();
-			}
+			// Determine directionality based on user language (T8100)
+			$this->direction = MediaWikiServices::getInstance()->getLanguageFactory()
+				->getLanguage( $this->getLanguage() )->getDir();
 		}
 		return $this->direction;
 	}
@@ -243,9 +225,6 @@ class Context implements MessageLocalizer {
 		return $this->skin;
 	}
 
-	/**
-	 * @return string|null
-	 */
 	public function getUser(): ?string {
 		return $this->user;
 	}
@@ -322,9 +301,6 @@ class Context implements MessageLocalizer {
 		return $this->debug;
 	}
 
-	/**
-	 * @return string|null
-	 */
 	public function getOnly(): ?string {
 		return $this->only;
 	}
@@ -350,23 +326,14 @@ class Context implements MessageLocalizer {
 		return $this->sourcemap;
 	}
 
-	/**
-	 * @return string|null
-	 */
 	public function getImage(): ?string {
 		return $this->image;
 	}
 
-	/**
-	 * @return string|null
-	 */
 	public function getVariant(): ?string {
 		return $this->variant;
 	}
 
-	/**
-	 * @return string|null
-	 */
 	public function getFormat(): ?string {
 		return $this->format;
 	}
@@ -442,8 +409,6 @@ class Context implements MessageLocalizer {
 	 * the cache and decrease its usefulness.
 	 *
 	 * E.g. Used by RequestFileCache to form a cache key for storing the response output.
-	 *
-	 * @return string
 	 */
 	public function getHash(): string {
 		if ( $this->hash === null ) {
@@ -516,7 +481,24 @@ class Context implements MessageLocalizer {
 		}
 		$json = json_encode( $data, $jsonFlags );
 		if ( json_last_error() !== JSON_ERROR_NONE ) {
-			trigger_error( __METHOD__ . ' partially failed: ' . json_last_error_msg(), E_USER_WARNING );
+			// When we log this warning, the stack trace will not show which component added
+			// the bad value to our array, because the array was made earlier in the process.
+			// To ease error triage, indicate which key contains malformed UTF-8.
+			$jsonErr = json_last_error_msg();
+			$badKey = null;
+			if ( is_array( $data ) ) {
+				foreach ( $data as $key => $value ) {
+					if ( json_encode( $value ) === false ) {
+						$badKey = $key;
+						break;
+					}
+				}
+			}
+			if ( $badKey !== null ) {
+				trigger_error( "Failed to JSON encode $badKey: $jsonErr", E_USER_WARNING );
+			} else {
+				trigger_error( "Partially failed to JSON encode: $jsonErr", E_USER_WARNING );
+			}
 		}
 		return $json;
 	}

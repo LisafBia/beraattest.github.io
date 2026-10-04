@@ -1,26 +1,13 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 namespace MediaWiki\Rest\Handler\Helper;
 
 use InvalidArgumentException;
 use MediaWiki\Content\Content;
+use MediaWiki\Content\UnknownContentModelException;
 use MediaWiki\Edit\ParsoidOutputStash;
 use MediaWiki\Edit\ParsoidRenderID;
 use MediaWiki\Edit\SelserContext;
@@ -43,12 +30,12 @@ use MediaWiki\Revision\RevisionAccessException;
 use MediaWiki\Revision\RevisionLookup;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Status\Status;
-use MWUnknownContentModelException;
 use Wikimedia\Bcp47Code\Bcp47Code;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
+use Wikimedia\Parsoid\Config\SiteConfig;
 use Wikimedia\Parsoid\Core\ClientError;
-use Wikimedia\Parsoid\Core\PageBundle;
+use Wikimedia\Parsoid\Core\HtmlPageBundle;
 use Wikimedia\Parsoid\Core\ResourceLimitExceededException;
 use Wikimedia\Parsoid\Parsoid;
 use Wikimedia\Stats\StatsFactory;
@@ -68,25 +55,9 @@ class HtmlInputTransformHelper {
 		MainConfigNames::ParsoidCacheConfig
 	];
 
-	/** @var PageIdentity|null */
-	private $page = null;
-
-	/**
-	 * @var HtmlToContentTransform
-	 */
-	private $transform;
-
-	/**
-	 * @var array
-	 */
-	private $envOptions;
-
-	private StatsFactory $statsFactory;
-	private HtmlTransformFactory $htmlTransformFactory;
-	private ParsoidOutputStash $parsoidOutputStash;
-	private ParserOutputAccess $parserOutputAccess;
-	private PageLookup $pageLookup;
-	private RevisionLookup $revisionLookup;
+	private ?PageIdentity $page = null;
+	private ?HtmlToContentTransform $transform = null;
+	private array $envOptions;
 
 	/**
 	 * @param StatsFactory $statsFactory
@@ -95,6 +66,7 @@ class HtmlInputTransformHelper {
 	 * @param ParserOutputAccess $parserOutputAccess
 	 * @param PageLookup $pageLookup
 	 * @param RevisionLookup $revisionLookup
+	 * @param SiteConfig $siteConfig
 	 * @param array $envOptions
 	 * @param ?PageIdentity $page
 	 * @param array|string $body Body structure, or an HTML string
@@ -103,12 +75,13 @@ class HtmlInputTransformHelper {
 	 * @param Bcp47Code|null $pageLanguage
 	 */
 	public function __construct(
-		StatsFactory $statsFactory,
-		HtmlTransformFactory $htmlTransformFactory,
-		ParsoidOutputStash $parsoidOutputStash,
-		ParserOutputAccess $parserOutputAccess,
-		PageLookup $pageLookup,
-		RevisionLookup $revisionLookup,
+		private StatsFactory $statsFactory,
+		private readonly HtmlTransformFactory $htmlTransformFactory,
+		private readonly ParsoidOutputStash $parsoidOutputStash,
+		private readonly ParserOutputAccess $parserOutputAccess,
+		private readonly PageLookup $pageLookup,
+		private readonly RevisionLookup $revisionLookup,
+		private readonly SiteConfig $siteConfig,
 		array $envOptions = [],
 		?PageIdentity $page = null,
 		$body = '',
@@ -116,16 +89,10 @@ class HtmlInputTransformHelper {
 		?RevisionRecord $originalRevision = null,
 		?Bcp47Code $pageLanguage = null
 	) {
-		$this->statsFactory = $statsFactory;
-		$this->htmlTransformFactory = $htmlTransformFactory;
-		$this->parsoidOutputStash = $parsoidOutputStash;
 		$this->envOptions = $envOptions + [
 			'outputContentVersion' => Parsoid::defaultHTMLVersion(),
 			'offsetType' => 'byte',
 		];
-		$this->parserOutputAccess = $parserOutputAccess;
-		$this->pageLookup = $pageLookup;
-		$this->revisionLookup = $revisionLookup;
 		if ( $page === null ) {
 			wfDeprecated( __METHOD__ . ' without $page', '1.43' );
 		} else {
@@ -133,9 +100,6 @@ class HtmlInputTransformHelper {
 		}
 	}
 
-	/**
-	 * @return array
-	 */
 	public function getParamSettings(): array {
 		// JSON body schema:
 		/*
@@ -373,18 +337,26 @@ class HtmlInputTransformHelper {
 					throw new LocalizedHttpException( new MessageValue( "rest-bad-etag", [ $key ] ), 400 );
 				}
 			} else {
-				$originalRendering = ParsoidRenderID::newFromKey( $key );
+				try {
+					$originalRendering = ParsoidRenderID::newFromKey( $key );
+				} catch ( InvalidArgumentException ) {
+					throw new LocalizedHttpException(
+						new MessageValue( 'rest-parsoid-bad-render-id', [ $key ] ),
+						400
+					);
+				}
 			}
 		} elseif ( !empty( $original['html'] ) || !empty( $original['data-parsoid'] ) ) {
-			// NOTE: We might have an incomplete PageBundle here, with no HTML but with data-parsoid!
+			// NOTE: We might have an incomplete HtmlPageBundle here, with no HTML but with data-parsoid!
 			// XXX: Do we need to support that, or can that just be a 400?
-			$originalRendering = new PageBundle(
-				$original['html']['body'] ?? '',
-				$original['data-parsoid']['body'] ?? null,
-				$original['data-mw']['body'] ?? null,
-				null, // will be derived from $original['html']['headers']['content-type']
-				$original['html']['headers'] ?? []
-			);
+			$originalRendering = HtmlPageBundle::newFromJsonArray( [
+				'html' => $original['html']['body'] ?? '',
+				'parsoid' => $original['data-parsoid']['body'] ?? null,
+				'mw' => $original['data-mw']['body'] ?? null,
+				'counters' => $original['counters']['body'] ?? null,
+				'version' => null, // will be derived from $original['html']['headers']['content-type']
+				'headers' => $original['html']['headers'] ?? []
+			] );
 		}
 
 		if ( !$originalRevision && !empty( $original['revid'] ) ) {
@@ -400,7 +372,6 @@ class HtmlInputTransformHelper {
 					->setLabel( 'original_html_given', 'false' )
 					->setLabel( 'page_exists', 'true' )
 					->setLabel( 'status', 'unknown' )
-					->copyToStatsdAt( 'html_input_transform.original_html.not_given.page_exists' )
 					->increment();
 			} else {
 				$this->statsFactory
@@ -408,7 +379,6 @@ class HtmlInputTransformHelper {
 					->setLabel( 'original_html_given', 'false' )
 					->setLabel( 'page_exists', 'false' )
 					->setLabel( 'status', 'unknown' )
-					->copyToStatsdAt( 'html_input_transform.original_html.not_given.page_not_exist' )
 					->increment();
 			}
 		}
@@ -434,9 +404,12 @@ class HtmlInputTransformHelper {
 
 	/**
 	 * Return HTMLTransform object, so additional context can be provided by calling setters on it.
-	 * @return HtmlToContentTransform
+	 * @throws \RuntimeException If initInternal() has not yet been called
 	 */
 	public function getTransform(): HtmlToContentTransform {
+		if ( !$this->transform ) {
+			throw new \RuntimeException( 'initInternal() must be called before getTransform()' );
+		}
 		return $this->transform;
 	}
 
@@ -456,7 +429,7 @@ class HtmlInputTransformHelper {
 	 * the input HTML. This is used to apply selective serialization (selser), if possible.
 	 *
 	 * @param RevisionRecord|int|null $rev
-	 * @param ParsoidRenderID|PageBundle|ParserOutput|null $originalRendering
+	 * @param ParsoidRenderID|HtmlPageBundle|ParserOutput|null $originalRendering
 	 */
 	public function setOriginal( $rev, $originalRendering ) {
 		if ( $originalRendering instanceof ParsoidRenderID ) {
@@ -471,7 +444,6 @@ class HtmlInputTransformHelper {
 					->setLabel( 'original_html_given', 'as_renderid' )
 					->setLabel( 'page_exists', 'unknown' )
 					->setLabel( 'status', 'bad_renderid' )
-					->copyToStatsdAt( 'html_input_transform.original_html.given.as_renderid.bad' )
 					->increment();
 				throw new LocalizedHttpException( new MessageValue( "rest-bad-stash-key" ),
 					400,
@@ -513,6 +485,7 @@ class HtmlInputTransformHelper {
 			// Try to get a rendering for the given revision, and use it as the basis for selser.
 			// Chances are good that the resulting diff will be reasonably clean.
 			// NOTE: If we don't have a revision ID, we should not attempt selser!
+			// @phan-suppress-next-line PhanTypeMismatchArgumentNullable $this->page is not null
 			$originalRendering = $this->fetchParserOutputFromParsoid( $this->page, $rev, true );
 
 			if ( $originalRendering ) {
@@ -520,14 +493,12 @@ class HtmlInputTransformHelper {
 					->setLabel( 'original_html_given', 'as_revid' )
 					->setLabel( 'page_exists', 'unknown' )
 					->setLabel( 'status', 'found' )
-					->copyToStatsdAt( 'html_input_transform.original_html.given.as_revid.found' )
 					->increment();
 			} else {
 				$this->statsFactory->getCounter( 'html_input_transform_total' )
 					->setLabel( 'original_html_given', 'as_revid' )
 					->setLabel( 'page_exists', 'unknown' )
 					->setLabel( 'status', 'not_found' )
-					->copyToStatsdAt( 'html_input_transform.original_html.given.as_revid.not_found' )
 					->increment();
 			}
 		} elseif ( $originalRendering ) {
@@ -535,22 +506,26 @@ class HtmlInputTransformHelper {
 				->setLabel( 'original_html_given', 'true' )
 				->setLabel( 'page_exists', 'unknown' )
 				->setLabel( 'status', 'verbatim' )
-				->copyToStatsdAt( 'html_input_transform.original_html.given.verbatim' )
 				->increment();
 		}
 
 		if ( $originalRendering instanceof ParserOutput ) {
-			$originalRendering = PageBundleParserOutputConverter::pageBundleFromParserOutput( $originalRendering );
+			// Selser expects a full document (head + body). Request
+			// it explicitly so this keeps working once the canonical
+			// ParserOutput is body-only (T393295)
+			$originalRendering = PageBundleParserOutputConverter::htmlPageBundleFromParserOutput(
+				$originalRendering, $this->siteConfig, bodyOnly: false,
+			);
 
 			// NOTE: Use the default if we got a ParserOutput object.
-			//       Don't apply the default if we got passed a PageBundle,
+			//       Don't apply the default if we got passed a HtmlPageBundle,
 			//       in that case, we want to require the version to be explicit.
 			if ( $originalRendering->version === null && !isset( $originalRendering->headers['content-type'] ) ) {
 				$originalRendering->version = Parsoid::defaultHTMLVersion();
 			}
 		}
 
-		if ( !$originalRendering instanceof PageBundle ) {
+		if ( !$originalRendering instanceof HtmlPageBundle ) {
 			return;
 		}
 
@@ -573,19 +548,21 @@ class HtmlInputTransformHelper {
 			$this->transform->setOriginalRevisionId( $rev );
 		}
 
-		// NOTE: We might have an incomplete PageBundle here, with no HTML.
-		//       PageBundle::$html is declared to not be nullable, so it would be set to the empty
+		// NOTE: We might have an incomplete HtmlPageBundle here, with no HTML.
+		//       HtmlPageBundle::$html is declared to not be nullable, so it would be set to the empty
 		//       string if not given.
 		if ( $originalRendering->html !== '' ) {
 			$this->transform->setOriginalHtml( $originalRendering->html );
 		}
 
-		if ( $originalRendering->parsoid !== null ) {
-			$this->transform->setOriginalDataParsoid( $originalRendering->parsoid );
+		$originalDataParsoid = $originalRendering->parsoid;
+		if ( $originalDataParsoid !== null ) {
+			$this->transform->setOriginalDataParsoid( $originalDataParsoid );
 		}
 
-		if ( $originalRendering->mw !== null ) {
-			$this->transform->setOriginalDataMW( $originalRendering->mw );
+		$originalDataMW = $originalRendering->mw;
+		if ( $originalDataMW !== null ) {
+			$this->transform->setOriginalDataMW( $originalDataMW );
 		}
 	}
 
@@ -608,7 +585,7 @@ class HtmlInputTransformHelper {
 				413,
 				[ 'reason' => $e->getMessage() ]
 			);
-		} catch ( MWUnknownContentModelException $e ) {
+		} catch ( UnknownContentModelException $e ) {
 			throw new LocalizedHttpException(
 				new MessageValue( "rest-unknown-content-model", [ $e->getModelId() ] ),
 				400
@@ -619,8 +596,6 @@ class HtmlInputTransformHelper {
 	/**
 	 * Creates a response containing the content derived from the input HTML.
 	 * This will set the appropriate Content-Type header.
-	 *
-	 * @param ResponseInterface $response
 	 */
 	public function putContent( ResponseInterface $response ) {
 		$content = $this->getContent();
@@ -631,7 +606,7 @@ class HtmlInputTransformHelper {
 				$content->getModel(),
 				$this->envOptions['outputContentVersion']
 			);
-		} catch ( InvalidArgumentException $e ) {
+		} catch ( InvalidArgumentException ) {
 			// If Parsoid doesn't know the content type,
 			// ask the ContentHandler!
 			$contentType = $content->getDefaultFormat();
@@ -665,7 +640,9 @@ class HtmlInputTransformHelper {
 
 			if ( is_int( $revision ) ) {
 				$revId = $revision;
-				$revision = $this->revisionLookup->getRevisionById( $revId, 0, $page );
+				// Don't pass $page here: on a page mismatch RevisionStore would assert
+				// and fail hard (500). Let the explicit check below return a clean 404. (T433351)
+				$revision = $this->revisionLookup->getRevisionById( $revId );
 
 				if ( !$revision ) {
 					throw new RevisionAccessException( 'Revision {revId} not found',
@@ -726,7 +703,6 @@ class HtmlInputTransformHelper {
 		$counter = $this->statsFactory->getCounter( 'html_input_transform_total' );
 		if ( $selserContext ) {
 			$counter->setLabels( $labels )
-				->copyToStatsdAt( 'html_input_transform.original_html.given.as_renderid.stash_hit.found.hit' )
 				->increment();
 			return $selserContext;
 		} else {
@@ -734,13 +710,12 @@ class HtmlInputTransformHelper {
 			// Try to load it from the parser cache instead.
 			// On a wiki with low edit frequency, there is a good chance that it's still there.
 			try {
+				// @phan-suppress-next-line PhanTypeMismatchArgumentNullable $this->page is not null
 				$parserOutput = $this->fetchParserOutputFromParsoid( $this->page, $renderID->getRevisionID(), false );
 
 				if ( !$parserOutput ) {
 					$labels[ 'status' ] = 'miss-fallback_not_found';
-					$counter->setLabels( $labels )->copyToStatsdAt(
-						'html_input_transform.original_html.given.as_renderid.stash_miss_pc_fallback.not_found.miss'
-					)->increment();
+					$counter->setLabels( $labels )->increment();
 					return null;
 				}
 
@@ -748,10 +723,6 @@ class HtmlInputTransformHelper {
 				if ( $cachedRenderID->getKey() !== $renderID->getKey() ) {
 					$labels[ 'status' ] = 'mismatch-fallback_not_found';
 					$counter->setLabels( $labels )
-						->copyToStatsdAt(
-							'html_input_transform.original_html.given.as_renderid.' .
-							'stash_miss_pc_fallback.not_found.mismatch'
-						)
 						->increment();
 
 					// It's not the correct rendering.
@@ -759,21 +730,16 @@ class HtmlInputTransformHelper {
 				}
 				$labels[ 'status' ] = 'hit-fallback_found';
 				$counter->setLabels( $labels )
-					->copyToStatsdAt(
-						'html_input_transform.original_html.given.as_renderid.' .
-						'stash_miss_pc_fallback.found.hit'
-					)
 					->increment();
 
-				$pb = PageBundleParserOutputConverter::pageBundleFromParserOutput( $parserOutput );
+				// Full document (head + body) for selser; see the note above.
+				$pb = PageBundleParserOutputConverter::htmlPageBundleFromParserOutput(
+					$parserOutput, $this->siteConfig, bodyOnly: false,
+				);
 				return new SelserContext( $pb, $renderID->getRevisionID() );
-			} catch ( HttpException $e ) {
+			} catch ( HttpException ) {
 				$labels[ 'status' ] = 'failed-fallback_not_found';
 				$counter->setLabels( $labels )
-					->copyToStatsdAt(
-						'html_input_transform.original_html.given.as_renderid.' .
-						'stash_miss_pc_fallback.not_found.failed'
-					)
 					->increment();
 
 				// If the revision isn't found, don't trigger a 404. Return null to trigger a 412.
@@ -793,6 +759,11 @@ class HtmlInputTransformHelper {
 		if ( $status->hasMessage( 'parsoid-resource-limit-exceeded' ) ) {
 			throw new LocalizedHttpException( new MessageValue( "rest-parsoid-resource-exceeded" ),
 				413,
+				[ 'reason' => $status->getHTML() ]
+			);
+		} elseif ( $status->hasMessage( 'missing-revision-permission' ) ) {
+			throw new LocalizedHttpException( new MessageValue( 'rest-permission-denied-revision' ),
+				403,
 				[ 'reason' => $status->getHTML() ]
 			);
 		} else {

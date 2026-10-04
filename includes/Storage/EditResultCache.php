@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -46,15 +32,6 @@ class EditResultCache {
 
 	private const CACHE_KEY_PREFIX = 'EditResult';
 
-	/** @var BagOStuff */
-	private $mainObjectStash;
-
-	/** @var IConnectionProvider */
-	private $dbProvider;
-
-	/** @var ServiceOptions */
-	private $options;
-
 	/**
 	 * @param BagOStuff $mainObjectStash Main object stash, see
 	 *  MediaWikiServices::getMainObjectStash()
@@ -62,15 +39,11 @@ class EditResultCache {
 	 * @param ServiceOptions $options
 	 */
 	public function __construct(
-		BagOStuff $mainObjectStash,
-		IConnectionProvider $dbProvider,
-		ServiceOptions $options
+		private readonly BagOStuff $mainObjectStash,
+		private readonly IConnectionProvider $dbProvider,
+		private readonly ServiceOptions $options,
 	) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
-
-		$this->mainObjectStash = $mainObjectStash;
-		$this->dbProvider = $dbProvider;
-		$this->options = $options;
 	}
 
 	/**
@@ -86,7 +59,8 @@ class EditResultCache {
 			$this->makeKey( $revisionId ),
 			FormatJson::encode( $editResult ),
 			// Patrol flags are not stored for longer than $wgRCMaxAge
-			$this->options->get( MainConfigNames::RCMaxAge )
+			$this->options->get( MainConfigNames::RCMaxAge ),
+			BagOStuff::WRITE_BACKGROUND
 		);
 	}
 

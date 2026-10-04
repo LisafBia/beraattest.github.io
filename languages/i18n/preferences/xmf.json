@@ -141,7 +141,7 @@
 	"underline-always": "ირო",
 	"tog-showhiddencats": "ტყობინაფილი კატეგორიეფიშ ძირაფა",
 	"tog-showrollbackconfirmation": "დოდასურაფაშ მოთხირიშ გოუქვაფაშ რსხილიშ გენჭირაშის",
-	"tog-forcesafemode": "[[mw:Manual:Safemode|უშქურანჯი რეჟიმიშ]] ჩართება სადღამუშიოთ",
+	"tog-forcesafemode": "[[mw:Special:MyLanguage/Manual:Safemode|უშქურანჯი რეჟიმიშ]] ჩართება სადღამუშიოთ",
 	"prefs-help-forcesafemode": "ვიკის სკრიპტეფიშ დო ომახვარებე CSS-იშ გოთიშუა.",
 	"prefs-editing": "რედაქტირაფა",
 	"prefs-description-editing": "ქეგიონწყით, მუჭო თირანთ, გინმაჯინეთ დო აკონტროლენთ რედაქტირაფეფს.",
@@ -226,6 +226,7 @@
 	"search-thumbnail-extra-namespaces-label": "ქუმოძირე მინიატურეფი Special:Search-ის დესკტოპიშ ვერსიას",
 	"search-thumbnail-extra-namespaces-message": "ოძირანს მინიატურეფს $1-შო {{PLURAL:$2|ჯოხოეფიშ ოფირჩას}} შედეგეფიშ ხასჷლას {{#special:search}}",
 	"prefs-advancedsearchoptions": "გოძინელი პარამეტრეფი",
+	"prefs-misc": "შხვადოშხვა",
 	"prefs-reset-intro": "თე ხასჷლაქ შილებე გჷმორინაფილქ იჸუას თქვანი კონფიგურაციაშ ოთირალო სტანდარტულ კონფიგურაციაშა. \nთე ქიმინუაშ დოდასურაფაშ შვანს, თქვა ვეგშქალებენა თიში გოუქვაფა.",
 	"prefs-reset-confirm": "ქო, მა მოკო ჩქიმი პარამეტრეფიშ გუმორღვაფა.",
 	"restoreprefs": "არძა დაჭყაფური პარამეტრიშ კჷნ აკონწყუალა (არძა სექციას)"

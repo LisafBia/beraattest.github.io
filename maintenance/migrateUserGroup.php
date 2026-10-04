@@ -2,21 +2,7 @@
 /**
  * Re-assign users from an old group to a new one
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
@@ -53,12 +39,12 @@ class MigrateUserGroup extends Maintenance {
 			->select( 'MIN(ug_user)' )
 			->from( 'user_groups' )
 			->where( [ 'ug_group' => $oldGroup ] )
-			->caller( __FUNCTION__ )->fetchField();
+			->caller( __METHOD__ )->fetchField();
 		$end = $dbw->newSelectQueryBuilder()
 			->select( 'MAX(ug_user)' )
 			->from( 'user_groups' )
 			->where( [ 'ug_group' => $oldGroup ] )
-			->caller( __FUNCTION__ )->fetchField();
+			->caller( __METHOD__ )->fetchField();
 		if ( $start === null ) {
 			$this->fatalError( "Nothing to do - no users in the '$oldGroup' group" );
 		}
@@ -71,7 +57,7 @@ class MigrateUserGroup extends Maintenance {
 			$affected = 0;
 			$this->output( "Doing users $blockStart to $blockEnd\n" );
 
-			$this->beginTransaction( $dbw, __METHOD__ );
+			$this->beginTransactionRound( __METHOD__ );
 			// Find the users already in the new group, so that we can exclude them from the UPDATE query
 			// and instead delete the rows.
 			$usersAlreadyInNewGroup = $dbw->newSelectQueryBuilder()
@@ -113,7 +99,7 @@ class MigrateUserGroup extends Maintenance {
 					->caller( __METHOD__ )->execute();
 				$affected += $dbw->affectedRows();
 			}
-			$this->commitTransaction( $dbw, __METHOD__ );
+			$this->commitTransactionRound( __METHOD__ );
 
 			// Clear cache for the affected users (T42340)
 			if ( $affected > 0 ) {

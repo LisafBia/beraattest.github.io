@@ -1,5 +1,6 @@
 <?php
 
+use MediaWiki\Language\MessageLocalizer;
 use MediaWiki\Message\Message;
 use Wikimedia\Message\MessageSpecifier;
 
@@ -33,7 +34,6 @@ class MockMessageLocalizer implements MessageLocalizer {
 	 *
 	 * @param string|string[]|MessageSpecifier $key Message key, or array of keys,
 	 *   or a MessageSpecifier.
-	 * @phpcs:ignore Generic.Files.LineLength
 	 * @param MessageParam|MessageSpecifier|string|int|float|list<MessageParam|MessageSpecifier|string|int|float> ...$params
 	 *   See Message::params()
 	 * @return Message

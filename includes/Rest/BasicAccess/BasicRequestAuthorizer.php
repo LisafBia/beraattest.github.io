@@ -13,16 +13,11 @@ use MediaWiki\Rest\RequestInterface;
  * @internal
  */
 abstract class BasicRequestAuthorizer {
-	protected RequestInterface $request;
-	protected Handler $handler;
 
-	/**
-	 * @param RequestInterface $request
-	 * @param Handler $handler
-	 */
-	public function __construct( RequestInterface $request, Handler $handler ) {
-		$this->request = $request;
-		$this->handler = $handler;
+	public function __construct(
+		protected readonly RequestInterface $request,
+		protected readonly Handler $handler,
+	) {
 	}
 
 	/**

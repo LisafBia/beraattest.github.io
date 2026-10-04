@@ -2,7 +2,7 @@
 
 namespace MediaWiki\Rest\Handler\Helper;
 
-use MediaWiki\Languages\LanguageConverterFactory;
+use MediaWiki\Language\LanguageConverterFactory;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageReference;
@@ -10,6 +10,7 @@ use MediaWiki\Page\RedirectStore;
 use MediaWiki\Rest\RequestInterface;
 use MediaWiki\Rest\Response;
 use MediaWiki\Rest\ResponseFactory;
+use MediaWiki\Rest\ResponseHeaders;
 use MediaWiki\Rest\Router;
 use MediaWiki\Title\TitleFormatter;
 use MediaWiki\Title\TitleValue;
@@ -25,19 +26,20 @@ class PageRedirectHelper {
 	private TitleFormatter $titleFormatter;
 	private ResponseFactory $responseFactory;
 	private Router $router;
-	private string $path;
+	private string $pathWithModulePrefix;
 	private RequestInterface $request;
 	private LanguageConverterFactory $languageConverterFactory;
 	private bool $followWikiRedirects = false;
 	private string $titleParamName = 'title';
 	private bool $useRelativeRedirects = true;
+	private int $normalizationRedirectMaxAge = 60;
 
 	public function __construct(
 		RedirectStore $redirectStore,
 		TitleFormatter $titleFormatter,
 		ResponseFactory $responseFactory,
 		Router $router,
-		string $path,
+		string $pathWithModulePrefix,
 		RequestInterface $request,
 		LanguageConverterFactory $languageConverterFactory
 	) {
@@ -45,21 +47,15 @@ class PageRedirectHelper {
 		$this->titleFormatter = $titleFormatter;
 		$this->responseFactory = $responseFactory;
 		$this->router = $router;
-		$this->path = $path;
+		$this->pathWithModulePrefix = $pathWithModulePrefix;
 		$this->request = $request;
 		$this->languageConverterFactory = $languageConverterFactory;
 	}
 
-	/**
-	 * @param bool $useRelativeRedirects
-	 */
 	public function setUseRelativeRedirects( bool $useRelativeRedirects ): void {
 		$this->useRelativeRedirects = $useRelativeRedirects;
 	}
 
-	/**
-	 * @param bool $followWikiRedirects
-	 */
 	public function setFollowWikiRedirects( bool $followWikiRedirects ): void {
 		$this->followWikiRedirects = $followWikiRedirects;
 	}
@@ -82,8 +78,13 @@ class PageRedirectHelper {
 
 		// Check for normalization redirects
 		if ( $titleAsRequested !== $normalizedTitle ) {
-			$redirectTargetUrl = $this->getTargetUrl( $normalizedTitle );
-			return $this->responseFactory->createPermanentRedirect( $redirectTargetUrl );
+			$redirectTargetUrl = $this->getTargetUrl( $normalizedTitle, false );
+			$redirectResponse = $this->responseFactory->createPermanentRedirect( $redirectTargetUrl );
+			$redirectResponse->setHeader(
+				ResponseHeaders::CACHE_CONTROL,
+				"max-age={$this->normalizationRedirectMaxAge}"
+			);
+			return $redirectResponse;
 		}
 
 		return null;
@@ -176,27 +177,35 @@ class PageRedirectHelper {
 
 	/**
 	 * @param string|LinkTarget|PageReference $title
+	 * @param bool $limitRedirects Whether to limit redirect chains (A=>B=>C, etc.) to one level.
+	 *
 	 * @return string The target to use in the Location header. Will be relative,
 	 *         unless setUseRelativeRedirects( false ) was called.
 	 */
-	public function getTargetUrl( $title ): string {
+	public function getTargetUrl( $title, bool $limitRedirects = true ): string {
 		if ( !is_string( $title ) ) {
 			$title = $this->titleFormatter->getPrefixedDBkey( $title );
 		}
 
-		$pathParams = [ $this->titleParamName => $title ];
+		$pathParams = [ $this->titleParamName => $title ] + $this->request->getPathParams();
+		$queryParams = $this->request->getQueryParams();
+
+		// Limit to one level of redirection, unless more are explicitly allowed. See T389588.
+		if ( $limitRedirects ) {
+			$queryParams['redirect'] = 'no';
+		}
 
 		if ( $this->useRelativeRedirects ) {
 			return $this->router->getRoutePath(
-				$this->path,
+				$this->pathWithModulePrefix,
 				$pathParams,
-				$this->request->getQueryParams()
+				$queryParams
 			);
 		} else {
 			return $this->router->getRouteUrl(
-				$this->path,
+				$this->pathWithModulePrefix,
 				$pathParams,
-				$this->request->getQueryParams()
+				$queryParams
 			);
 		}
 	}

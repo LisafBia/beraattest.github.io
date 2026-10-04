@@ -1,24 +1,12 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
-use Wikimedia\RunningStat;
+namespace Wikimedia;
+
+use Closure;
 
 /**
  * Convenience class for working with XHProf profiling data
@@ -61,10 +49,10 @@ class XhprofData {
 	 * @param array $config
 	 */
 	public function __construct( array $data, array $config = [] ) {
-		$this->config = array_merge( [
+		$this->config = $config + [
 			'include' => null,
 			'sort' => 'wt',
-		], $config );
+		];
 
 		$this->hieraData = $this->pruneData( $data );
 	}
@@ -107,7 +95,7 @@ class XhprofData {
 	 * with no parent (eg 'main()') will return [null, 'function'].
 	 *
 	 * @param string $key
-	 * @return array
+	 * @return array{0:?string,1:string}
 	 */
 	public static function splitKey( $key ) {
 		return array_pad( explode( '==>', $key, 2 ), -2, null );
@@ -131,7 +119,7 @@ class XhprofData {
 		$keep = [];
 		foreach ( $data as $key => $stats ) {
 			[ $parent, $child ] = self::splitKey( $key );
-			if ( isset( $want[$parent] ) || isset( $want[$child] ) ) {
+			if ( ( $parent !== null && isset( $want[$parent] ) ) || isset( $want[$child] ) ) {
 				$keep[$key] = $stats;
 			}
 		}
@@ -269,7 +257,7 @@ class XhprofData {
 					$this->complete[$parent]['subcalls'][$child] = $stats;
 				}
 
-				if ( isset( $this->complete[$parent] ) ) {
+				if ( $parent !== null && isset( $this->complete[$parent] ) ) {
 					// Deduct child inclusive data from exclusive data
 					foreach ( $stats as $stat => $value ) {
 						if ( $stat === 'ct' ) {
@@ -381,3 +369,6 @@ class XhprofData {
 		};
 	}
 }
+
+/** @deprecated class alias since 1.47 */
+class_alias( XhprofData::class, 'XhprofData' );

@@ -10,21 +10,7 @@
  * Copyright © 2005 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @author Brooke Vibber <bvibber@wikimedia.org>
  * @ingroup Maintenance
@@ -35,10 +21,14 @@ require_once __DIR__ . '/Maintenance.php';
 // @codeCoverageIgnoreEnd
 
 use MediaWiki\FileRepo\File\FileSelectQueryBuilder;
+use MediaWiki\FileRepo\LocalRepo;
+use MediaWiki\MainConfigNames;
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Specials\SpecialUpload;
 use MediaWiki\User\User;
-use Wikimedia\Rdbms\IMaintainableDatabase;
+use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\SelectQueryBuilder;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * Maintenance script to update image metadata records.
@@ -47,7 +37,7 @@ use Wikimedia\Rdbms\IMaintainableDatabase;
  */
 class ImageBuilder extends Maintenance {
 	/**
-	 * @var IMaintainableDatabase
+	 * @var IDatabase
 	 */
 	protected $dbw;
 
@@ -111,8 +101,16 @@ class ImageBuilder extends Maintenance {
 	}
 
 	private function build() {
-		$this->buildImage();
-		$this->buildOldImage();
+		$migrationStage = $this->getServiceContainer()->getMainConfig()->get(
+			MainConfigNames::FileSchemaMigrationStage
+		);
+
+		if ( $migrationStage & SCHEMA_COMPAT_READ_OLD ) {
+			$this->buildImage();
+			$this->buildOldImage();
+		} else {
+			$this->buildFile();
+		}
 	}
 
 	/**
@@ -127,7 +125,7 @@ class ImageBuilder extends Maintenance {
 		$this->table = $table;
 	}
 
-	private function progress( $updated ) {
+	private function progress( int $updated ) {
 		$this->updated += $updated;
 		$this->processed++;
 		if ( $this->processed % 100 != 0 ) {
@@ -143,10 +141,10 @@ class ImageBuilder extends Maintenance {
 		$rate = $this->processed / $delta;
 
 		$this->output( sprintf( "%s: %6.2f%% done on %s; ETA %s [%d/%d] %.2f/sec <%.2f%% updated>\n",
-			wfTimestamp( TS_DB, intval( $now ) ),
+			wfTimestamp( TS::DB, intval( $now ) ),
 			$portion * 100.0,
 			$this->table,
-			wfTimestamp( TS_DB, intval( $eta ) ),
+			wfTimestamp( TS::DB, intval( $eta ) ),
 			$this->processed,
 			$this->count,
 			$rate,
@@ -154,7 +152,7 @@ class ImageBuilder extends Maintenance {
 		flush();
 	}
 
-	private function buildTable( $table, $queryBuilder, $callback ) {
+	private function buildTable( string $table, SelectQueryBuilder $queryBuilder, callable $callback ) {
 		$count = $this->dbw->newSelectQueryBuilder()
 			->select( 'count(*)' )
 			->from( $table )
@@ -165,7 +163,7 @@ class ImageBuilder extends Maintenance {
 		$result = $queryBuilder->caller( __METHOD__ )->fetchResultSet();
 
 		foreach ( $result as $row ) {
-			$update = call_user_func( $callback, $row );
+			$update = $callback( $row );
 			if ( $update ) {
 				$this->progress( 1 );
 			} else {
@@ -176,11 +174,14 @@ class ImageBuilder extends Maintenance {
 	}
 
 	private function buildImage() {
-		$callback = [ $this, 'imageCallback' ];
-		$this->buildTable( 'image', FileSelectQueryBuilder::newForFile( $this->getReplicaDB() ), $callback );
+		$this->buildTable(
+			'image',
+			FileSelectQueryBuilder::newForFile( $this->getReplicaDB() ),
+			$this->imageCallback( ... )
+		);
 	}
 
-	private function imageCallback( $row ) {
+	private function imageCallback( \stdClass $row ): bool {
 		// Create a File object from the row
 		// This will also upgrade it
 		$file = $this->getRepo()->newFileFromRow( $row );
@@ -189,11 +190,14 @@ class ImageBuilder extends Maintenance {
 	}
 
 	private function buildOldImage() {
-		$this->buildTable( 'oldimage', FileSelectQueryBuilder::newForOldFile( $this->getReplicaDB() ),
-			[ $this, 'oldimageCallback' ] );
+		$this->buildTable(
+			'oldimage',
+			FileSelectQueryBuilder::newForOldFile( $this->getReplicaDB() ),
+			$this->oldimageCallback( ... )
+		);
 	}
 
-	private function oldimageCallback( $row ) {
+	private function oldimageCallback( \stdClass $row ): bool {
 		// Create a File object from the row
 		// This will also upgrade it
 		if ( $row->oi_archive_name == '' ) {
@@ -206,15 +210,30 @@ class ImageBuilder extends Maintenance {
 		return $file->getUpgraded();
 	}
 
-	private function crawlMissing() {
-		$this->getRepo()->enumFiles( [ $this, 'checkMissingImage' ] );
+	private function buildFile() {
+		$this->buildTable(
+			'file',
+			FileSelectQueryBuilder::newForFile( $this->getReplicaDB() ),
+			$this->fileCallback( ... )
+		);
 	}
 
-	public function checkMissingImage( $fullpath ) {
+	private function fileCallback( \stdClass $row ): bool {
+		// Create a File object from the row
+		// This will also upgrade it
+		$file = $this->getRepo()->newFile( $row->file_name );
+
+		return $file->getUpgraded();
+	}
+
+	private function crawlMissing() {
+		$this->getRepo()->enumFiles( $this->checkMissingImage( ... ) );
+	}
+
+	private function checkMissingImage( string $fullpath ) {
 		$filename = wfBaseName( $fullpath );
-		$row = $this->dbw->newSelectQueryBuilder()
-			->select( [ 'img_name' ] )
-			->from( 'image' )
+
+		$row = FileSelectQueryBuilder::newForFile( $this->getReplicaDB() )
 			->where( [ 'img_name' => $filename ] )
 			->caller( __METHOD__ )->fetchRow();
 
@@ -224,7 +243,7 @@ class ImageBuilder extends Maintenance {
 		}
 	}
 
-	private function addMissingImage( $filename, $fullpath ) {
+	private function addMissingImage( string $filename, string $fullpath ) {
 		$timestamp = $this->dbw->timestamp( $this->getRepo()->getFileTimestamp( $fullpath ) );
 		$services = $this->getServiceContainer();
 

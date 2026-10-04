@@ -130,7 +130,7 @@
 	"underline-always": "ھەمیشە",
 	"tog-showhiddencats": "پۆلە شاردراوەکان نیشان بدە",
 	"tog-showrollbackconfirmation": "کاتی کرتەکردن لەسەر بەستەری گەڕاندنەوە وەبیرھێنانەوەی پشتڕاستکردنەوە نیشان بدە",
-	"tog-forcesafemode": "ھەمیشە [[mw:Manual:Safemode|دۆخی سەلامەت]] چالاک بکە",
+	"tog-forcesafemode": "ھەمیشە [[mw:Special:MyLanguage/Manual:Safemode|دۆخی سەلامەت]] چالاک بکە",
 	"prefs-help-forcesafemode": "سکریپت و شێوازەکانی سی ئێس ئێسی سەر ئەم ویکییە ناچالاک دەکات.",
 	"prefs-editing": "دەستکاریکردن",
 	"prefs-advancedediting": "ھەڵبژاردە گشتییەکان",
@@ -208,6 +208,7 @@
 	"search-thumbnail-extra-namespaces-label": "وێنۆچکەکان لە تایبەت:گەڕان لەسەر کۆمپیوتەر چالاک بکە",
 	"search-thumbnail-extra-namespaces-message": "وێنۆچکەکان بۆ ئەنجامەکانی {{PLURAL:$2|بۆشاییناوی|بۆشاییناوەکانی}} $1 لەسەر پەڕەی تایبەت:گەڕان پیشان دەدات",
 	"prefs-advancedsearchoptions": "هەڵبژاردە پێشکەوتووەکان",
+	"prefs-misc": "جۆراوجۆر",
 	"prefs-reset-intro": "دەتوانی لەم لاپەڕە بۆ گەڕانەوەی هەڵبژاردەکانت بۆ بنچینەیی ماڵپەر کەڵک وەرگریت.\nگەر ئەوە بکەی ئیتر گۆڕانەکەت ناگەڕێتەوە.",
 	"restoreprefs": "ھەموو ڕێکخستنەکان ببەرەوە بۆ باری بنچینەیی"
 }

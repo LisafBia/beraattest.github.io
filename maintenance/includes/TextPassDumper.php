@@ -5,21 +5,7 @@
  * Copyright (C) 2005 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Dump
  * @ingroup Maintenance
@@ -29,12 +15,16 @@ namespace MediaWiki\Maintenance;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/BackupDumper.php';
-require_once __DIR__ . '/../../includes/export/WikiExporter.php';
+require_once __DIR__ . '/../../includes/Export/WikiExporter.php';
 // @codeCoverageIgnoreEnd
 
-use BaseDump;
 use Exception;
-use ExportProgressFilter;
+use MediaWiki\Content\UnknownContentModelException;
+use MediaWiki\Exception\MWException;
+use MediaWiki\Export\BaseDump;
+use MediaWiki\Export\ExportProgressFilter;
+use MediaWiki\Export\WikiExporter;
+use MediaWiki\Export\XmlDumpWriter;
 use MediaWiki\Revision\RevisionStore;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Settings\SettingsBuilder;
@@ -44,12 +34,10 @@ use MediaWiki\Storage\BlobStore;
 use MediaWiki\Storage\SqlBlobStore;
 use MediaWiki\WikiMap\WikiMap;
 use MediaWiki\Xml\Xml;
-use MWException;
-use MWUnknownContentModelException;
 use RuntimeException;
-use WikiExporter;
-use Wikimedia\AtEase\AtEase;
-use XmlDumpWriter;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
+use Wikimedia\Timestamp\TimestampFormat as TS;
+use XMLParser;
 
 /**
  * @ingroup Maintenance
@@ -198,7 +186,7 @@ TEXT
 
 	public function execute() {
 		$this->processOptions();
-		$this->dump( true );
+		$this->dump( $this->history );
 	}
 
 	protected function processOptions() {
@@ -242,11 +230,13 @@ TEXT
 		}
 	}
 
+	/** @inheritDoc */
 	public function initProgress( $history = WikiExporter::FULL ) {
-		parent::initProgress();
+		parent::initProgress( $history );
 		$this->timeOfCheckpoint = $this->startTime;
 	}
 
+	/** @inheritDoc */
 	public function dump( $history, $text = WikiExporter::TEXT ) {
 		// Notice messages will foul up your XML output even if they're
 		// relatively harmless.
@@ -254,7 +244,7 @@ TEXT
 			ini_set( 'display_errors', 'stderr' );
 		}
 
-		$this->initProgress( $this->history );
+		$this->initProgress( $history );
 
 		$this->egress = new ExportProgressFilter( $this->sink, $this );
 
@@ -274,37 +264,20 @@ TEXT
 		$this->report( true );
 	}
 
-	protected function processFileOpt( $opt ) {
+	protected function processFileOpt( string $opt ): string {
 		$split = explode( ':', $opt, 2 );
 		$val = $split[0];
-		$param = '';
-		if ( count( $split ) === 2 ) {
-			$param = $split[1];
-		}
-		$fileURIs = explode( ';', $param );
+		$param = $split[1] ?? '';
 		$newFileURIs = [];
-		foreach ( $fileURIs as $URI ) {
-			switch ( $val ) {
-				case "file":
-					$newURI = $URI;
-					break;
-				case "gzip":
-					$newURI = "compress.zlib://$URI";
-					break;
-				case "bzip2":
-					$newURI = "compress.bzip2://$URI";
-					break;
-				case "7zip":
-					$newURI = "mediawiki.compress.7z://$URI";
-					break;
-				default:
-					$newURI = $URI;
-			}
-			$newFileURIs[] = $newURI;
+		foreach ( explode( ';', $param ) as $uri ) {
+			$newFileURIs[] = match ( $val ) {
+				'gzip' => "compress.zlib://$uri",
+				'bzip2' => "compress.bzip2://$uri",
+				'7zip' => "mediawiki.compress.7z://$uri",
+				default => $uri,
+			};
 		}
-		$val = implode( ';', $newFileURIs );
-
-		return $val;
+		return implode( ';', $newFileURIs );
 	}
 
 	/**
@@ -318,7 +291,7 @@ TEXT
 		}
 
 		if ( $this->reporting ) {
-			$now = wfTimestamp( TS_DB );
+			$now = ConvertibleTimestamp::now( TS::DB );
 			$nowts = microtime( true );
 			$deltaAll = $nowts - $this->startTime;
 			$deltaPart = $nowts - $this->lastTime;
@@ -328,7 +301,7 @@ TEXT
 			if ( $deltaAll ) {
 				$portion = $this->revCount / $this->maxCount;
 				$eta = $this->startTime + $deltaAll / $portion;
-				$etats = wfTimestamp( TS_DB, intval( $eta ) );
+				$etats = wfTimestamp( TS::DB, intval( $eta ) );
 				if ( $this->fetchCount ) {
 					$fetchRate = 100.0 * $this->prefetchCount / $this->fetchCount;
 				} else {
@@ -376,7 +349,7 @@ TEXT
 		$this->timeExceeded = true;
 	}
 
-	private function checkIfTimeExceeded() {
+	private function checkIfTimeExceeded(): bool {
 		if ( $this->maxTimeAllowed
 			&& ( $this->lastTime - $this->timeOfCheckpoint > $this->maxTimeAllowed )
 		) {
@@ -432,10 +405,10 @@ TEXT
 
 		xml_set_element_handler(
 			$parser,
-			[ $this, 'startElement' ],
-			[ $this, 'endElement' ]
+			$this->startElement( ... ),
+			$this->endElement( ... )
 		);
-		xml_set_character_data_handler( $parser, [ $this, 'characterData' ] );
+		xml_set_character_data_handler( $parser, $this->characterData( ... ) );
 
 		$offset = 0; // for context extraction on error reporting
 		do {
@@ -453,8 +426,6 @@ TEXT
 					xml_get_current_column_number( $parser ),
 					$byte . ( $chunk === false ? '' : ( '; "' . substr( $chunk, $byte - $offset, 16 ) . '"' ) ),
 					xml_error_string( xml_get_error_code( $parser ) ) )->escaped();
-
-				xml_parser_free( $parser );
 
 				throw new MWException( $msg );
 			}
@@ -487,7 +458,6 @@ TEXT
 				$this->egress->closeAndRename( $newFilenames );
 			}
 		}
-		xml_parser_free( $parser );
 
 		return true;
 	}
@@ -506,7 +476,7 @@ TEXT
 			$contentHandler = $this->getServiceContainer()
 				->getContentHandlerFactory()
 				->getContentHandler( $model );
-		} catch ( MWUnknownContentModelException $ex ) {
+		} catch ( UnknownContentModelException $ex ) {
 			wfWarn( "Unable to apply export transformation for content model '$model': " .
 				$ex->getMessage() );
 
@@ -559,7 +529,7 @@ TEXT
 		$this->fetchCount++;
 
 		// To allow to simply return on success and do not have to worry about book keeping,
-		// we assume, this fetch works (possible after some retries). Nevertheless, we koop
+		// we assume, this fetch works (possible after some retries). Nevertheless, we keep
 		// the old value, so we can restore it, if problems occur (See after the while loop).
 		$oldConsecutiveFailedTextRetrievals = $consecutiveFailedTextRetrievals;
 		$consecutiveFailedTextRetrievals = 0;
@@ -574,7 +544,7 @@ TEXT
 				//         for plausibility failed)
 
 				// Trying to get prefetch, if it has not been tried before
-				// @phan-suppress-next-line PhanSuspiciousValueComparisonInLoop
+				// @phan-suppress-next-line PhanRedundantValueComparisonInLoop
 				if ( $text === false && $this->prefetch && $prefetchNotTried ) {
 					$prefetchNotTried = false;
 					$tryIsPrefetch = true;
@@ -675,6 +645,7 @@ TEXT
 			}
 
 			// A failure in a prefetch hit does not warrant resetting db connection etc.
+			// @phan-suppress-next-line PhanPossiblyUndeclaredVariable Set in the prefetch block above
 			if ( !$tryIsPrefetch ) {
 				// After backing off for some time, we try to reboot the whole process as
 				// much as possible to not carry over failures from one part to the other
@@ -713,7 +684,7 @@ TEXT
 	 */
 	private function getTextDb( $id ) {
 		$store = $this->getBlobStore();
-		$address = ( is_int( $id ) || strpos( $id, ':' ) === false )
+		$address = ( is_int( $id ) || !str_contains( $id, ':' ) )
 			? SqlBlobStore::makeAddressFromTextId( (int)$id )
 			: $id;
 
@@ -725,7 +696,7 @@ TEXT
 				->normalize( $stripped );
 
 			return $normalized;
-		} catch ( BlobAccessException $ex ) {
+		} catch ( BlobAccessException ) {
 			// XXX: log a warning?
 			return false;
 		}
@@ -736,29 +707,28 @@ TEXT
 	 * @return string|false
 	 */
 	private function getTextSpawned( $address ) {
-		AtEase::suppressWarnings();
 		if ( !$this->spawnProc ) {
 			// First time?
-			$this->openSpawn();
+			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			@$this->openSpawn();
 		}
-		$text = $this->getTextSpawnedOnce( $address );
-		AtEase::restoreWarnings();
-
-		return $text;
+		// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+		return @$this->getTextSpawnedOnce( $address );
 	}
 
-	protected function openSpawn() {
-		global $IP;
-
+	protected function openSpawn(): bool {
 		$wiki = WikiMap::getCurrentWikiId();
 		if ( count( $this->php ) == 2 ) {
 			$mwscriptpath = $this->php[1];
 		} else {
-			$mwscriptpath = "$IP/../multiversion/MWScript.php";
+			// FIXME: Avoid this hardcoded wmf-config reference.
+			// Perhaps refactor the below by using wfShellWikiCmd or use the
+			// 'wrapper' option which is already injected for this purpose.
+			$mwscriptpath = MW_INSTALL_PATH . '/../multiversion/MWScript.php';
 		}
 		if ( file_exists( $mwscriptpath ) ) {
 			$cmd = implode( " ",
-				array_map( [ Shell::class, 'escape' ],
+				array_map( Shell::escape( ... ),
 					[
 						$this->php[0],
 						$mwscriptpath,
@@ -766,10 +736,10 @@ TEXT
 						'--wiki', $wiki ] ) );
 		} else {
 			$cmd = implode( " ",
-				array_map( [ Shell::class, 'escape' ],
+				array_map( Shell::escape( ... ),
 					[
 						$this->php[0],
-						"$IP/maintenance/fetchText.php",
+						MW_INSTALL_PATH . '/maintenance/fetchText.php',
 						'--wiki', $wiki ] ) );
 		}
 		$spec = [
@@ -794,24 +764,26 @@ TEXT
 	}
 
 	private function closeSpawn() {
-		AtEase::suppressWarnings();
 		if ( $this->spawnRead ) {
-			fclose( $this->spawnRead );
+			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			@fclose( $this->spawnRead );
 		}
 		$this->spawnRead = null;
 		if ( $this->spawnWrite ) {
-			fclose( $this->spawnWrite );
+			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			@fclose( $this->spawnWrite );
 		}
 		$this->spawnWrite = null;
 		if ( $this->spawnErr ) {
-			fclose( $this->spawnErr );
+			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			@fclose( $this->spawnErr );
 		}
 		$this->spawnErr = false;
 		if ( $this->spawnProc ) {
-			pclose( $this->spawnProc );
+			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			@proc_close( $this->spawnProc );
 		}
 		$this->spawnProc = false;
-		AtEase::restoreWarnings();
 	}
 
 	/**
@@ -842,7 +814,7 @@ TEXT
 			return false;
 		}
 		$newAddress = trim( $newAddress );
-		if ( strpos( $newAddress, ':' ) === false ) {
+		if ( !str_contains( $newAddress, ':' ) ) {
 			$newAddress = SqlBlobStore::makeAddressFromTextId( intval( $newAddress ) );
 		}
 
@@ -888,7 +860,12 @@ TEXT
 		return $normalized;
 	}
 
-	protected function startElement( $parser, $name, $attribs ) {
+	/**
+	 * @param XMLParser $parser
+	 * @param string $name
+	 * @param array $attribs
+	 */
+	protected function startElement( $parser, string $name, array $attribs ) {
 		$this->checkpointJustWritten = false;
 
 		$this->clearOpenElement( null );
@@ -929,12 +906,12 @@ TEXT
 
 			unset( $attribs['id'] );
 			unset( $attribs['location'] );
-			if ( strlen( $text ) > 0 ) {
+			if ( $text !== '' ) {
 				$attribs['xml:space'] = 'preserve';
 			}
 
 			$this->openElement = [ $name, $attribs ];
-			if ( strlen( $text ) > 0 ) {
+			if ( $text !== '' ) {
 				$this->characterData( $parser, $text );
 			}
 		} else {
@@ -942,7 +919,11 @@ TEXT
 		}
 	}
 
-	protected function endElement( $parser, $name ) {
+	/**
+	 * @param XMLParser $parser
+	 * @param string $name
+	 */
+	protected function endElement( $parser, string $name ) {
 		$this->checkpointJustWritten = false;
 
 		if ( $this->openElement ) {
@@ -1003,7 +984,11 @@ TEXT
 		}
 	}
 
-	protected function characterData( $parser, $data ) {
+	/**
+	 * @param XMLParser $parser
+	 * @param string $data
+	 */
+	protected function characterData( $parser, string $data ) {
 		$this->clearOpenElement( null );
 		if ( $this->lastName == "id" ) {
 			if ( $this->state == "revision" ) {
@@ -1035,14 +1020,14 @@ TEXT
 		$this->buffer .= htmlspecialchars( $data, ENT_COMPAT );
 	}
 
-	protected function clearOpenElement( $style ) {
+	protected function clearOpenElement( ?string $style ) {
 		if ( $this->openElement ) {
 			$this->buffer .= Xml::element( $this->openElement[0], $this->openElement[1], $style );
 			$this->openElement = false;
 		}
 	}
 
-	private function isValidTextId( $id ) {
+	private function isValidTextId( string $id ): bool {
 		if ( preg_match( '/:/', $id ) ) {
 			return $id !== 'tt:0';
 		} elseif ( preg_match( '/^\d+$/', $id ) ) {

@@ -3,44 +3,12 @@
 namespace MediaWiki\Tests\Maintenance;
 
 use EditCLI;
-use MediaWiki\Context\RequestContext;
 use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Page\WikiPage;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Title\Title;
 use MediaWiki\User\User;
 use PHPUnit\Framework\ExpectationFailedException;
-use WikiPage;
-
-/**
- * Mock for the input/output of EditCLI
- *
- * EditCLI internally tries to access stdin and stdout. We mock those aspects
- * for testing.
- */
-class SemiMockedEditCLI extends EditCLI {
-
-	/**
-	 * @var string|null Text to pass as stdin
-	 */
-	private ?string $mockStdinText = null;
-
-	/**
-	 * Data for the fake stdin
-	 *
-	 * @param string $stdin The string to be used instead of stdin
-	 */
-	public function mockStdin( $stdin ) {
-		$this->mockStdinText = $stdin;
-	}
-
-	public function getStdin( $len = null ) {
-		if ( $len !== Maintenance::STDIN_ALL ) {
-			throw new ExpectationFailedException( "Tried to get stdin without using Maintenance::STDIN_ALL" );
-		}
-
-		return file_get_contents( 'data://text/plain,' . $this->mockStdinText );
-	}
-}
 
 /**
  * @covers \EditCLI
@@ -126,7 +94,7 @@ class EditTest extends MaintenanceBaseTestCase {
 
 	public function testExecuteForParseTitle() {
 		$wikiPage = $this->getServiceContainer()->getWikiPageFactory()
-			->newFromTitle( Title::newFromText( RequestContext::getMain()->msg( 'mainpage' )->text() ) );
+			->newFromTitle( Title::newMainPage() );
 		$this->commonTextExecute(
 			[ 'parse-title' => 1 ], '{{int:mainpage}}', $wikiPage,
 			"* testing1234abc", "* testing1234abc"
@@ -153,9 +121,7 @@ class EditTest extends MaintenanceBaseTestCase {
 		$testUser = $this->getTestUser()->getUser();
 		$testPage = $this->getExistingTestPage();
 		// Prevent all edits using a hook.
-		$this->setTemporaryHook( 'MultiContentSave', static function () {
-			return false;
-		} );
+		$this->setTemporaryHook( 'MultiContentSave', static fn () => false );
 		$this->commonTextExecute(
 			[ 'user' => $testUser->getName() ],
 			$testPage->getTitle()->getPrefixedText(),
@@ -169,12 +135,12 @@ class EditTest extends MaintenanceBaseTestCase {
 	/** @dataProvider provideExecuteForFatalError */
 	public function testExecuteForFatalError( $options, $expectedOutputRegex, $title = null ) {
 		$this->expectCallToFatalError();
+		$this->expectOutputRegex( $expectedOutputRegex );
 		$this->maintenance->setArg( 'title', $title ?? 'test' );
 		foreach ( $options as $name => $value ) {
 			$this->maintenance->setOption( $name, $value );
 		}
 		$this->maintenance->execute();
-		$this->expectOutputRegex( $expectedOutputRegex );
 	}
 
 	public static function provideExecuteForFatalError() {
@@ -196,5 +162,36 @@ class EditTest extends MaintenanceBaseTestCase {
 			'/Page already exists/',
 			$this->getExistingTestPage()->getTitle()->getPrefixedText()
 		);
+	}
+}
+
+/**
+ * Mock for the input/output of EditCLI
+ *
+ * EditCLI internally tries to access stdin and stdout. We mock those aspects
+ * for testing.
+ */
+class SemiMockedEditCLI extends EditCLI {
+
+	/**
+	 * @var string|null Text to pass as stdin
+	 */
+	private ?string $mockStdinText = null;
+
+	/**
+	 * Data for the fake stdin
+	 *
+	 * @param string $stdin The string to be used instead of stdin
+	 */
+	public function mockStdin( $stdin ) {
+		$this->mockStdinText = $stdin;
+	}
+
+	public function getStdin( $len = null ) {
+		if ( $len !== Maintenance::STDIN_ALL ) {
+			throw new ExpectationFailedException( "Tried to get stdin without using Maintenance::STDIN_ALL" );
+		}
+
+		return file_get_contents( 'data://text/plain,' . $this->mockStdinText );
 	}
 }

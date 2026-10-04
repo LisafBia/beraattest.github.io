@@ -1,6 +1,8 @@
 <?php
 
 use MediaWiki\Debug\MWDebug;
+use MediaWiki\DomainEvent\DomainEventDispatcher;
+use MediaWiki\DomainEvent\EventDispatchEngine;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\StaticHookRegistry;
 use MediaWiki\Message\Message;
@@ -13,8 +15,6 @@ use SebastianBergmann\Comparator\ComparisonFailure;
 use Wikimedia\ObjectFactory\ObjectFactory;
 use Wikimedia\Services\NoSuchServiceException;
 use Wikimedia\Timestamp\ConvertibleTimestamp;
-
-// phpcs:disable MediaWiki.Commenting.FunctionAnnotations.UnrecognizedAnnotation -- Remove with v46.0.0
 
 /**
  * For code common to both MediaWikiUnitTestCase and MediaWikiIntegrationTestCase.
@@ -45,20 +45,17 @@ trait MediaWikiTestCaseTrait {
 			$values[] = '__destruct';
 		}
 		return $this->logicalNot( $this->logicalOr(
-			...array_map( [ $this, 'identicalTo' ], $values )
+			...array_map( $this->identicalTo( ... ), $values )
 		) );
 	}
 
 	/**
 	 * Return a PHPUnit mock that is expected to never have any methods called on it.
 	 *
-	 * @psalm-template RealInstanceType of object
+	 * @template RealInstanceType of object
 	 *
-	 * @psalm-param class-string<RealInstanceType> $type
-	 * @psalm-param list<string> $allow Methods to allow
-	 *
-	 * @param string $type
-	 * @param string[] $allow Methods to allow
+	 * @param class-string<RealInstanceType> $type
+	 * @param list<string> $allow Methods to allow
 	 *
 	 * @return MockObject&RealInstanceType
 	 */
@@ -71,13 +68,10 @@ trait MediaWikiTestCaseTrait {
 	/**
 	 * Return a PHPUnit mock that is expected to never have any methods called on it.
 	 *
-	 * @psalm-template RealInstanceType of object
+	 * @template RealInstanceType of object
 	 *
-	 * @psalm-param class-string<RealInstanceType> $type
-	 * @psalm-param list<string> $allow Methods to allow
-	 *
-	 * @param string $type
-	 * @param string[] $allow methods to allow
+	 * @param class-string<RealInstanceType> $type
+	 * @param list<string> $allow Methods to allow
 	 *
 	 * @return MockObject&RealInstanceType
 	 */
@@ -127,6 +121,23 @@ trait MediaWikiTestCaseTrait {
 	}
 
 	/**
+	 * Create an initially empty DomainEventDispatcher with an empty service
+	 * container attached. Register only the listeners specified in the parameter.
+	 *
+	 * @param array<string, callable> $listeners
+	 * @return DomainEventDispatcher
+	 */
+	protected function createEventDispatcher( $listeners = [] ) {
+		$eventDispatcher = new EventDispatchEngine(
+			$this->createSimpleObjectFactory()
+		);
+		foreach ( $listeners as $name => $callback ) {
+			$eventDispatcher->registerListener( $name, $callback );
+		}
+		return $eventDispatcher;
+	}
+
+	/**
 	 * Skip the test if not running the necessary php version
 	 *
 	 * @since 1.42 (also backported to 1.39.8, 1.40.4 and 1.41.2)
@@ -134,9 +145,9 @@ trait MediaWikiTestCaseTrait {
 	 * @param string $op
 	 * @param string $version
 	 */
-	protected function markTestSkippedIfPhp( $op, $version ) {
+	protected static function markTestSkippedIfPhp( $op, $version ) {
 		if ( version_compare( PHP_VERSION, $version, $op ) ) {
-			$this->markTestSkipped( "PHP $version isn't supported for this test" );
+			self::markTestSkipped( "PHP $version isn't supported for this test" );
 		}
 	}
 
@@ -217,10 +228,24 @@ trait MediaWikiTestCaseTrait {
 	}
 
 	/**
-	 * Assert that an associative array contains the subset of an expected array.
+	 * Assert that an array contains a given expected array.
 	 *
-	 * The internal key order does not matter.
 	 * Values are compared with strict equality.
+	 *
+	 * When comparing two flat lists, the actual array must contain at least
+	 * each value in the expected array. The order of the values does not matter.
+	 *
+	 * When comparing associative arrays, multi-dimensional arrays, or nested
+	 * lists, then the actual array must contain at least each of the expected
+	 * key-value pairs. In this case keys must match exactly, including the
+	 * index of values in nested lists. The internal index order of associative
+	 * array keys does not matter.
+	 *
+	 * See also:
+	 * - Remove assertArraySubset.
+	 *   https://github.com/sebastianbergmann/phpunit/issues/3494
+	 *   https://github.com/sebastianbergmann/phpunit/issues/3495
+	 * - assertContains lacks actual value. https://github.com/sebastianbergmann/phpunit/issues/3061
 	 *
 	 * @since 1.41
 	 * @param array $expected
@@ -232,32 +257,53 @@ trait MediaWikiTestCaseTrait {
 		array $actual,
 		$message = ''
 	) {
-		$patched = array_replace_recursive( $actual, $expected );
+		$isList = array_is_list( $expected ) && array_is_list( $actual );
+		$isFlatList = true;
 
-		ksort( $patched );
-		ksort( $actual );
-		$result = ( $actual === $patched );
-
-		if ( !$result ) {
-			$comparisonFailure = new ComparisonFailure(
-				$patched,
-				$actual,
-				var_export( $patched, true ),
-				var_export( $actual, true )
-			);
-
-			$failureDescription = 'Failed asserting that array contains the expected submap.';
-			if ( $message != '' ) {
-				$failureDescription = $message . "\n" . $failureDescription;
+		// Flat list
+		if ( $isList ) {
+			$reduced = $actual;
+			foreach ( $expected as $value ) {
+				if ( is_array( $value ) ) {
+					// Nested array
+					$isFlatList = false;
+					break;
+				}
+				$i = array_search( $value, $reduced, true );
+				if ( $i === false ) {
+					throw new ExpectationFailedException(
+						( $message !== '' ? "$message\n" : '' )
+							. sprintf(
+								'Failed asserting that %s contains expected %s.',
+								var_export( $actual, true ),
+								var_export( $expected, true ),
+							)
+					);
+				}
+				// Remove matched item from the reduced list, so that if a duplicate
+				// is expected, we not mistakenly match the same entry twice.
+				array_splice( $reduced, $i, 1 );
 			}
-
-			throw new ExpectationFailedException(
-				$failureDescription,
-				$comparisonFailure
-			);
-		} else {
-			$this->assertTrue( true, $message );
 		}
+		if ( !$isList || !$isFlatList ) {
+			// Associative or nested array
+			$patched = array_replace_recursive( $actual, $expected );
+			ksort( $patched );
+			ksort( $actual );
+			if ( $actual !== $patched ) {
+				throw new ExpectationFailedException(
+					( $message !== '' ? "$message\n" : '' )
+						. 'Failed asserting that array contains the expected submap.',
+					new ComparisonFailure(
+						$patched,
+						$actual,
+						var_export( $patched, true ),
+						var_export( $actual, true )
+					)
+				);
+			}
+		}
+		$this->assertTrue( true, $message );
 	}
 
 	/**
@@ -374,7 +420,7 @@ trait MediaWikiTestCaseTrait {
 	protected function getMockMessage( string $text = '', array $params = [] ) {
 		// Warning, don't use PHPUnit's logicalOr with strings as that's extremely slow!
 		$oneOf = fn ( string ...$methods ) => $this->logicalOr(
-			...array_map( [ $this, 'identicalTo' ], $methods )
+			...array_map( $this->identicalTo( ... ), $methods )
 		);
 
 		$msg = $this->createMock( Message::class );
@@ -387,12 +433,12 @@ trait MediaWikiTestCaseTrait {
 		return $msg;
 	}
 
-	private function failStatus( StatusValue $status, $reason, $message = '' ) {
+	private function failStatus( StatusValue $status, string $reason, string $message = '' ) {
 		$reason = $message === '' ? $reason : "$message\n$reason";
 		$this->fail( "$reason\n$status" );
 	}
 
-	protected function assertStatusOK( StatusValue $status, $message = '' ) {
+	protected function assertStatusOK( StatusValue $status, string $message = '' ) {
 		if ( !$status->isOK() ) {
 			$errors = $status->splitByErrorType()[0];
 			$this->failStatus( $errors, 'Status should be OK', $message );
@@ -401,7 +447,7 @@ trait MediaWikiTestCaseTrait {
 		}
 	}
 
-	protected function assertStatusGood( StatusValue $status, $message = '' ) {
+	protected function assertStatusGood( StatusValue $status, string $message = '' ) {
 		if ( !$status->isGood() ) {
 			$this->failStatus( $status, 'Status should be Good', $message );
 		} else {
@@ -409,7 +455,7 @@ trait MediaWikiTestCaseTrait {
 		}
 	}
 
-	protected function assertStatusNotOK( StatusValue $status, $message = '' ) {
+	protected function assertStatusNotOK( StatusValue $status, string $message = '' ) {
 		if ( $status->isOK() ) {
 			$this->failStatus( $status, 'Status should not be OK', $message );
 		} else {
@@ -417,7 +463,7 @@ trait MediaWikiTestCaseTrait {
 		}
 	}
 
-	protected function assertStatusNotGood( StatusValue $status, $message = '' ) {
+	protected function assertStatusNotGood( StatusValue $status, string $message = '' ) {
 		if ( $status->isGood() ) {
 			$this->failStatus( $status, 'Status should not be Good', $message );
 		} else {
@@ -425,7 +471,7 @@ trait MediaWikiTestCaseTrait {
 		}
 	}
 
-	protected function assertStatusMessage( string $messageKey, StatusValue $status, $message = '' ) {
+	protected function assertStatusMessage( string $messageKey, StatusValue $status, string $message = '' ) {
 		if ( !$status->hasMessage( $messageKey ) ) {
 			$this->failStatus( $status, "Status should have message $messageKey", $message );
 		} else {
@@ -461,7 +507,10 @@ trait MediaWikiTestCaseTrait {
 					$expectedMsg === null || $actualMsg === null ||
 					$localizer->msg( $expectedMsg )->text() !== $localizer->msg( $actualMsg )->text()
 				) {
-					$this->failStatus( $actual, "Status messages should be exactly like: $expected\nActual:", $message );
+					$this->failStatus(
+						$actual,
+						"Status messages should be exactly like: $expected\nActual:", $message
+					);
 				}
 			}
 		}
@@ -469,16 +518,16 @@ trait MediaWikiTestCaseTrait {
 		$this->addToAssertionCount( 1 );
 	}
 
-	protected function assertStatusValue( $expected, StatusValue $status, $message = 'Status value' ) {
+	protected function assertStatusValue( mixed $expected, StatusValue $status, string $message = 'Status value' ) {
 		$this->assertEquals( $expected, $status->getValue(), $message );
 	}
 
-	protected function assertStatusError( string $messageKey, StatusValue $status, $message = '' ) {
+	protected function assertStatusError( string $messageKey, StatusValue $status, string $message = '' ) {
 		$this->assertStatusNotOK( $status, $message );
 		$this->assertStatusMessage( $messageKey, $status, $message );
 	}
 
-	protected function assertStatusWarning( string $messageKey, StatusValue $status, $message = '' ) {
+	protected function assertStatusWarning( string $messageKey, StatusValue $status, string $message = '' ) {
 		$this->assertStatusNotGood( $status, $message );
 		$this->assertStatusOK( $status, $message );
 		$this->assertStatusMessage( $messageKey, $status, $message );

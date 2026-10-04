@@ -1,19 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -29,10 +16,7 @@ use Wikimedia\Stats\Sample;
  * @since 1.41
  */
 interface MetricInterface {
-	/**
-	 * @param BaseMetricInterface $baseMetric
-	 * @param LoggerInterface $logger
-	 */
+
 	public function __construct( BaseMetricInterface $baseMetric, LoggerInterface $logger );
 
 	/** @return string */
@@ -65,7 +49,7 @@ interface MetricInterface {
 	 * Sets sample rate on a new metric instance.
 	 *
 	 * @param float $sampleRate
-	 * @return self|NullMetric
+	 * @return $this|NullMetric
 	 */
 	public function setSampleRate( float $sampleRate );
 
@@ -92,7 +76,7 @@ interface MetricInterface {
 	 *
 	 * @param string $key
 	 * @param string $value
-	 * @return self|NullMetric
+	 * @return $this|NullMetric
 	 */
 	public function setLabel( string $key, string $value );
 
@@ -100,7 +84,7 @@ interface MetricInterface {
 	 * Convenience function to set a number of labels at once.
 	 * @see ::setLabel
 	 * @param array<string,string> $labels
-	 * @return self|NullMetric
+	 * @return $this|NullMetric
 	 */
 	public function setLabels( array $labels );
 
@@ -109,15 +93,25 @@ interface MetricInterface {
 	 *
 	 * Takes a namespace or multiple namespaces.
 	 *
+	 * This function existed to support the Graphite->Prometheus transition and is no longer needed.
+	 *
+	 * @deprecated since 1.45, see: https://www.mediawiki.org/wiki/Manual:Stats.
 	 * @param string|string[] $statsdNamespaces
-	 * @return self|NullMetric
+	 * @return $this|NullMetric
 	 */
 	public function copyToStatsdAt( $statsdNamespaces );
 
 	/**
 	 * Returns metric with cleared labels.
 	 *
-	 * @return self|NullMetric
+	 * @return $this|NullMetric
 	 */
 	public function fresh();
+
+	/**
+	 * Indicates the metric instance is used in a Histogram
+	 *
+	 * @return bool
+	 */
+	public function isHistogram(): bool;
 }

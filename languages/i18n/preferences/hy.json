@@ -120,7 +120,7 @@
 	"underline-never": "Երբեք",
 	"underline-always": "Միշտ",
 	"tog-showhiddencats": "Ցուցադրել թաքնված կատեգորիաները",
-	"tog-forcesafemode": "Միշտ միացնել [[mw:Manual:Safemode|անվտանգ ռեժիմը]]",
+	"tog-forcesafemode": "Միշտ միացնել [[mw:Special:MyLanguage/Manual:Safemode|անվտանգ ռեժիմը]]",
 	"prefs-editing": "Խմբագրում",
 	"prefs-advancedediting": "Ընդլայնված ընտրանքներ",
 	"tog-editsectiononrightclick": "Խմբագրել բաժինները վերնագրի աջ սեղմամբ",
@@ -183,6 +183,7 @@
 	"prefs-searchoptions": "Որոնում",
 	"prefs-searchmisc": "Ընդհանուր",
 	"prefs-advancedsearchoptions": "Ընդլայնված ընտրանքներ",
+	"prefs-misc": "Այլ",
 	"prefs-reset-intro": "Այս էջում հնարավոր է զրոյացնել ձեր բոլոր նախընտրանքները, փոխելով դրանք ի լռելյայն նախընտրանքների։\nԳործողությունը հաստատելուց հետո նախընտրանքները հնարավոր չեն լինելու ետ բերել։",
 	"prefs-reset-confirm": "Այո, ես ուզում եմ վերափոխել իմ նախասիրությունները:",
 	"restoreprefs": "Վերականգնել սկզբնական կարգավորումները (բոլոր ներդիրներում)"

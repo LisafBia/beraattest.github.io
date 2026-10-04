@@ -32,21 +32,7 @@
  * - complex expansion of site configuration defaults (those that require
  *   calling into MediaWikiServices, global functions, or other classes.).
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -54,8 +40,10 @@
 use MediaWiki\Config\SiteConfiguration;
 use MediaWiki\Context\RequestContext;
 use MediaWiki\Debug\MWDebug;
-use MediaWiki\Deferred\DeferredUpdates;
-use MediaWiki\HookContainer\FauxGlobalHookArray;
+use MediaWiki\Exception\FatalError;
+use MediaWiki\Exception\HttpError;
+use MediaWiki\Exception\MWExceptionHandler;
+use MediaWiki\Exception\MWExceptionRenderer;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\Language\Language;
 use MediaWiki\Logger\LoggerFactory;
@@ -63,20 +51,21 @@ use MediaWiki\MainConfigNames;
 use MediaWiki\MainConfigSchema;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Message\Message;
+use MediaWiki\Profiler\Profiler;
 use MediaWiki\Registration\ExtensionRegistry;
 use MediaWiki\Registration\MissingExtensionException;
 use MediaWiki\Request\HeaderCallback;
+use MediaWiki\Session\SessionManager;
 use MediaWiki\Settings\DynamicDefaultValues;
 use MediaWiki\Settings\LocalSettingsLoader;
 use MediaWiki\Settings\SettingsBuilder;
 use MediaWiki\Settings\Source\PhpSettingsSource;
 use MediaWiki\Settings\Source\ReflectionSchemaSource;
 use MediaWiki\Settings\WikiFarmSettingsLoader;
-use MediaWiki\StubObject\StubGlobalUser;
 use MediaWiki\StubObject\StubUserLang;
 use MediaWiki\Title\Title;
-use MediaWiki\User\User;
 use Psr\Log\LoggerInterface;
+use Wikimedia\Http\HttpStatus;
 use Wikimedia\RequestTimeout\RequestTimeout;
 use Wikimedia\Telemetry\SpanInterface;
 use Wikimedia\Telemetry\TracerState;
@@ -93,12 +82,6 @@ if ( !defined( 'MEDIAWIKI' ) ) {
 	exit( 1 );
 }
 
-// PHP must not be configured to overload mbstring functions. (T5782, T122807)
-// This was deprecated by upstream in PHP 7.2 and was removed in PHP 8.0.
-if ( ini_get( 'mbstring.func_overload' ) ) {
-	die( 'MediaWiki does not support installations where mbstring.func_overload is non-zero.' );
-}
-
 // The MW_ENTRY_POINT constant must always exists, to make it safe to access.
 // For compat, we do support older and custom MW entrypoints that don't set this,
 // in which case we assign a default here.
@@ -111,11 +94,11 @@ if ( !defined( 'MW_ENTRY_POINT' ) ) {
 	define( 'MW_ENTRY_POINT', 'unknown' );
 }
 
-// The $IP variable is defined for use by LocalSettings.php.
-// It is made available as a global variable for backwards compatibility.
-//
-// Source code should use the MW_INSTALL_PATH constant instead.
-global $IP;
+/**
+ * @internal For read-only use in LocalSettings.php.
+ *
+ * Source code should use the MW_INSTALL_PATH constant instead (T56483).
+ */
 $IP = wfDetectInstallPath(); // ensures MW_INSTALL_PATH is defined
 
 /**
@@ -129,15 +112,17 @@ require_once MW_INSTALL_PATH . '/includes/Defines.php';
 // Assert that composer dependencies were successfully loaded
 if ( !interface_exists( LoggerInterface::class ) ) {
 	$message = (
-		'MediaWiki requires the <a href="https://github.com/php-fig/log">PSR-3 logging ' .
-		"library</a> to be present. This library is not embedded directly in MediaWiki's " .
-		"git repository and must be installed separately by the end user.\n\n" .
+		'<strong>Error: Missing external libraries.</strong> ' .
+		'MediaWiki depends on external libraries bundled with most MediaWiki distributions. ' .
+		"When installing MediaWiki from its Git reposistory, these must be installed separately.\n\n" .
 		'Please see the <a href="https://www.mediawiki.org/wiki/Download_from_Git' .
 		'#Fetch_external_libraries">instructions for installing libraries</a> on mediawiki.org ' .
-		'for help on installing the required components.'
+		'for help on installing the required libraries.'
 	);
+	http_response_code( 500 );
 	echo $message;
-	trigger_error( $message, E_USER_ERROR );
+	error_log( $message );
+	exit( 1 );
 }
 
 // Deprecated global variable for backwards-compatibility.
@@ -172,7 +157,7 @@ HeaderCallback::register();
 // Tell HttpStatus to use HeaderCallback for reporting warnings when
 // attempting to set headers after the headers have already been sent.
 HttpStatus::registerHeadersSentCallback(
-	[ HeaderCallback::class, 'warnIfHeadersSent' ]
+	HeaderCallback::warnIfHeadersSent( ... )
 );
 
 // Set the encoding used by PHP for reading HTTP input, and writing output.
@@ -255,6 +240,13 @@ $wgSettings->enterRegistrationStage();
  * available, and before MediaWikiServices is initialized.
  */
 
+// This constant used to control MediaWiki's integration with PHP sessions, and we allowed users
+// to define it in LocalSettings.php. That integration has been removed and this constant is now
+// always defined for compatibility with code that checked for it.
+if ( !defined( 'MW_NO_SESSION_HANDLER' ) ) {
+	define( 'MW_NO_SESSION_HANDLER', 1 );
+}
+
 if ( defined( 'MW_SETUP_CALLBACK' ) ) {
 	call_user_func( MW_SETUP_CALLBACK, $wgSettings );
 	// Make any additional settings available in globals for use here
@@ -274,7 +266,7 @@ $wgSettings->apply();
 require __DIR__ . '/SetupDynamicConfig.php';
 
 if ( defined( 'MW_AUTOLOAD_TEST_CLASSES' ) ) {
-	require_once __DIR__ . '/../tests/common/TestsAutoLoader.php';
+	require_once __DIR__ . '/../tests/Common/TestsAutoLoader.php';
 }
 
 // Start time limit
@@ -308,13 +300,22 @@ if ( defined( 'MW_FINAL_SETUP_CALLBACK' ) ) {
 // Config can no longer be changed.
 $wgSettings->enterReadOnlyStage();
 
-// Set an appropriate locale (T291234)
-// setlocale() will return the locale name actually set.
+// Determine an appropriate locale (T291234)
+// As of version 8, php no longer inherits the platform's locale so there
+// shouldn't be a need to set a locale.  However, setlocale is used to
+// determine if the locale is available.  macOS is avoided because setting
+// it to C.UTF-8 changes pcre character classes on that platform.
+if ( PHP_OS_FAMILY !== 'Darwin' && setlocale( LC_ALL, 'C.UTF-8' ) ) {
+	$locale = 'C.UTF-8';
+} else {
+	$locale = 'C';
+}
 // The putenv() is meant to propagate the choice of locale to shell commands
 // so that they will interpret UTF-8 correctly. If you have a problem with a
 // shell command and need to send a special locale, you can override the locale
 // with Command::environment().
-putenv( "LC_ALL=" . setlocale( LC_ALL, 'C.UTF-8', 'C' ) );
+putenv( "LC_ALL={$locale}" );
+unset( $locale );
 
 // Set PHP runtime to the desired timezone
 date_default_timezone_set( $wgLocaltimezone );
@@ -378,24 +379,15 @@ if ( $wgServer === false ) {
 	);
 }
 
-// Set up a fake $wgHooks array.
-// XXX: It would be nice if we could still get the originally configured hook handlers
-//      using the MainConfigNames::Hooks setting, but it's not really needed,
-//      since we need the HookContainer to be initialized first anyway.
-
-global $wgHooks;
-$wgHooks = new FauxGlobalHookArray(
-	MediaWikiServices::getInstance()->getHookContainer(),
-	$wgHooks
-);
-
 // Non-trivial expansion of: $wgCanonicalServer, $wgServerName.
 // These require calling global functions.
 // Also here are other settings that further depend on these two.
 if ( $wgCanonicalServer === false ) {
 	$wgCanonicalServer = MediaWikiServices::getInstance()->getUrlUtils()->getCanonicalServer();
 }
-$wgVirtualRestConfig['global']['domain'] = $wgCanonicalServer;
+if ( $wgHTTPUserAgentContact === false ) {
+	$wgHTTPUserAgentContact = $wgCanonicalServer;
+}
 
 if ( $wgServerName !== false ) {
 	wfWarn( '$wgServerName should be derived from $wgCanonicalServer, '
@@ -416,7 +408,7 @@ if ( !$wgNoReplyAddress ) {
 
 // Non-trivial expansion of: $wgSecureLogin
 // (due to calling wfWarn).
-if ( $wgSecureLogin && substr( $wgServer, 0, 2 ) !== '//' ) {
+if ( $wgSecureLogin && !str_starts_with( $wgServer, '//' ) ) {
 	$wgSecureLogin = false;
 	wfWarn( 'Secure login was enabled on a server that only supports '
 		. 'HTTP or HTTPS. Disabling secure login.' );
@@ -446,13 +438,13 @@ if ( $wgSharedDB && $wgSharedTables ) {
 wfMemoryLimit( $wgMemoryLimit );
 
 // Explicit globals, so this works with bootstrap.php
-global $wgRequest, $wgInitialSessionId;
+global $wgRequest;
 
 // Initialize the request object in $wgRequest
 $wgRequest = RequestContext::getMain()->getRequest(); // BackCompat
 
 // Make sure that object caching does not undermine the ChronologyProtector improvements
-if ( $wgRequest->getCookie( 'UseDC', '' ) === 'master' ) {
+if ( RequestContext::getMain()->getRequest()->getCookie( 'UseDC', '' ) === 'master' ) {
 	// The user is pinned to the primary DC, meaning that they made recent changes which should
 	// be reflected in their subsequent web requests. Avoid the use of interim cache keys because
 	// they use a blind TTL and could be stale if an object changes twice in a short time span.
@@ -461,23 +453,33 @@ if ( $wgRequest->getCookie( 'UseDC', '' ) === 'master' ) {
 
 // Useful debug output
 ( static function () {
-	global $wgRequest;
-
 	$logger = LoggerFactory::getInstance( 'wfDebug' );
 	if ( MW_ENTRY_POINT === 'cli' ) {
 		$self = $_SERVER['PHP_SELF'] ?? '';
 		$logger->debug( "\n\nStart command line script $self" );
 	} else {
-		$debug = "\n\nStart request {$wgRequest->getMethod()} {$wgRequest->getRequestURL()}\n";
-		$debug .= "IP: " . $wgRequest->getIP() . "\n";
+		$request = RequestContext::getMain()->getRequest();
+		$debug = "\n\nStart request {$request->getMethod()} {$request->getRequestURL()}\n";
+		$debug .= "IP: " . $request->getIP() . "\n";
 		$debug .= "HTTP HEADERS:\n";
-		foreach ( $wgRequest->getAllHeaders() as $name => $value ) {
+		foreach ( $request->getAllHeaders() as $name => $value ) {
 			$debug .= "$name: $value\n";
 		}
 		$debug .= "(end headers)";
 		$logger->debug( $debug );
 	}
 } )();
+
+$settingsWarnings = $wgSettings->getWarnings();
+if ( $settingsWarnings ) {
+	$logger = LoggerFactory::getInstance( 'Settings' );
+	foreach ( $settingsWarnings as $msg ) {
+		$logger->warning( $msg );
+	}
+	unset( $msg );
+	unset( $logger );
+}
+unset( $settingsWarnings );
 
 // Most of the config is out, some might want to run hooks here.
 ( new HookRunner( MediaWikiServices::getInstance()->getHookContainer() ) )->onSetupAfterCache();
@@ -492,33 +494,18 @@ if ( $wgRequest->getCookie( 'UseDC', '' ) === 'master' ) {
 // TODO: Figure out if this can be safely done after everything else in Setup.php (e.g. any
 // hooks or other state that would miss this?). If so, move to wfIndexMain or MediaWiki::run.
 if ( MW_ENTRY_POINT === 'index' ) {
-	$wgRequest->interpolateTitle();
+	RequestContext::getMain()->getRequest()->interpolateTitle();
 }
 
-/**
- * @var MediaWiki\Session\SessionId|null $wgInitialSessionId The persistent session ID (if any) loaded at startup
- */
-$wgInitialSessionId = null;
 if ( !defined( 'MW_NO_SESSION' ) && MW_ENTRY_POINT !== 'cli' ) {
-	// If session.auto_start is there, we can't touch session name
-	if ( $wgPHPSessionHandling !== 'disable' && !wfIniGetBool( 'session.auto_start' ) ) {
-		HeaderCallback::warnIfHeadersSent();
-		session_name( $wgSessionName ?: $wgCookiePrefix . '_session' );
-	}
-
-	// Create the SessionManager singleton and set up our session handler,
-	// unless we're specifically asked not to.
-	if ( !defined( 'MW_NO_SESSION_HANDLER' ) ) {
-		MediaWiki\Session\PHPSessionHandler::install(
-			MediaWiki\Session\SessionManager::singleton()
-		);
-	}
+	// @phan-suppress-next-line PhanUndeclaredMethod shutdown() is not part of the public interface
+	register_shutdown_function( MediaWikiServices::getInstance()->getSessionManager()->shutdown( ... ) );
 
 	$contLang = MediaWikiServices::getInstance()->getContentLanguage();
 
 	// Initialize the session
 	try {
-		$session = MediaWiki\Session\SessionManager::getGlobalSession();
+		$session = RequestContext::getMain()->getRequest()->getSession();
 	} catch ( MediaWiki\Session\SessionOverflowException $ex ) {
 		// The exception is because the request had multiple possible
 		// sessions tied for top priority. Report this to the user.
@@ -534,53 +521,17 @@ if ( !defined( 'MW_NO_SESSION' ) && MW_ENTRY_POINT !== 'cli' ) {
 
 	unset( $contLang );
 
-	if ( $session->isPersistent() ) {
-		$wgInitialSessionId = $session->getSessionId();
-	}
-
 	$session->renew();
-	if ( MediaWiki\Session\PHPSessionHandler::isEnabled() &&
-		( $session->isPersistent() || $session->shouldRememberUser() ) &&
-		session_id() !== $session->getId()
-	) {
-		// Start the PHP-session for backwards compatibility
-		if ( session_id() !== '' ) {
-			wfDebugLog( 'session', 'PHP session {old_id} was already started, changing to {new_id}', 'all', [
-				'old_id' => session_id(),
-				'new_id' => $session->getId(),
-			] );
-			session_write_close();
-		}
-		session_id( $session->getId() );
-		session_start();
-	}
-
 	unset( $session );
-} else {
-	// Even if we didn't set up a global Session, still install our session
-	// handler unless specifically requested not to.
-	if ( !defined( 'MW_NO_SESSION_HANDLER' ) ) {
-		MediaWiki\Session\PHPSessionHandler::install(
-			MediaWiki\Session\SessionManager::singleton()
-		);
-	}
 }
 
 // Explicit globals, so this works with bootstrap.php
-global $wgUser, $wgLang, $wgOut, $wgTitle;
-
-/**
- * @var User $wgUser
- * @deprecated since 1.35, use an available context source when possible, or, as a backup,
- * RequestContext::getMain()
- */
-$wgUser = new StubGlobalUser( RequestContext::getMain()->getUser() ); // BackCompat
-register_shutdown_function( static function () {
-	StubGlobalUser::$destructorDeprecationDisarmed = true;
-} );
+global $wgLang, $wgOut, $wgTitle;
 
 /**
  * @var Language|StubUserLang $wgLang
+ * @deprecated since 1.47, use an available context source when possible, or, as a backup,
+ * RequestContext::getMain()
  */
 $wgLang = new StubUserLang;
 
@@ -595,64 +546,65 @@ $wgOut = RequestContext::getMain()->getOutput(); // BackCompat
 $wgTitle = null;
 
 // Explicit globals, so this works with bootstrap.php
-global $wgFullyInitialised, $wgExtensionFunctions;
+global $wgExtensionFunctions;
 
 // Extension setup functions
 // Entries should be added to this variable during the inclusion
 // of the extension file. This allows the extension to perform
 // any necessary initialisation in the fully initialised environment
 foreach ( $wgExtensionFunctions as $func ) {
-	call_user_func( $func );
+	$func();
 }
 unset( $func ); // no global pollution; destroy reference
 
-// If the session user has a 0 id but a valid name, that means we need to
-// autocreate it.
-if ( !defined( 'MW_NO_SESSION' ) && MW_ENTRY_POINT !== 'cli' ) {
-	$sessionUser = MediaWiki\Session\SessionManager::getGlobalSession()->getUser();
-	if ( $sessionUser->getId() === 0 &&
-		MediaWikiServices::getInstance()->getUserNameUtils()->isValid( $sessionUser->getName() )
-	) {
-		MediaWikiServices::getInstance()->getAuthManager()->autoCreateUser(
-			$sessionUser,
-			MediaWiki\Auth\AuthManager::AUTOCREATE_SOURCE_SESSION,
-			true,
-			true,
-			$sessionUser
-		);
-	}
-	unset( $sessionUser );
-}
-
-// Optimization: Avoid overhead from DeferredUpdates and Pingback deps when turned off.
-if ( MW_ENTRY_POINT !== 'cli' && $wgPingback ) {
-	// NOTE: Do not refactor to inject Config or otherwise make unconditional service call.
-	//
-	// On a plain install of MediaWiki, Pingback is likely the *only* feature
-	// involving DeferredUpdates or DB_PRIMARY on a regular page view.
-	// To allow for error recovery and fault isolation, let admins turn this
-	// off completely. (T269516)
-	DeferredUpdates::addCallableUpdate( static function () {
-		MediaWikiServices::getInstance()->getPingback()->run();
-	} );
-}
-
-$settingsWarnings = $wgSettings->getWarnings();
-if ( $settingsWarnings ) {
-	$logger = LoggerFactory::getInstance( 'Settings' );
-	foreach ( $settingsWarnings as $msg ) {
-		$logger->warning( $msg );
-	}
-	unset( $logger );
-}
-
-unset( $settingsWarnings );
-
 // Explicit globals, so this works with bootstrap.php
 global $wgFullyInitialised;
-$wgFullyInitialised = true;
 
-// T264370
+// If the session user has a valid name but is not yet registered, that means we need to autocreate it.
 if ( !defined( 'MW_NO_SESSION' ) && MW_ENTRY_POINT !== 'cli' ) {
-	MediaWiki\Session\SessionManager::singleton()->logPotentialSessionLeakage();
+	$sessionUser = RequestContext::getMain()->getRequest()->getSession()->getUser();
+	$autocreateStatus = null;
+	if ( !$sessionUser->isRegistered() &&
+		MediaWikiServices::getInstance()->getUserNameUtils()->isValid( $sessionUser->getName() )
+	) {
+		$autocreateStatus = MediaWikiServices::getInstance()->getAuthManager()->autoCreateUser(
+			$sessionUser,
+			MediaWiki\Auth\AuthManager::AUTOCREATE_SOURCE_SESSION
+		);
+		// If successful, the User object has been updated with its new ID
+	}
+	// Autocreation is the last requirement before $wgFullyInitialised lets other code call the User object.
+	$wgFullyInitialised = true;
+
+	// T264370
+	$manager = MediaWikiServices::getInstance()->getSessionManager();
+	if ( $manager instanceof SessionManager ) {
+		$manager->logPotentialSessionLeakage();
+	}
+	unset( $manager );
+
+	if ( $autocreateStatus ) {
+		// If we tried to autocreate a user, ensure that everything is in a consistent state.
+		// Must be after $wgFullyInitialised
+		if ( $autocreateStatus->isOK() ) {
+			if ( !$sessionUser->isRegistered() ) {
+				throw new LogicException( "Session user should be registered, but it's not" );
+			}
+			if ( !RequestContext::getMain()->getUser()->isRegistered() ) {
+				throw new LogicException( "Global context user should be registered, but it's not" );
+			}
+		} else {
+			if ( $sessionUser->isRegistered() ) {
+				throw new LogicException( "Session user should not be registered, but it is" );
+			}
+			if ( RequestContext::getMain()->getUser()->isRegistered() ) {
+				throw new LogicException( "Global context user should not be registered, but it is" );
+			}
+		}
+	}
+	unset( $sessionUser );
+	unset( $autocreateStatus );
+} else {
+	// MW_NO_SESSION or CLI
+	$wgFullyInitialised = true;
 }

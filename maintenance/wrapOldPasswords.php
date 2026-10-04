@@ -2,21 +2,7 @@
 /**
  * Maintenance script to wrap all old-style passwords in a layered type
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
@@ -27,6 +13,7 @@ use MediaWiki\Password\ParameterizedPassword;
 use MediaWiki\User\User;
 use Wikimedia\Rdbms\IExpression;
 use Wikimedia\Rdbms\LikeValue;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -80,10 +67,10 @@ class WrapOldPasswords extends Maintenance {
 		$minUserId = 0;
 		while ( true ) {
 			if ( $update ) {
-				$this->beginTransaction( $dbw, __METHOD__ );
+				$this->beginTransactionRound( __METHOD__ );
 			}
 
-			$start = microtime( true );
+			$start = ConvertibleTimestamp::hrtime();
 			$res = $dbw->newSelectQueryBuilder()
 				->select( [ 'user_id', 'user_name', 'user_password' ] )
 				->lockInShareMode()
@@ -102,7 +89,7 @@ class WrapOldPasswords extends Maintenance {
 
 			if ( $res->numRows() === 0 ) {
 				if ( $update ) {
-					$this->commitTransaction( $dbw, __METHOD__ );
+					$this->commitTransactionRound( __METHOD__ );
 				}
 				break;
 			}
@@ -141,7 +128,7 @@ class WrapOldPasswords extends Maintenance {
 			}
 
 			if ( $update ) {
-				$this->commitTransaction( $dbw, __METHOD__ );
+				$this->commitTransactionRound( __METHOD__ );
 
 				// Clear memcached so old passwords are wiped out
 				foreach ( $updateUsers as $user ) {
@@ -150,7 +137,7 @@ class WrapOldPasswords extends Maintenance {
 			}
 
 			$this->output( "Last id processed: $minUserId; Actually updated: $count...\n" );
-			$delta = microtime( true ) - $start;
+			$delta = ( ConvertibleTimestamp::hrtime() - $start ) / 1e9;
 			$this->output( sprintf(
 				"%4d passwords wrapped in %6.2fms (%6.2fms each)\n",
 				$res->numRows(),

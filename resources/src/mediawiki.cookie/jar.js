@@ -1,3 +1,4 @@
+/* eslint-disable mediawiki/no-cookie */
 /**
  * Cookie Plugin
  * Based on https://github.com/carhartl/jquery-cookie
@@ -15,30 +16,31 @@
 	const pluses = /\+/g;
 	let config = null, cookie;
 
-	function raw( s ) {
-		return s;
-	}
+	function decode( s ) {
+		if ( config.raw ) {
+			return s;
+		}
 
-	function decoded( s ) {
 		try {
-			return unRfc2068( decodeURIComponent( s.replace( pluses, ' ' ) ) );
+			return decodeURIComponent( s.replace( pluses, ' ' ) );
 		} catch ( e ) {
-			// If the cookie cannot be decoded this should not throw an error.
-			// See T271838.
+			// T271838: If the cookie cannot be decoded this should not throw an error.
 			return '';
 		}
 	}
 
-	function unRfc2068( value ) {
-		if ( value.indexOf( '"' ) === 0 ) {
+	function decodeAndParse( s ) {
+		if ( s.startsWith( '"' ) ) {
 			// This is a quoted cookie as according to RFC2068, unescape
-			value = value.slice( 1, -1 ).replace( /\\"/g, '"' ).replace( /\\\\/g, '\\' );
+			s = s.slice( 1, -1 ).replace( /\\"/g, '"' ).replace( /\\\\/g, '\\' );
 		}
-		return value;
-	}
 
-	function fromJSON( value ) {
-		return config.json ? JSON.parse( value ) : value;
+		s = decode( s );
+
+		try {
+			return config.json ? JSON.parse( s ) : s;
+		} catch ( e ) {
+		}
 	}
 
 	/**
@@ -48,14 +50,15 @@
 	 * @param {string} [key] Cookie name or (when getting) omit to return an object with all
 	 *  current cookie keys and values.
 	 * @param {string|null} [value] Cookie value to set. If `null`, this method will remove the cookie.
-	 *  If omited, this method will get and return the current value.
+	 *  If omitted, this method will get and return the current value.
 	 * @param {mw.cookie.CookieOptions} [options]
+	 * @param {Date|number|null} [options.expires] in days
 	 * @return {string|Object} The current value (if getting a cookie), or an internal `document.cookie`
 	 *  expression (if setting or removing).
 	 */
 	config = cookie = function ( key, value, options ) {
 
-		// write
+		// Write
 		if ( value !== undefined ) {
 			options = Object.assign( {}, config.defaults, options );
 
@@ -86,8 +89,7 @@
 			}
 		}
 
-		// read
-		const decode = config.raw ? raw : decoded;
+		// Read
 		let cookies;
 		try {
 			cookies = document.cookie.split( '; ' );
@@ -99,15 +101,15 @@
 		for ( let i = 0, l = cookies.length; i < l; i++ ) {
 			const parts = cookies[ i ].split( '=' );
 			const name = decode( parts.shift() );
-			const s = decode( parts.join( '=' ) );
+			const s = parts.join( '=' );
 
 			if ( key && key === name ) {
-				result = fromJSON( s );
+				result = decodeAndParse( s );
 				break;
 			}
 
 			if ( !key ) {
-				result[ name ] = fromJSON( s );
+				result[ name ] = decodeAndParse( s );
 			}
 		}
 

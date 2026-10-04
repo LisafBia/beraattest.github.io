@@ -3,17 +3,17 @@
 namespace MediaWiki\Tests\Maintenance;
 
 use DOMDocument;
-use ExecutableFinder;
 use MediaWiki\CommentStore\CommentStoreComment;
 use MediaWiki\Content\Content;
+use MediaWiki\Export\WikiExporter;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Page\WikiPage;
 use MediaWiki\Revision\RevisionAccessException;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
+use MediaWiki\Utils\ExecutableFinder;
 use MediaWikiLangTestCase;
 use RuntimeException;
-use WikiExporter;
-use WikiPage;
 
 /**
  * Base TestCase for dumps
@@ -54,7 +54,7 @@ abstract class DumpTestCase extends MediaWikiLangTestCase {
 	}
 
 	/**
-	 * Adds a revision to a page, while returning the resuting revision's id text id.
+	 * Adds a revision to a page, while returning the resulting revision's id text id.
 	 *
 	 * @param WikiPage $page Page to add the revision to
 	 * @param string $text Revisions text
@@ -91,7 +91,7 @@ abstract class DumpTestCase extends MediaWikiLangTestCase {
 	protected function getSlotText( SlotRecord $slot ) {
 		try {
 			return $slot->getContent()->serialize();
-		} catch ( RevisionAccessException $ex ) {
+		} catch ( RevisionAccessException ) {
 			return null;
 		}
 	}
@@ -132,7 +132,7 @@ abstract class DumpTestCase extends MediaWikiLangTestCase {
 	) {
 		$slotRoleRegistry = MediaWikiServices::getInstance()->getSlotRoleRegistry();
 
-		$updater = $page->newPageUpdater( $this->getTestUser()->getUser() );
+		$updater = $page->newPageUpdater( $this->getTestUser()->getUserIdentity() );
 
 		foreach ( $slots as $role => $content ) {
 			if ( !$slotRoleRegistry->isDefinedRole( $role ) ) {
@@ -154,9 +154,7 @@ abstract class DumpTestCase extends MediaWikiLangTestCase {
 	 */
 	protected function gunzip( $fname ) {
 		$gzipped_contents = file_get_contents( $fname );
-		if ( $gzipped_contents === false ) {
-			$this->fail( "Could not get contents of $fname" );
-		}
+		$this->assertNotFalse( $gzipped_contents, "Could not get contents of $fname" );
 
 		$contents = gzdecode( $gzipped_contents );
 
@@ -241,7 +239,7 @@ abstract class DumpTestCase extends MediaWikiLangTestCase {
 		$this->expectOutputRegex( '//' );
 
 		// 2. Do the real output checking on our own.
-		$lines = explode( "\n", $this->getActualOutput() );
+		$lines = explode( "\n", $this->getActualOutputForAssertion() );
 		$this->assertGreaterThan( 1, count( $lines ), "Minimal lines of produced output" );
 		$this->assertSame( '', array_pop( $lines ), "Output ends in LF" );
 		$timestamp_re = "[0-9]{4}-[01][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-6][0-9]";

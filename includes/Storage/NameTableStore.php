@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -22,9 +8,8 @@ namespace MediaWiki\Storage;
 
 use Psr\Log\LoggerInterface;
 use Wikimedia\Assert\Assert;
-use Wikimedia\LightweightObjectStore\ExpirationAwareness;
+use Wikimedia\ObjectCache\BagOStuff;
 use Wikimedia\ObjectCache\WANObjectCache;
-use Wikimedia\Rdbms\Database;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\ILoadBalancer;
 use Wikimedia\Rdbms\IReadableDatabase;
@@ -35,37 +20,18 @@ use Wikimedia\Rdbms\IReadableDatabase;
  */
 class NameTableStore {
 
-	/** @var ILoadBalancer */
-	private $loadBalancer;
-
-	/** @var WANObjectCache */
-	private $cache;
-
-	/** @var LoggerInterface */
-	private $logger;
-
 	/** @var array<int,string>|null */
 	private $tableCache = null;
 
-	/** @var bool|string */
-	private $domain;
+	private readonly int $cacheTTL;
 
-	/** @var int */
-	private $cacheTTL;
-
-	/** @var string */
-	private $table;
-	/** @var string */
-	private $idField;
-	/** @var string */
-	private $nameField;
 	/** @var null|callable */
 	private $normalizationCallback;
 	/** @var null|callable */
 	private $insertCallback;
 
 	/**
-	 * @param ILoadBalancer $dbLoadBalancer A load balancer for acquiring database connections
+	 * @param ILoadBalancer $loadBalancer A load balancer for acquiring database connections
 	 * @param WANObjectCache $cache A cache manager for caching data. This can be the local
 	 *        wiki's default instance even if $dbDomain refers to a different wiki, since
 	 *        makeGlobalKey() is used to constructed a key that allows cached names from
@@ -78,30 +44,23 @@ class NameTableStore {
 	 * @param string $nameField
 	 * @param callable|null $normalizationCallback Normalization to be applied to names before being
 	 * saved or queried. This should be a callback that accepts and returns a single string.
-	 * @param bool|string $dbDomain Database domain ID. Use false for the local database domain.
+	 * @param bool|string $domain Database domain ID. Use false for the local database domain.
 	 * @param callable|null $insertCallback Callback to change insert fields accordingly.
 	 * This parameter was introduced in 1.32
 	 */
 	public function __construct(
-		ILoadBalancer $dbLoadBalancer,
-		WANObjectCache $cache,
-		LoggerInterface $logger,
-		$table,
-		$idField,
-		$nameField,
+		private readonly ILoadBalancer $loadBalancer,
+		private readonly WANObjectCache $cache,
+		private readonly LoggerInterface $logger,
+		private readonly string $table,
+		private readonly string $idField,
+		private readonly string $nameField,
 		?callable $normalizationCallback = null,
-		$dbDomain = false,
-		?callable $insertCallback = null
+		private readonly bool|string $domain = false,
+		?callable $insertCallback = null,
 	) {
-		$this->loadBalancer = $dbLoadBalancer;
-		$this->cache = $cache;
-		$this->logger = $logger;
-		$this->table = $table;
-		$this->idField = $idField;
-		$this->nameField = $nameField;
 		$this->normalizationCallback = $normalizationCallback;
-		$this->domain = $dbDomain;
-		$this->cacheTTL = ExpirationAwareness::TTL_MONTH;
+		$this->cacheTTL = BagOStuff::TTL_MONTH;
 		$this->insertCallback = $insertCallback;
 	}
 
@@ -138,7 +97,7 @@ class NameTableStore {
 		if ( $this->normalizationCallback === null ) {
 			return $name;
 		}
-		return call_user_func( $this->normalizationCallback, $name );
+		return ( $this->normalizationCallback )( $name );
 	}
 
 	/**
@@ -233,7 +192,7 @@ class NameTableStore {
 
 	/**
 	 * Get the name of the given id.
-	 * If the id doesn't exist this will throw.
+	 * If the id doesn't exist, this will throw.
 	 * This should be used in cases where we believe the id already exists.
 	 *
 	 * Note: Calls to this method will result in a primary DB select for non existing IDs.
@@ -252,14 +211,7 @@ class NameTableStore {
 		$table = $this->cache->getWithSetCallback(
 			$this->getCacheKey(),
 			$this->cacheTTL,
-			function ( $oldValue, &$ttl, &$setOpts ) use ( $id, $fname ) {
-				// Check if cached value is up-to-date enough to have $id
-				if ( is_array( $oldValue ) && array_key_exists( $id, $oldValue ) ) {
-					// Completely leave the cache key alone
-					$ttl = WANObjectCache::TTL_UNCACHEABLE;
-					// Use the old value
-					return $oldValue;
-				}
+			function () use ( $id, $fname ) {
 				// Regenerate from replica DB, and primary DB if needed
 				foreach ( [ DB_REPLICA, DB_PRIMARY ] as $source ) {
 					// Log a fallback to primary
@@ -270,18 +222,24 @@ class NameTableStore {
 						);
 					}
 					$db = $this->getDBConnection( $source );
-					$cacheSetOpts = Database::getCacheSetOptions( $db );
 					$table = $this->loadTable( $db );
 					if ( array_key_exists( $id, $table ) ) {
 						break; // found it
 					}
 				}
 				// Use the value from last source checked
-				$setOpts += $cacheSetOpts;
-
 				return $table;
 			},
-			[ 'minAsOf' => INF ] // force callback run
+			[ 'touchedCallback' => static function ( $oldValue ) use ( $id ) {
+				// Check if cached value is up-to-date enough to have $id. If the cached
+				// value doesn't have the specified ID, consider it stale.
+				if ( !is_array( $oldValue ) || !array_key_exists( $id, $oldValue ) ) {
+					// force callback run
+					return INF;
+				}
+
+				return null;
+			} ]
 		);
 
 		$this->tableCache = $table;
@@ -315,9 +273,8 @@ class NameTableStore {
 		$table = $this->cache->getWithSetCallback(
 			$this->getCacheKey(),
 			$this->cacheTTL,
-			function ( $oldValue, &$ttl, &$setOpts ) {
+			function () {
 				$dbr = $this->getDBConnection( DB_REPLICA );
-				$setOpts += Database::getCacheSetOptions( $dbr );
 				return $this->loadTable( $dbr );
 			}
 		);
@@ -423,7 +380,7 @@ class NameTableStore {
 		}
 
 		if ( $this->insertCallback !== null ) {
-			$fields = call_user_func( $this->insertCallback, $fields );
+			$fields = ( $this->insertCallback )( $fields );
 		}
 		return $fields;
 	}

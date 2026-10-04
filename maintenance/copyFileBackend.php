@@ -2,27 +2,14 @@
 /**
  * Copy all files in some containers of one backend to another.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
 use MediaWiki\Maintenance\Maintenance;
 use Wikimedia\FileBackend\FileBackend;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -224,9 +211,9 @@ class CopyFileBackend extends Maintenance {
 			foreach ( $srcPathsRel as $srcPathRel ) {
 				$srcPaths[] = $src->getRootStoragePath() . "/$backendRel/$srcPathRel";
 			}
-			$t_start = microtime( true );
+			$t_start = ConvertibleTimestamp::hrtime();
 			$fsFiles = $src->getLocalReferenceMulti( [ 'srcs' => $srcPaths, 'latest' => 1 ] );
-			$elapsed_ms = floor( ( microtime( true ) - $t_start ) * 1000 );
+			$elapsed_ms = floor( ( ConvertibleTimestamp::hrtime() - $t_start ) / 1e6 );
 			$this->output( "\n\tDownloaded these file(s) [{$elapsed_ms}ms]:\n\t" .
 				implode( "\n\t", $srcPaths ) . "\n\n" );
 		}
@@ -275,13 +262,13 @@ class CopyFileBackend extends Maintenance {
 		}
 
 		// Copy in the batch of source files...
-		$t_start = microtime( true );
+		$t_start = ConvertibleTimestamp::hrtime();
 		$status = $dst->doQuickOperations( $ops, [ 'bypassReadOnly' => true ] );
 		if ( !$status->isOK() ) {
 			sleep( 10 ); // wait and retry copy again
 			$status = $dst->doQuickOperations( $ops, [ 'bypassReadOnly' => true ] );
 		}
-		$elapsed_ms = floor( ( microtime( true ) - $t_start ) * 1000 );
+		$elapsed_ms = floor( ( ConvertibleTimestamp::hrtime() - $t_start ) / 1e6 );
 		if ( !$status->isOK() ) {
 			$this->error( $status );
 			$this->fatalError( "$domainId: Could not copy file batch." );
@@ -312,13 +299,13 @@ class CopyFileBackend extends Maintenance {
 		}
 
 		// Delete the batch of source files...
-		$t_start = microtime( true );
+		$t_start = ConvertibleTimestamp::hrtime();
 		$status = $dst->doQuickOperations( $ops, [ 'bypassReadOnly' => true ] );
 		if ( !$status->isOK() ) {
 			sleep( 10 ); // wait and retry copy again
 			$status = $dst->doQuickOperations( $ops, [ 'bypassReadOnly' => true ] );
 		}
-		$elapsed_ms = floor( ( microtime( true ) - $t_start ) * 1000 );
+		$elapsed_ms = floor( ( ConvertibleTimestamp::hrtime() - $t_start ) / 1e6 );
 		if ( !$status->isOK() ) {
 			$this->error( $status );
 			$this->fatalError( "$domainId: Could not delete file batch." );
@@ -364,7 +351,6 @@ class CopyFileBackend extends Maintenance {
 			// backends in FileBackendMultiWrite (since they get writes second, they have
 			// higher timestamps). However, when copying the other way, this hits loads of
 			// false positives (possibly 100%) and wastes a bunch of time on GETs/PUTs.
-			// @phan-suppress-next-line PhanTypeArraySuspiciousNullable
 			$same = ( $srcStat['mtime'] <= $dstStat['mtime'] );
 		} else {
 			// This is the slowest method which does many per-file HEADs (unless an object

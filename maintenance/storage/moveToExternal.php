@@ -2,30 +2,17 @@
 /**
  * Move text from the text table to external storage
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance ExternalStorage
  */
 
 use MediaWiki\MainConfigNames;
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Maintenance\UndoLog;
 use MediaWiki\Storage\SqlBlobStore;
-use Wikimedia\AtEase\AtEase;
 use Wikimedia\Rdbms\IExpression;
+use Wikimedia\Rdbms\IReadableDatabase;
 use Wikimedia\Rdbms\LikeValue;
 
 // @codeCoverageIgnoreStart
@@ -80,6 +67,7 @@ class MoveToExternal extends Maintenance {
 		$this->addArg( 'location', 'e.g. "cluster12" or "global-swift"' );
 	}
 
+	/** @inheritDoc */
 	public function execute() {
 		$this->resolveStubs = new ResolveStubs;
 		$this->esType = $this->getArg( 0 ); // e.g. "DB" or "mwstore"
@@ -120,7 +108,7 @@ class MoveToExternal extends Maintenance {
 		$undo = $this->getOption( 'undo' );
 		try {
 			$this->undoLog = new UndoLog( $undo, $dbw );
-		} catch ( RuntimeException $e ) {
+		} catch ( RuntimeException ) {
 			$this->fatalError( "Unable to open undo log" );
 		}
 		$this->resolveStubs->setUndoLog( $this->undoLog );
@@ -128,7 +116,7 @@ class MoveToExternal extends Maintenance {
 		return $this->doMoveToExternal();
 	}
 
-	private function doMoveToExternal() {
+	private function doMoveToExternal(): bool {
 		$success = true;
 		$dbr = $this->getReplicaDB();
 
@@ -252,7 +240,7 @@ class MoveToExternal extends Maintenance {
 		return $success;
 	}
 
-	private function compress( $text, $flags ) {
+	private function compress( string $text, array $flags ): array {
 		if ( $this->gzip && !in_array( 'gzip', $flags ) ) {
 			$flags[] = 'gzip';
 			$text = gzdeflate( $text );
@@ -260,7 +248,7 @@ class MoveToExternal extends Maintenance {
 		return [ $text, $flags ];
 	}
 
-	private function resolveLegacyEncoding( $text, $flags ) {
+	private function resolveLegacyEncoding( string $text, array $flags ): array {
 		if ( $this->legacyEncoding !== null
 			&& !in_array( 'utf-8', $flags )
 			&& !in_array( 'utf8', $flags )
@@ -277,9 +265,8 @@ class MoveToExternal extends Maintenance {
 				}
 				$text = $newText;
 			}
-			AtEase::suppressWarnings();
-			$newText = iconv( $this->legacyEncoding, 'UTF-8//IGNORE', $text );
-			AtEase::restoreWarnings();
+			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			$newText = @iconv( $this->legacyEncoding, 'UTF-8//IGNORE', $text );
 			if ( $newText === false ) {
 				return [ false, $flags ];
 			}
@@ -289,7 +276,7 @@ class MoveToExternal extends Maintenance {
 		return [ $text, $flags ];
 	}
 
-	private function resolveStubs( $stubIDs ) {
+	private function resolveStubs( array $stubIDs ) {
 		if ( $this->dryRun ) {
 			print "Note: resolving stubs in dry run mode is expected to fail, " .
 				"because the main blobs have not been moved to external storage.\n";
@@ -319,16 +306,16 @@ class MoveToExternal extends Maintenance {
 		$this->output( "$numResolved of $numTotal stubs resolved\n" );
 	}
 
-	protected function getConditions( $blockStart, $blockEnd, $dbr ) {
+	protected function getConditions( int $blockStart, int $blockEnd, IReadableDatabase $dbr ): array {
 		return [
 			$dbr->expr( 'old_id', '>=', $blockStart ),
-			$dbr->expr( 'old_id', '>=', $blockEnd ),
+			$dbr->expr( 'old_id', '<=', $blockEnd ),
 			$dbr->expr( 'old_flags', IExpression::NOT_LIKE,
 				new LikeValue( $dbr->anyString(), 'external', $dbr->anyString() ) ),
 		];
 	}
 
-	protected function resolveText( $text, $flags ) {
+	protected function resolveText( string $text, array $flags ): array {
 		return [ $text, $flags ];
 	}
 }

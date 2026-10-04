@@ -2,6 +2,7 @@
 
 use MediaWiki\Json\FormatJson;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Maintenance\Maintenance;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/../Maintenance.php';
@@ -23,7 +24,7 @@ class ImportExtensionMessages extends Maintenance {
 		parent::__construct();
 		$this->addArg( 'extension', 'The extension name' );
 		$this->addOption( 'outdir',
-			'The output directory, default $IP/languages/i18n', false, true );
+			'The output directory, default MW_INSTALL_PATH/languages/i18n', false, true );
 	}
 
 	public function execute() {
@@ -40,11 +41,15 @@ class ImportExtensionMessages extends Maintenance {
 		if ( $extJson === false ) {
 			$this->fatalError( "Unable to open \"$extJsonPath\"" );
 		}
-		$extData = json_decode( $extJson, JSON_THROW_ON_ERROR );
+		$extData = json_decode( $extJson, true, flags: JSON_THROW_ON_ERROR );
+		if ( !is_array( $extData ) || array_is_list( $extData ) ) {
+			$this->fatalError( "\"$extJsonPath\" contains unexpected data, expected a JSON object" );
+		}
 
 		$this->excludedMsgs = [];
 		foreach ( [ 'namemsg', 'descriptionmsg' ] as $key ) {
 			if ( isset( $extData[$key] ) ) {
+				// @phan-suppress-next-line PhanTypeMismatchProperty False positive, see T436482
 				$this->excludedMsgs[] = $extData[$key];
 			}
 		}
@@ -60,7 +65,7 @@ class ImportExtensionMessages extends Maintenance {
 		$this->extensionDir = $config->get( MainConfigNames::ExtensionDirectory );
 	}
 
-	private function getMessagesDirs( $extData ) {
+	private function getMessagesDirs( array $extData ): array {
 		if ( isset( $extData['MessagesDirs'] ) ) {
 			$messagesDirs = [];
 			foreach ( $extData['MessagesDirs'] as $dirs ) {
@@ -78,7 +83,7 @@ class ImportExtensionMessages extends Maintenance {
 		return $messagesDirs;
 	}
 
-	private function processDir( $dir ) {
+	private function processDir( string $dir ) {
 		$path = $this->extensionDir . "/{$this->extName}/$dir";
 
 		foreach ( new DirectoryIterator( $path ) as $file ) {
@@ -91,13 +96,13 @@ class ImportExtensionMessages extends Maintenance {
 		}
 	}
 
-	private function processFile( $lang, $extI18nPath ) {
+	private function processFile( string $lang, string $extI18nPath ) {
 		$extJson = file_get_contents( $extI18nPath );
 		if ( $extJson === false ) {
 			$this->error( "Unable to read i18n file \"$extI18nPath\"" );
 			return;
 		}
-		$extData = json_decode( $extJson, JSON_THROW_ON_ERROR );
+		$extData = json_decode( $extJson, true, flags: JSON_THROW_ON_ERROR );
 		$coreData = $this->getCoreData( $lang );
 
 		if ( isset( $extData['@metadata']['authors'] ) ) {
@@ -126,7 +131,8 @@ class ImportExtensionMessages extends Maintenance {
 		$this->setCoreData( $lang, $coreData );
 	}
 
-	private function getCoreData( $lang ) {
+	/** @return mixed */
+	private function getCoreData( string $lang ) {
 		if ( !isset( $this->coreDataCache[$lang] ) ) {
 			$corePath = MW_INSTALL_PATH . "/languages/i18n/$lang.json";
 			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
@@ -137,12 +143,16 @@ class ImportExtensionMessages extends Maintenance {
 				// Do not write to coreDataCache -- suppress creation of the core file.
 				return [];
 			}
-			$this->coreDataCache[$lang] = json_decode( $coreJson, JSON_THROW_ON_ERROR );
+			$this->coreDataCache[$lang] = json_decode( $coreJson, true, flags: JSON_THROW_ON_ERROR );
 		}
 		return $this->coreDataCache[$lang];
 	}
 
-	private function setCoreData( $lang, $data ) {
+	/**
+	 * @param string $lang
+	 * @param mixed $data
+	 */
+	private function setCoreData( string $lang, $data ) {
 		if ( !isset( $this->coreDataCache[$lang] ) ) {
 			// Non-existent file, do not create
 			return;

@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -73,15 +59,6 @@ class EditResultBuilder {
 	/** @var int|null */
 	private $revertAfterRevId = null;
 
-	/** @var RevisionStore */
-	private $revisionStore;
-
-	/** @var string[] */
-	private $softwareTags;
-
-	/** @var ServiceOptions */
-	private $options;
-
 	/**
 	 * @param RevisionStore $revisionStore
 	 * @param string[] $softwareTags Array of currently enabled software change tags. Can be
@@ -89,20 +66,13 @@ class EditResultBuilder {
 	 * @param ServiceOptions $options Options for this instance.
 	 */
 	public function __construct(
-		RevisionStore $revisionStore,
-		array $softwareTags,
-		ServiceOptions $options
+		private readonly RevisionStore $revisionStore,
+		private readonly array $softwareTags,
+		private readonly ServiceOptions $options,
 	) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
-
-		$this->revisionStore = $revisionStore;
-		$this->softwareTags = $softwareTags;
-		$this->options = $options;
 	}
 
-	/**
-	 * @return EditResult
-	 */
 	public function buildEditResult(): EditResult {
 		if ( $this->revisionRecord === null ) {
 			throw new PageUpdateException(
@@ -131,8 +101,6 @@ class EditResultBuilder {
 	/**
 	 * Set the revision associated with this edit.
 	 * Should only be called by PageUpdater when saving an edit.
-	 *
-	 * @param RevisionRecord $revisionRecord
 	 */
 	public function setRevisionRecord( RevisionRecord $revisionRecord ) {
 		$this->revisionRecord = $revisionRecord;
@@ -141,8 +109,6 @@ class EditResultBuilder {
 	/**
 	 * Set whether the edit created a new page.
 	 * Should only be called by PageUpdater when saving an edit.
-	 *
-	 * @param bool $isNew
 	 */
 	public function setIsNew( bool $isNew ) {
 		$this->isNew = $isNew;
@@ -273,6 +239,9 @@ class EditResultBuilder {
 
 	/**
 	 * Returns the revision that is being repeated or restored.
+	 * The contents of the original revision should be the same as the contents
+	 * of the new revision.
+	 *
 	 * Returns null if not set for this edit.
 	 *
 	 * @return RevisionRecord|null
@@ -292,8 +261,6 @@ class EditResultBuilder {
 	/**
 	 * Whether the edit was an exact revert, i.e. the contents of the revert
 	 * revision and restored revision match
-	 *
-	 * @return bool
 	 */
 	private function isExactRevert(): bool {
 		if ( $this->isNew || $this->oldestRevertedRevId === null ) {
@@ -312,7 +279,8 @@ class EditResultBuilder {
 	/**
 	 * An edit is a null edit if the original revision is equal to the parent revision.
 	 *
-	 * @return bool
+	 * @note The term "null edit" is here understood to include dummy revisions,
+	 * which is different from how that term is used elsewhere in the code.
 	 */
 	private function isNullEdit(): bool {
 		if ( $this->isNew ) {
@@ -329,7 +297,7 @@ class EditResultBuilder {
 	 * @return string[]
 	 */
 	private function getRevertTags(): array {
-		if ( isset( self::REVERT_METHOD_TO_CHANGE_TAG[$this->revertMethod] ) ) {
+		if ( $this->revertMethod !== null ) {
 			$revertTag = self::REVERT_METHOD_TO_CHANGE_TAG[$this->revertMethod];
 			if ( in_array( $revertTag, $this->softwareTags ) ) {
 				return [ $revertTag ];

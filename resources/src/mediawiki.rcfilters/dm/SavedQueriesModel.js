@@ -230,7 +230,7 @@ SavedQueriesModel.prototype.addNewQuery = function ( label, fulldata, isDefault,
 	// Split highlight/params
 	// eslint-disable-next-line no-jquery/no-each-util
 	$.each( data, ( param, value ) => {
-		if ( param !== 'highlight' && highlightParamNames.indexOf( param ) > -1 ) {
+		if ( param !== 'highlight' && highlightParamNames.includes( param ) ) {
 			normalizedData.highlights[ param ] = value;
 		} else {
 			normalizedData.params[ param ] = value;
@@ -244,6 +244,10 @@ SavedQueriesModel.prototype.addNewQuery = function ( label, fulldata, isDefault,
 	// Correct the inverttags state for effective selection
 	if ( normalizedData.params.inverttags && !this.filtersModel.areTagsEffectivelyInverted() ) {
 		delete normalizedData.params.inverttags;
+	}
+	// Correct the invertwllabels state for effective selection
+	if ( normalizedData.params.invertwllabels && !this.filtersModel.areWLLabelsEffectivelyInverted() ) {
+		delete normalizedData.params.invertwllabels;
 	}
 
 	// Add item
@@ -274,7 +278,7 @@ SavedQueriesModel.prototype.removeQuery = function ( queryID ) {
 	if ( query ) {
 		// Check if this item was the default
 		if ( String( this.getDefault() ) === String( queryID ) ) {
-			// Nulify the default
+			// Nullify the default
 			this.setDefault( null );
 		}
 
@@ -384,7 +388,7 @@ SavedQueriesModel.prototype.setDefault = function ( itemID ) {
 	if ( this.default !== itemID ) {
 		this.default = itemID;
 
-		// Set for individual itens
+		// Set for individual items
 		this.getItems().forEach( ( item ) => {
 			item.toggleDefault( item.getID() === itemID );
 		} );

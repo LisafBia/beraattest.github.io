@@ -1,5 +1,5 @@
 {
-	"description": "The new page, including source (usually wikitext)",
+	"x-i18n-description": "rest-schema-desc-new-page",
 	"required": [
 		"id",
 		"title",
@@ -12,51 +12,60 @@
 	"properties": {
 		"id": {
 			"type": "integer",
-			"description": "Page identifier"
+			"x-i18n-description": "rest-property-desc-page-id",
+			"example": 26903
 		},
 		"title": {
 			"type": "string",
-			"description": "Page title"
+			"x-i18n-description": "rest-property-desc-page-title",
+			"example": "Solar System"
 		},
 		"key": {
 			"type": "string",
-			"description": "Page title in URL-friendly format"
+			"x-i18n-description": "rest-property-desc-page-key",
+			"example": "Solar_System"
 		},
 		"latest": {
 			"type": "object",
-			"description": "Information about the latest revision",
+			"x-i18n-description": "rest-property-desc-page-latest",
 			"properties": {
 				"id": {
 					"type": "integer",
-					"description": "Revision identifier for the latest revision"
+					"x-i18n-description": "rest-property-desc-page-latest-id",
+					"example": 1347490218
 				},
 				"timestamp": {
 					"type": "string",
-					"description": " Timestamp of the latest revision"
+					"x-i18n-description": "rest-property-desc-page-timestamp",
+					"example": "2026-04-07T01:20:41Z"
 				}
 			}
 		},
 		"license": {
 			"type": "object",
-			"description": "Information about the wiki's license",
+			"x-i18n-description": "rest-property-desc-page-license",
 			"properties": {
 				"url": {
 					"type": "string",
-					"description": "URL of the applicable license"
+					"x-i18n-description": "rest-property-desc-page-license-url",
+					"example": "https://creativecommons.org/licenses/by-sa/4.0/deed.en"
 				},
 				"title": {
 					"type": "string",
-					"description": "Name of the applicable license"
+					"x-i18n-description": "rest-property-desc-page-license-title",
+					"example": "Creative Commons Attribution-Share Alike 4.0"
 				}
 			}
 		},
 		"content_model": {
 			"type": "string",
-			"description": "Page content type"
+			"x-i18n-description": "rest-property-desc-page-contentmodel",
+			"example": "wikitext"
 		},
 		"source": {
 			"type": "string",
-			"description": "Page content in the format specified by the content_model property"
+			"x-i18n-description": "rest-param-desc-update-source",
+			"example": "{{Short description|Planetary system consisting of the Sun and..."
 		}
 	}
 }

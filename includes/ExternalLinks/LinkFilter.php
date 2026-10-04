@@ -1,20 +1,6 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
@@ -24,11 +10,11 @@ use MediaWiki\Content\Content;
 use MediaWiki\Content\TextContent;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
-use StringUtils;
 use Wikimedia\IPUtils;
 use Wikimedia\Rdbms\IExpression;
 use Wikimedia\Rdbms\LikeMatch;
 use Wikimedia\Rdbms\LikeValue;
+use Wikimedia\StringUtils\StringUtils;
 
 /**
  * Utilities for formatting and querying the externallinks table.
@@ -37,7 +23,7 @@ use Wikimedia\Rdbms\LikeValue;
  * for managing the storage layer, and by SpecialLinkSearch and ApiQueryExtLinksUsage
  * as query interface.
  *
- * For spam removal and anti-spam meausures based on this, see also:
+ * For spam removal and anti-spam measures based on this, see also:
  * - maintenance/cleanupSpam.php
  * - SpamBlacklist extension
  * - AbuseFilter extension (Special:BlockedExternalDomains, T337431)
@@ -75,7 +61,7 @@ class LinkFilter {
 	 */
 	private static function makeRegex( $filterEntry, $protocol ) {
 		$regex = '!' . preg_quote( $protocol, '!' );
-		if ( substr( $filterEntry, 0, 2 ) == '*.' ) {
+		if ( str_starts_with( $filterEntry, '*.' ) ) {
 			$regex .= '(?:[A-Za-z0-9.-]+\.|)';
 			$filterEntry = substr( $filterEntry, 2 );
 		}
@@ -259,7 +245,7 @@ class LinkFilter {
 		return $newLinks;
 	}
 
-	public static function reverseIndexes( $domainIndex ) {
+	public static function reverseIndexes( string $domainIndex ): string {
 		$bits = MediaWikiServices::getInstance()->getUrlUtils()->parse( $domainIndex );
 		if ( !$bits ) {
 			return '';
@@ -271,11 +257,11 @@ class LinkFilter {
 			$mailparts = explode( '@', $bits['path'], 2 );
 			if ( count( $mailparts ) === 2 ) {
 				$domainpart = rtrim( self::reverseDomain( $mailparts[0] ), '.' );
+				$bits['host'] = $mailparts[1] . '@' . $domainpart;
 			} else {
 				// No @, assume it's a local part with no domain
-				$domainpart = '';
+				$bits['host'] = $mailparts[0];
 			}
-			$bits['host'] = $mailparts[1] . '@' . $domainpart;
 		} else {
 			$bits['host'] = rtrim( self::reverseDomain( $bits['host'] ), '.' );
 		}
@@ -287,13 +273,13 @@ class LinkFilter {
 		return $index;
 	}
 
-	private static function reverseDomain( $domain ) {
-		if ( substr( $domain, 0, 3 ) === 'V6.' ) {
+	private static function reverseDomain( string $domain ): string {
+		if ( str_starts_with( $domain, 'V6.' ) ) {
 			$ipv6 = str_replace( '.', ':', trim( substr( $domain, 3 ), '.' ) );
 			if ( IPUtils::isValid( $ipv6 ) ) {
 				return '[' . $ipv6 . ']';
 			}
-		} elseif ( substr( $domain, 0, 3 ) === 'V4.' ) {
+		} elseif ( str_starts_with( $domain, 'V4.' ) ) {
 			$ipv4 = trim( substr( $domain, 3 ), '.' );
 			if ( IPUtils::isValid( $ipv4 ) ) {
 				return $ipv4;
@@ -388,7 +374,7 @@ class LinkFilter {
 		];
 	}
 
-	public static function getProtocolPrefix( $protocol ) {
+	public static function getProtocolPrefix( ?string $protocol ): ?string {
 		// Find the right prefix
 		$urlProtocols = MediaWikiServices::getInstance()->getMainConfig()
 			->get( MainConfigNames::UrlProtocols );
@@ -406,7 +392,7 @@ class LinkFilter {
 		}
 	}
 
-	public static function prepareProtocols() {
+	public static function prepareProtocols(): array {
 		$urlProtocols = MediaWikiServices::getInstance()->getMainConfig()
 			->get( MainConfigNames::UrlProtocols );
 		$protocols = [ '' ];
@@ -427,7 +413,7 @@ class LinkFilter {
 	 * of adding wildcards
 	 *
 	 * @note You probably want self::getQueryConditions() instead
-	 * @param string $filterEntry Filter entry, @see self::getQueryConditions()
+	 * @param string $filterEntry Filter entry, see {@link getQueryConditions}
 	 * @param string $protocol Protocol (default http://)
 	 * @return array|false Array to be passed to Database::buildLike() or false on error
 	 */
@@ -498,7 +484,7 @@ class LinkFilter {
 
 		// Check for stray asterisks: asterisk only allowed at the start of the domain
 		foreach ( array_merge( $likeDomain, $likePath ) as $likepart ) {
-			if ( !( $likepart instanceof LikeMatch ) && strpos( $likepart, '*' ) !== false ) {
+			if ( !( $likepart instanceof LikeMatch ) && str_contains( $likepart, '*' ) ) {
 				return false;
 			}
 		}
@@ -528,6 +514,3 @@ class LinkFilter {
 		return $arr;
 	}
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( LinkFilter::class, 'LinkFilter' );

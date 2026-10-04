@@ -5,29 +5,17 @@
  * Copyright © 2009 Aryeh Gregor
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\Html;
 
+use MediaWiki\Context\RequestContext;
 use MediaWiki\Json\FormatJson;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Parser\Sanitizer;
 use MediaWiki\Request\ContentSecurityPolicy;
 use UnexpectedValueException;
 
@@ -54,8 +42,8 @@ use UnexpectedValueException;
  * @since 1.16
  */
 class Html {
-	/** @var bool[] List of void elements from HTML5, section 8.1.2 as of 2016-09-19 */
-	private static $voidElements = [
+	/** List of void elements from HTML5, section 8.1.2 as of 2016-09-19 */
+	private const VOID_ELEMENTS = [
 		'area' => true,
 		'base' => true,
 		'br' => true,
@@ -76,9 +64,8 @@ class Html {
 	/**
 	 * Boolean attributes, which may have the value omitted entirely.  Manually
 	 * collected from the HTML5 spec as of 2011-08-12.
-	 * @var bool[]
 	 */
-	private static $boolAttribs = [
+	private const BOOL_ATTRIBS = [
 		'async' => true,
 		'autofocus' => true,
 		'autoplay' => true,
@@ -108,28 +95,108 @@ class Html {
 	];
 
 	/**
-	 * Modifies a set of attributes meant for button elements.
-	 *
-	 * @param array $attrs HTML attributes in an associative array
-	 * @param string[] $modifiers Unused
-	 * @return array Modified attributes array
-	 * @deprecated since 1.42 No-op
+	 * Whenever altering this array, please provide a covering test case
+	 * in HtmlTest::provideElementsWithAttributesHavingDefaultValues
 	 */
-	public static function buttonAttributes( array $attrs, array $modifiers = [] ) {
-		wfDeprecated( __METHOD__, '1.42' );
-		return $attrs;
-	}
+	private const ATTRIBS_DEFAULTS = [
+		'area' => [ 'shape' => 'rect' ],
+		'button' => [
+			'formaction' => 'GET',
+			'formenctype' => 'application/x-www-form-urlencoded',
+		],
+		'canvas' => [
+			'height' => '150',
+			'width' => '300',
+		],
+		'form' => [
+			'action' => 'GET',
+			'autocomplete' => 'on',
+			'enctype' => 'application/x-www-form-urlencoded',
+		],
+		'input' => [
+			'formaction' => 'GET',
+			'type' => 'text',
+		],
+		'keygen' => [ 'keytype' => 'rsa' ],
+		'link' => [
+			'media' => 'all',
+			'type' => 'text/css',
+		],
+		'menu' => [ 'type' => 'list' ],
+		'script' => [ 'type' => 'text/javascript' ],
+		'style' => [
+			'media' => 'all',
+			'type' => 'text/css',
+		],
+		'textarea' => [ 'wrap' => 'soft' ],
+	];
 
 	/**
-	 * Modifies a set of attributes meant for text input elements.
-	 *
-	 * @param array $attrs An attribute array.
-	 * @return array Modified attributes array
-	 * @deprecated since 1.42 No-op
+	 * https://www.w3.org/TR/html401/index/attributes.html ("space-separated")
+	 * https://www.w3.org/TR/html5/index.html#attributes-1 ("space-separated")
 	 */
-	public static function getTextInputAttributes( array $attrs ) {
-		wfDeprecated( __METHOD__, '1.42' );
-		return $attrs;
+	private const SPACE_SEPARATED_LIST_ATTRIBUTES = [
+		'class' => true, // html4, html5
+		'accesskey' => true, // as of html5, multiple space-separated values allowed
+		// html4-spec doesn't document rel= as space-separated
+		// but has been used like that and is now documented as such
+		// in the html5-spec.
+		'rel' => true,
+	];
+
+	private const INPUT_ELEMENT_VALID_TYPES = [
+		'hidden' => true,
+		'text' => true,
+		'password' => true,
+		'checkbox' => true,
+		'radio' => true,
+		'file' => true,
+		'submit' => true,
+		'image' => true,
+		'reset' => true,
+		'button' => true,
+
+		// HTML input types
+		'datetime' => true,
+		'datetime-local' => true,
+		'date' => true,
+		'month' => true,
+		'time' => true,
+		'week' => true,
+		'number' => true,
+		'range' => true,
+		'email' => true,
+		'url' => true,
+		'search' => true,
+		'tel' => true,
+		'color' => true,
+	];
+
+	/**
+	 * Add a class to a 'class' attribute in a format accepted by Html::element().
+	 *
+	 * This method may also be used for any other space-separated attribute, such as 'rel'.
+	 *
+	 * @param array|string|null &$classes Class list to modify in-place
+	 * @param string $class Class to add
+	 * @phan-assert non-empty-array $classes
+	 * @since 1.44
+	 */
+	public static function addClass( &$classes, string $class ): void {
+		$classes = (array)$classes;
+		// Detect mistakes where $attrs is passed as $classes instead of $attrs['class']
+		foreach ( $classes as $key => $val ) {
+			if (
+				( is_int( $key ) && is_string( $val ) ) ||
+				( is_string( $key ) && is_bool( $val ) )
+			) {
+				// Valid formats for class array entries
+				continue;
+			}
+			wfWarn( __METHOD__ . ": Argument doesn't look like a class array: " . var_export( $classes, true ) );
+			break;
+		}
+		$classes[] = $class;
 	}
 
 	/**
@@ -190,9 +257,10 @@ class Html {
 	 */
 	public static function rawElement( $element, $attribs = [], $contents = '' ) {
 		$start = self::openElement( $element, $attribs );
-		if ( isset( self::$voidElements[$element] ) ) {
+		if ( isset( self::VOID_ELEMENTS[$element] ) ) {
 			return $start;
 		} else {
+			$contents = Sanitizer::escapeCombiningChar( $contents ?? '' );
 			return $start . $contents . self::closeElement( $element );
 		}
 	}
@@ -251,34 +319,7 @@ class Html {
 
 		// Remove invalid input types
 		if ( $element == 'input' ) {
-			$validTypes = [
-				'hidden' => true,
-				'text' => true,
-				'password' => true,
-				'checkbox' => true,
-				'radio' => true,
-				'file' => true,
-				'submit' => true,
-				'image' => true,
-				'reset' => true,
-				'button' => true,
-
-				// HTML input types
-				'datetime' => true,
-				'datetime-local' => true,
-				'date' => true,
-				'month' => true,
-				'time' => true,
-				'week' => true,
-				'number' => true,
-				'range' => true,
-				'email' => true,
-				'url' => true,
-				'search' => true,
-				'tel' => true,
-				'color' => true,
-			];
-			if ( isset( $attribs['type'] ) && !isset( $validTypes[$attribs['type']] ) ) {
+			if ( isset( $attribs['type'] ) && !isset( self::INPUT_ELEMENT_VALID_TYPES[$attribs['type']] ) ) {
 				unset( $attribs['type'] );
 			}
 		}
@@ -325,61 +366,24 @@ class Html {
 	 * @return array An array of attributes functionally identical to $attribs
 	 */
 	private static function dropDefaults( $element, array $attribs ) {
-		// Whenever altering this array, please provide a covering test case
-		// in HtmlTest::provideElementsWithAttributesHavingDefaultValues
-		static $attribDefaults = [
-			'area' => [ 'shape' => 'rect' ],
-			'button' => [
-				'formaction' => 'GET',
-				'formenctype' => 'application/x-www-form-urlencoded',
-			],
-			'canvas' => [
-				'height' => '150',
-				'width' => '300',
-			],
-			'form' => [
-				'action' => 'GET',
-				'autocomplete' => 'on',
-				'enctype' => 'application/x-www-form-urlencoded',
-			],
-			'input' => [
-				'formaction' => 'GET',
-				'type' => 'text',
-			],
-			'keygen' => [ 'keytype' => 'rsa' ],
-			'link' => [ 'media' => 'all' ],
-			'menu' => [ 'type' => 'list' ],
-			'script' => [ 'type' => 'text/javascript' ],
-			'style' => [
-				'media' => 'all',
-				'type' => 'text/css',
-			],
-			'textarea' => [ 'wrap' => 'soft' ],
-		];
-
 		foreach ( $attribs as $attrib => $value ) {
 			if ( $attrib === 'class' ) {
 				if ( $value === '' || $value === [] || $value === [ '' ] ) {
 					unset( $attribs[$attrib] );
 				}
-			} elseif ( isset( $attribDefaults[$element][$attrib] ) ) {
+			} elseif ( isset( self::ATTRIBS_DEFAULTS[$element][$attrib] ) ) {
 				if ( is_array( $value ) ) {
 					$value = implode( ' ', $value );
 				} else {
 					$value = strval( $value );
 				}
-				if ( $attribDefaults[$element][$attrib] == $value ) {
+				if ( self::ATTRIBS_DEFAULTS[$element][$attrib] == $value ) {
 					unset( $attribs[$attrib] );
 				}
 			}
 		}
 
 		// More subtle checks
-		if ( $element === 'link'
-			&& isset( $attribs['type'] ) && strval( $attribs['type'] ) == 'text/css'
-		) {
-			unset( $attribs['type'] );
-		}
 		if ( $element === 'input' ) {
 			$type = $attribs['type'] ?? null;
 			$value = $attribs['value'] ?? null;
@@ -413,6 +417,55 @@ class Html {
 		}
 
 		return $attribs;
+	}
+
+	/**
+	 * Convert a value for a 'class' attribute in a format accepted by Html::element() and similar
+	 * methods to a single string.
+	 *
+	 * This method may also be used for any other space-separated attribute, such as 'rel'.
+	 *
+	 * @param array|string $classes
+	 * @return string
+	 * @since 1.44
+	 */
+	public static function expandClassList( $classes ): string {
+		// Convert into correct array. Array can contain space-separated
+		// values. Implode/explode to get those into the main array as well.
+		if ( is_array( $classes ) ) {
+			// If input wasn't an array, we can skip this step
+			$arrayValue = [];
+			foreach ( $classes as $k => $v ) {
+				if ( is_string( $v ) ) {
+					// String values should be normal `[ 'foo' ]`
+					// Just append them
+					if ( !isset( $classes[$v] ) ) {
+						// As a special case don't set 'foo' if a
+						// separate 'foo' => true/false exists in the array
+						// keys should be authoritative
+						foreach ( explode( ' ', $v ) as $part ) {
+							// Normalize spacing by fixing up cases where people used
+							// more than 1 space and/or a trailing/leading space
+							if ( $part !== '' && $part !== ' ' ) {
+								$arrayValue[] = $part;
+							}
+						}
+					}
+				} elseif ( $v ) {
+					// If the value is truthy but not a string this is likely
+					// an [ 'foo' => true ], falsy values don't add strings
+					$arrayValue[] = $k;
+				}
+			}
+		} else {
+			$arrayValue = explode( ' ', $classes );
+			// Normalize spacing by fixing up cases where people used
+			// more than 1 space and/or a trailing/leading space
+			$arrayValue = array_diff( $arrayValue, [ '', ' ' ] );
+		}
+
+		// Remove duplicates and create the string
+		return implode( ' ', array_unique( $arrayValue ) );
 	}
 
 	/**
@@ -463,7 +516,7 @@ class Html {
 
 			// For boolean attributes, support [ 'foo' ] instead of
 			// requiring [ 'foo' => 'meaningless' ].
-			if ( is_int( $key ) && isset( self::$boolAttribs[strtolower( $value )] ) ) {
+			if ( is_int( $key ) && isset( self::BOOL_ATTRIBS[strtolower( $value )] ) ) {
 				$key = $value;
 			}
 
@@ -471,68 +524,21 @@ class Html {
 			// and better compression anyway.
 			$key = strtolower( $key );
 
-			// https://www.w3.org/TR/html401/index/attributes.html ("space-separated")
-			// https://www.w3.org/TR/html5/index.html#attributes-1 ("space-separated")
-			$spaceSeparatedListAttributes = [
-				'class' => true, // html4, html5
-				'accesskey' => true, // as of html5, multiple space-separated values allowed
-				// html4-spec doesn't document rel= as space-separated
-				// but has been used like that and is now documented as such
-				// in the html5-spec.
-				'rel' => true,
-			];
-
 			// Specific features for attributes that allow a list of space-separated values
-			if ( isset( $spaceSeparatedListAttributes[$key] ) ) {
+			if ( isset( self::SPACE_SEPARATED_LIST_ATTRIBUTES[$key] ) ) {
 				// Apply some normalization and remove duplicates
-
-				// Convert into correct array. Array can contain space-separated
-				// values. Implode/explode to get those into the main array as well.
-				if ( is_array( $value ) ) {
-					// If input wasn't an array, we can skip this step
-					$arrayValue = [];
-					foreach ( $value as $k => $v ) {
-						if ( is_string( $v ) ) {
-							// String values should be normal `[ 'foo' ]`
-							// Just append them
-							if ( !isset( $value[$v] ) ) {
-								// As a special case don't set 'foo' if a
-								// separate 'foo' => true/false exists in the array
-								// keys should be authoritative
-								foreach ( explode( ' ', $v ) as $part ) {
-									// Normalize spacing by fixing up cases where people used
-									// more than 1 space and/or a trailing/leading space
-									if ( $part !== '' && $part !== ' ' ) {
-										$arrayValue[] = $part;
-									}
-								}
-							}
-						} elseif ( $v ) {
-							// If the value is truthy but not a string this is likely
-							// an [ 'foo' => true ], falsy values don't add strings
-							$arrayValue[] = $k;
-						}
-					}
-				} else {
-					$arrayValue = explode( ' ', $value );
-					// Normalize spacing by fixing up cases where people used
-					// more than 1 space and/or a trailing/leading space
-					$arrayValue = array_diff( $arrayValue, [ '', ' ' ] );
-				}
-
-				// Remove duplicates and create the string
-				$value = implode( ' ', array_unique( $arrayValue ) );
+				$value = self::expandClassList( $value );
 
 				// Optimization: Skip below boolAttribs check and jump straight
-				// to its `else` block. The current $spaceSeparatedListAttributes
-				// block is mutually exclusive with $boolAttribs.
+				// to its `else` block. The current self::SPACE_SEPARATED_LIST_ATTRIBUTES
+				// block is mutually exclusive with self::BOOL_ATTRIBS.
 				// phpcs:ignore Generic.PHP.DiscourageGoto
 				goto not_bool; // NOSONAR
 			} elseif ( is_array( $value ) ) {
 				throw new UnexpectedValueException( "HTML attribute $key can not contain a list of values" );
 			}
 
-			if ( isset( self::$boolAttribs[$key] ) ) {
+			if ( isset( self::BOOL_ATTRIBS[$key] ) ) {
 				$ret .= " $key=\"\"";
 			} else {
 				// phpcs:ignore Generic.PHP.DiscourageGoto
@@ -670,18 +676,15 @@ class Html {
 	 * @return string Raw HTML
 	 */
 	public static function check( $name, $checked = false, array $attribs = [] ) {
-		if ( isset( $attribs['value'] ) ) {
-			$value = $attribs['value'];
-			unset( $attribs['value'] );
-		} else {
-			$value = 1;
-		}
-
-		if ( $checked ) {
-			$attribs[] = 'checked';
-		}
-
-		return self::input( $name, $value, 'checkbox', $attribs );
+		$value = $attribs['value'] ?? 1;
+		unset( $attribs['value'] );
+		return self::element( 'input', [
+			...$attribs,
+			'checked' => (bool)$checked,
+			'type' => 'checkbox',
+			'value' => $value,
+			'name' => $name,
+		] );
 	}
 
 	/**
@@ -692,25 +695,16 @@ class Html {
 	 * @param string|array $className corresponding to box
 	 * @param string $heading (optional)
 	 * @param string $iconClassName (optional) corresponding to box icon
+	 * @param array $attribs additional attributes like aria-live
 	 * @return string of HTML representing a box.
 	 */
-	private static function messageBox( $html, $className, $heading = '', $iconClassName = '' ) {
+	private static function messageBox( $html, $className, $heading = '', $iconClassName = '', array $attribs = [] ) {
 		if ( $heading !== '' ) {
 			$html = self::element( 'h2', [], $heading ) . $html;
 		}
-		$coreClasses = [
-			'cdx-message',
-			'cdx-message--block'
-		];
-		if ( is_array( $className ) ) {
-			$className = array_merge(
-				$coreClasses,
-				$className
-			);
-		} else {
-			$className .= ' ' . implode( ' ', $coreClasses );
-		}
-		return self::rawElement( 'div', [ 'class' => $className ],
+		self::addClass( $className, 'cdx-message' );
+		self::addClass( $className, 'cdx-message--block' );
+		return self::rawElement( 'div', array_merge( [ 'class' => $className ], $attribs ),
 			self::element( 'span', [ 'class' => [
 				'cdx-message__icon',
 				$iconClassName
@@ -736,7 +730,7 @@ class Html {
 	 * @param string|array $iconClassName (optional) corresponding to notice icon
 	 * @return string of HTML representing the notice
 	 */
-	public static function noticeBox( $html, $className, $heading = '', $iconClassName = '' ) {
+	public static function noticeBox( $html, $className = '', $heading = '', $iconClassName = '' ) {
 		return self::messageBox( $html, [
 			'cdx-message--notice',
 			$className
@@ -759,7 +753,7 @@ class Html {
 	 */
 	public static function warningBox( $html, $className = '' ) {
 		return self::messageBox( $html, [
-			'cdx-message--warning', $className ] );
+			'cdx-message--warning', $className ], '', '', [ 'aria-live' => 'polite' ] );
 	}
 
 	/**
@@ -779,7 +773,7 @@ class Html {
 	 */
 	public static function errorBox( $html, $heading = '', $className = '' ) {
 		return self::messageBox( $html, [
-			'cdx-message--error', $className ], $heading );
+			'cdx-message--error', $className ], $heading, '', [ 'role' => 'alert' ] );
 	}
 
 	/**
@@ -810,18 +804,15 @@ class Html {
 	 * @return string Raw HTML
 	 */
 	public static function radio( $name, $checked = false, array $attribs = [] ) {
-		if ( isset( $attribs['value'] ) ) {
-			$value = $attribs['value'];
-			unset( $attribs['value'] );
-		} else {
-			$value = 1;
-		}
-
-		if ( $checked ) {
-			$attribs[] = 'checked';
-		}
-
-		return self::input( $name, $value, 'radio', $attribs );
+		$value = $attribs['value'] ?? 1;
+		unset( $attribs['value'] );
+		return self::element( 'input', [
+			...$attribs,
+			'checked' => (bool)$checked,
+			'type' => 'radio',
+			'value' => $value,
+			'name' => $name,
+		] );
 	}
 
 	/**
@@ -849,7 +840,12 @@ class Html {
 	 * @return string Raw HTML
 	 */
 	public static function hidden( $name, $value, array $attribs = [] ) {
-		return self::input( $name, $value, 'hidden', $attribs );
+		return self::element( 'input', [
+			...$attribs,
+			'type' => 'hidden',
+			'value' => $value,
+			'name' => $name,
+		] );
 	}
 
 	/**
@@ -867,7 +863,7 @@ class Html {
 	public static function textarea( $name, $value = '', array $attribs = [] ) {
 		$attribs['name'] = $name;
 
-		if ( substr( $value, 0, 1 ) == "\n" ) {
+		if ( str_starts_with( $value ?? '', "\n" ) ) {
 			// Workaround for T14130: browsers eat the initial newline
 			// assuming that it's just for show, but they do keep the later
 			// newlines, which we may want to preserve during editing.
@@ -890,8 +886,7 @@ class Html {
 		}
 
 		if ( $params['in-user-lang'] ?? false ) {
-			global $wgLang;
-			$lang = $wgLang;
+			$lang = RequestContext::getMain()->getLanguage();
 		} else {
 			$lang = MediaWikiServices::getInstance()->getContentLanguage();
 		}
@@ -990,23 +985,17 @@ class Html {
 		$selectAttribs['id'] ??= 'namespace';
 		$selectAttribs['name'] ??= 'namespace';
 
-		$ret = '';
+		$label = '';
 		if ( isset( $params['label'] ) ) {
-			$ret .= self::element(
-				'label', [
-					'for' => $selectAttribs['id'],
-				], $params['label']
+			$label = self::element( 'label', [ 'for' => $selectAttribs['id'] ],
+				$params['label']
 			) . "\u{00A0}";
 		}
 
 		// Wrap options in a <select>
-		$ret .= self::openElement( 'select', $selectAttribs )
-			. "\n"
-			. implode( "\n", $optionsHtml )
-			. "\n"
-			. self::closeElement( 'select' );
-
-		return $ret;
+		return $label . self::rawElement( 'select', $selectAttribs,
+			"\n" . implode( "\n", $optionsHtml ) . "\n"
+		);
 	}
 
 	/**
@@ -1078,11 +1067,10 @@ class Html {
 	 * @par Example:
 	 * @code
 	 *     Html::srcSet( [
-	 *         '1x'   => 'standard.jpeg',
-	 *         '1.5x' => 'large.jpeg',
-	 *         '3x'   => 'extra-large.jpeg',
+	 *         '1x' => 'standard.jpg',
+	 *         '2x' => 'large.jpeg',
 	 *     ] );
-	 *     // gives 'standard.jpeg 1x, large.jpeg 1.5x, extra-large.jpeg 2x'
+	 *     // gives 'standard.jpg 1x, large.jpg 2x'
 	 * @endcode
 	 *
 	 * @param string[] $urls
@@ -1201,7 +1189,7 @@ class Html {
 			if ( $value == '' ) {
 				continue;
 			}
-			if ( substr( $value, 0, 1 ) == '*' && substr( $value, 1, 1 ) != '*' ) {
+			if ( str_starts_with( $value, '*' ) && !str_starts_with( $value, '**' ) ) {
 				# A new group is starting...
 				$value = trim( substr( $value, 1 ) );
 				if ( $value !== '' &&
@@ -1212,7 +1200,7 @@ class Html {
 				} else {
 					$optgroup = false;
 				}
-			} elseif ( substr( $value, 0, 2 ) == '**' ) {
+			} elseif ( str_starts_with( $value, '**' ) ) {
 				# groupmember
 				$opt = trim( substr( $value, 2 ) );
 				if ( $optgroup === false ) {
@@ -1268,11 +1256,12 @@ class Html {
 
 		foreach ( $options as $text => $value ) {
 			if ( is_array( $value ) ) {
-				// No support for optgroups in Codex yet (T367241)
-				$optionsCodex[] = [ 'label' => (string)$text, 'value' => '', 'disabled' => true ];
-				foreach ( $value as $text2 => $value2 ) {
-					$optionsCodex[] = [ 'label' => (string)$text2, 'value' => (string)$value2 ];
-				}
+				$optionsCodex[] = [
+					'label' => (string)$text,
+					'items' => array_map( static function ( $text2, $value2 ) {
+						return [ 'label' => (string)$text2, 'value' => (string)$value2 ];
+					}, array_keys( $value ), $value )
+				];
 			} else {
 				$optionsCodex[] = [ 'label' => (string)$text, 'value' => (string)$value ];
 			}
@@ -1280,6 +1269,3 @@ class Html {
 		return $optionsCodex;
 	}
 }
-
-/** @deprecated class alias since 1.40 */
-class_alias( Html::class, 'Html' );

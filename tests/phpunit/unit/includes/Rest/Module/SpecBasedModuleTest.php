@@ -5,6 +5,10 @@ namespace MediaWiki\Tests\Rest\Module;
 use GuzzleHttp\Psr7\Uri;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Rest\BasicAccess\StaticBasicAuthorizer;
+use MediaWiki\Rest\ErrorFormatterV1;
+use MediaWiki\Rest\Handler\GenericActionHandler;
+use MediaWiki\Rest\JsonLocalizer;
+use MediaWiki\Rest\Module\ModuleFormatException;
 use MediaWiki\Rest\Module\SpecBasedModule;
 use MediaWiki\Rest\Reporter\ErrorReporter;
 use MediaWiki\Rest\RequestData;
@@ -14,13 +18,11 @@ use MediaWiki\Rest\Validator\Validator;
 use MediaWiki\Tests\Rest\RestTestTrait;
 use MediaWiki\Tests\Unit\DummyServicesTrait;
 use PHPUnit\Framework\MockObject\MockObject;
-use Psr\Log\NullLogger;
 use RuntimeException;
 use Throwable;
-use UDPTransport;
-use Wikimedia\Stats\OutputFormats;
-use Wikimedia\Stats\StatsCache;
 use Wikimedia\Stats\StatsFactory;
+use Wikimedia\TestingAccessWrapper;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 /**
  * @covers \MediaWiki\Rest\Module\SpecBasedModule
@@ -38,14 +40,16 @@ class SpecBasedModuleTest extends \MediaWikiUnitTestCase {
 	/**
 	 * @param RequestInterface $request
 	 * @param string|null $authError
+	 * @param bool $deprecated
 	 *
 	 * @return SpecBasedModule
 	 */
 	private function createOpenApiModule(
 		RequestInterface $request,
-		$authError = null
+		$authError = null,
+		$deprecated = false
 	) {
-		$specFile = __DIR__ . '/moduleTestRoutes.json';
+		$specFile = __DIR__ . ( $deprecated ? '/deprecatedModuleTestRoutes.json' : '/moduleTestRoutes.json' );
 
 		/** @var MockObject|ErrorReporter $mockErrorReporter */
 		$mockErrorReporter = $this->createNoOpMock( ErrorReporter::class, [ 'reportError' ] );
@@ -75,38 +79,27 @@ class SpecBasedModuleTest extends \MediaWikiUnitTestCase {
 			'validator' => $validator
 		] );
 
-		$responseFactory = new ResponseFactory( [] );
-		$responseFactory->setShowExceptionDetails( true );
+		$formatter = $this->getDummyTextFormatter( true );
 
 		$module = new SpecBasedModule(
 			$specFile,
 			$router,
 			'test.v1',
-			$responseFactory,
+			new JsonLocalizer( $formatter ),
 			$auth,
 			$objectFactory,
 			$validator,
-			$mockErrorReporter
+			$mockErrorReporter,
+			$this->createHookContainer()
 		);
 
+		// TODO: fix ResponseFactory constructor signature
+		$responseFactory = new ResponseFactory(
+			[ 'qqx' => $formatter ],
+			new ErrorFormatterV1( [ 'qqx' => $formatter ], true )
+		);
+		$module->initForExecute( $responseFactory );
 		return $module;
-	}
-
-	private function createMockStatsFactory( string $expectedPattern ): StatsFactory {
-		$statsCache = new StatsCache();
-		$emitter = OutputFormats::getNewEmitter(
-			'mediawiki',
-			$statsCache,
-			OutputFormats::getNewFormatter( OutputFormats::DOGSTATSD )
-		);
-
-		$transport = $this->createMock( UDPTransport::class );
-
-		$transport->expects( $this->once() )->method( "emit" )
-			->with( $this->matchesRegularExpression( $expectedPattern ) );
-
-		$emitter = $emitter->withTransport( $transport );
-		return new StatsFactory( $statsCache, $emitter, new NullLogger );
 	}
 
 	public function testHandlerConfig() {
@@ -114,20 +107,38 @@ class SpecBasedModuleTest extends \MediaWikiUnitTestCase {
 			'uri' => new Uri( '/rest/test.v1/ModuleTest/hello/you' ),
 		] );
 		$module = $this->createOpenApiModule( $request );
+		$handler = $module->getHandlerForPath( '/ModuleTest/hello/you', $request, false );
 
-		$stats = $this->createMockStatsFactory(
-			'/^mediawiki\.rest_api_latency_seconds:\d+\.\d+\|ms\|#path:test_v1_ModuleTest_hello_name,method:GET,status:200\n/'
-		);
-		$module->setStats( $stats );
+		$config = $handler->getConfig();
+
+		$this->assertArrayHasKey( 'hello', $config );
+		$this->assertArrayHasKey( 'method', $config );
+		$this->assertArrayHasKey( 'path', $config );
+		$this->assertSame( 'get', $handler->getHttpMethod() );
+	}
+
+	public function testHandlerConfig_execute() {
+		$request = new RequestData( [
+			'uri' => new Uri( '/rest/test.v1/ModuleTest/hello/you' ),
+		] );
+		$module = $this->createOpenApiModule( $request );
+
+		ConvertibleTimestamp::setFakeTime( '20110401090000' );
+		$statsHelper = StatsFactory::newUnitTestingHelper();
+		$module->setStats( $statsHelper->getStatsFactory() );
 
 		$response = $module->execute( '/ModuleTest/hello/you', $request );
-		$stats->flush();
 
 		$this->assertSame( 200, $response->getStatusCode(), (string)$response->getBody() );
 
-		// "hi!" comes from the rout definition, the default is 'Hello!'.
+		// "hi!" comes from the route definition, the default is 'Hello!'.
 		$data = json_decode( $response->getBody(), true );
 		$this->assertSame( 'hi!', $data['message'] );
+		$this->assertSame( [
+			'mediawiki.rest_api_latency_seconds:1|ms|#path:test_v1_ModuleTest_hello_name,method:GET,status:200',
+			'mediawiki.rest_api_modules_hit_total:1|c|#api_type:REST_API,api_module:test_v1,api_endpoint:MediaWiki_Tests_Rest_Handler_HelloHandler,path:test_v1_ModuleTest_hello_name,method:GET,status:200',
+			'mediawiki.rest_api_modules_latency:1|ms|#api_type:REST_API,api_module:test_v1,api_endpoint:MediaWiki_Tests_Rest_Handler_HelloHandler,path:test_v1_ModuleTest_hello_name,method:GET,status:200'
+		], $statsHelper->consumeAllFormatted() );
 	}
 
 	public function testWrongMethod() {
@@ -177,19 +188,35 @@ class SpecBasedModuleTest extends \MediaWikiUnitTestCase {
 		$request = new RequestData( [ 'uri' => new Uri( '/rest/test.v1/ModuleTest/throw' ) ] );
 		$module = $this->createOpenApiModule( $request );
 
-		$stats = $this->createMockStatsFactory(
-			'/^mediawiki\.rest_api_errors_total:1|ms\|#path:test_v1_ModuleTest_throw,method:GET,status:555\n/'
-		);
-		$module->setStats( $stats );
+		$statsHelper = StatsFactory::newUnitTestingHelper();
+		$module->setStats( $statsHelper->getStatsFactory() );
 
+		ConvertibleTimestamp::setFakeTime( '20110401090000' );
 		$response = $module->execute( '/ModuleTest/throw', $request );
-		$stats->flush();
-
-		$this->assertSame( 555, $response->getStatusCode() );
 		$body = $response->getBody();
 		$body->rewind();
 		$data = json_decode( $body->getContents(), true );
+		ConvertibleTimestamp::setFakeTime( '20110401090000' );
+
+		$this->assertSame( 555, $response->getStatusCode() );
 		$this->assertSame( 'Mock error', $data['message'] );
+
+		// Metrics
+		$metrics = $statsHelper->consumeAllFormatted();
+		$this->assertSame(
+			'mediawiki.rest_api_errors_total:1|c|#path:test_v1_ModuleTest_throw,method:GET,status:555',
+			$metrics[0]
+		);
+
+		// Handler class is mocked so we need to allow for a dynamic class name
+		$this->assertMatchesRegularExpression(
+			'/mediawiki\.rest_api_modules_hit_total:1|c|#api_type:REST_API,api_module:test_v1,api_endpoint:MediaWiki_Rest_Handler_anonymous_var_www_html_w_tests_phpunit_unit_includes_Rest_MockHandlerFactory_php_(a-Z0-9_)+,path:test_v1_ModuleTest_throw,method:GET,status:555/',
+			$metrics[1]
+		);
+		$this->assertMatchesRegularExpression(
+			'/mediawiki\.rest_api_modules_latency:1|ms|#api_type:REST_API,api_module:test_v1,api_endpoint:MediaWiki_Rest_Handler_anonymous_var_www_html_w_tests_phpunit_unit_includes_Rest_MockHandlerFactory_php_(a-Z0-9_)+,path:test_v1_ModuleTest_throw,method:GET,status:555/',
+			$metrics[2]
+		);
 	}
 
 	public function testFatalException() {
@@ -233,11 +260,126 @@ class SpecBasedModuleTest extends \MediaWikiUnitTestCase {
 	}
 
 	public function testOpenApiInfo() {
-		$request = new RequestData( [ 'uri' => new Uri( '/rest/test.v1/ModuleTest/throwWrapped' ) ] );
+		$request = new RequestData( [ 'uri' => new Uri( '/rest/test.v1/ModuleTest/hello/world' ) ] );
 		$module = $this->createOpenApiModule( $request );
 
 		$info = $module->getOpenApiInfo();
 		$this->assertSame( 'test', $info['title'] );
 		$this->assertSame( '1.0', $info['version'] );
+
+		$handler = $module->getHandlerForPath( '/ModuleTest/hello/world', $request );
+		$oas = $handler->getOpenApiSpec( 'GET' );
+
+		$this->assertSame( 'hello summary', $oas['summary'] );
+		$this->assertSame( '<message key="rest-endpoint-desc-mock-desc"></message>', $oas['description'] );
+	}
+
+	public function testOpenApiExternalDocs() {
+		$request = new RequestData( [ 'uri' => new Uri( '/rest/test.v1/ModuleTest/hello/world' ) ] );
+		$module = $this->createOpenApiModule( $request );
+
+		$externalDocs = $module->getOpenApiExternalDocs();
+		$this->assertSame( 'Test docs', $externalDocs['description'] );
+		$this->assertSame( 'https://example.com/docs', $externalDocs['url'] );
+	}
+
+	public function testApiActionHandler() {
+		$request = new RequestData( [
+			'uri' => new Uri( '/rest/test.v1/ModuleTest/do-action' ),
+		] );
+		$module = $this->createOpenApiModule( $request );
+
+		$handler = $module->getHandlerForPath( '/ModuleTest/do-action', $request );
+
+		$this->assertInstanceOf( GenericActionHandler::class, $handler );
+		$this->assertSame(
+			'move',
+			TestingAccessWrapper::newFromObject( $handler )->actionName
+		);
+	}
+
+	public function testOpenApiTags() {
+		$request = new RequestData( [ 'uri' => new Uri( '/rest/test.v1/ModuleTest/hello/world' ) ] );
+		$module = $this->createOpenApiModule( $request );
+
+		$tags = $module->getOpenApiTags();
+		$this->assertCount( 2, $tags );
+		$this->assertSame( 'Foo', $tags[0]['name'] );
+		$this->assertSame( 'Foo operations', $tags[0]['description'] );
+		$this->assertSame( 'Bar', $tags[1]['name'] );
+		$this->assertSame( 'Bar operations', $tags[1]['description'] );
+	}
+
+	public function testManualOperationIdPassedThrough() {
+		$request = new RequestData( [
+			'uri' => new Uri( '/rest/test.v1/ModuleTest/hello/world' ),
+		] );
+		$module = $this->createOpenApiModule( $request );
+
+		$handler = $module->getHandlerForPath( '/ModuleTest/hello/world', $request );
+		$oas = $handler->getOpenApiSpec( 'GET' );
+
+		$this->assertSame( 'getHelloName', $oas['operationId'] );
+	}
+
+	public function testEndpointDeprecationOpenAPISpec() {
+		$request = new RequestData( [ 'uri' => new Uri( '/rest/test.v1/ModuleTest/deprecated' ) ] );
+		$module = $this->createOpenApiModule( $request );
+
+		$handler = $module->getHandlerForPath( '/ModuleTest/deprecated', $request );
+		$oas = $handler->getOpenApiSpec( 'GET' );
+
+		$this->assertSame( true, $oas['deprecated'] );
+	}
+
+	public function testEndpointDeprecationHeader() {
+		$request = new RequestData( [ 'uri' => new Uri( '/rest/test.v1/ModuleTest/deprecated' ) ] );
+		$module = $this->createOpenApiModule( $request );
+		$response = $module->execute( '/ModuleTest/deprecated', $request );
+
+		$this->assertSame( 200, $response->getStatusCode(), (string)$response->getBody() );
+		$responseHeaders = $response->getHeaders();
+		$this->assertArrayHasKey( 'Deprecation', $responseHeaders );
+		$this->assertSame( '@1735689600', $responseHeaders['Deprecation'][0] );
+	}
+
+	public function testModuleDeprecationOpenAPISpec() {
+		$request = new RequestData( [ 'uri' => new Uri( '/rest/test.v1/ModuleTest/hello/you' ) ] );
+		$module = $this->createOpenApiModule( $request, null, true );
+
+		$handler = $module->getHandlerForPath( '/ModuleTest/hello/you', $request );
+		$oas = $handler->getOpenApiSpec( 'GET' );
+
+		$this->assertSame( true, $oas['deprecated'] );
+	}
+
+	public function testModuleDeprecationHeaders() {
+		$request = new RequestData( [ 'uri' => new Uri( '/rest/test.v1/ModuleTest/hello/you' ) ] );
+		$module = $this->createOpenApiModule( $request, null, true );
+		$response = $module->execute( '/ModuleTest/hello/you', $request );
+
+		$this->assertSame( 200, $response->getStatusCode(), (string)$response->getBody() );
+		$responseHeaders = $response->getHeaders();
+		$this->assertArrayHasKey( 'Deprecation', $responseHeaders );
+		$this->assertSame( '@1735689600', $responseHeaders['Deprecation'][0] );
+	}
+
+	public function testLoadModuleDefinition() {
+		$specFile = __DIR__ . '/moduleTestRoutes.json';
+		$formatter = $this->getDummyTextFormatter( true );
+
+		$moduleDef = SpecBasedModule::loadModuleDefinition( $specFile, new JsonLocalizer( $formatter ) );
+
+		$this->assertSame( 'test.v1', $moduleDef['moduleId'] );
+		$this->assertSame( 'test', $moduleDef['info']['title'] );
+		$this->assertArrayHasKey( 'paths', $moduleDef );
+	}
+
+	public function testLoadModuleDefinitionWithFlatRoutes() {
+		$specFile = __DIR__ . '/moduleFlatRoutes.json';
+		$formatter = $this->getDummyTextFormatter( true );
+
+		$this->expectException( ModuleFormatException::class );
+		SpecBasedModule::loadModuleDefinition( $specFile, new JsonLocalizer( $formatter ) );
 	}
 }

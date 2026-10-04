@@ -160,12 +160,12 @@
 		// setup live preview of logos
 		function getLogoData() {
 			const data = {};
-			Object.keys( nodes ).forEach( ( key ) => {
+			for ( const key in nodes ) {
 				const input = document.getElementById( nodes[ key ] );
 				if ( input ) {
 					data[ key ] = getLogoPath( input.value );
 				}
-			} );
+			}
 			return data;
 		}
 
@@ -225,7 +225,7 @@
 		 * @param {string} tooltip
 		 */
 		function addDroppers( $preview, tooltip ) {
-			Object.keys( nodes ).forEach( ( key ) => {
+			for ( const key in nodes ) {
 				const dropper = document.createElement( 'div' );
 				const input = document.getElementById( nodes[ key ] );
 				dropper.textContent = tooltip;
@@ -240,7 +240,7 @@
 					const d = this;
 					const item = ev.dataTransfer.items[ 0 ];
 					// Only allow images.
-					if ( item && item.type.indexOf( 'image/' ) === 0 ) {
+					if ( item && item.type.startsWith( 'image/' ) ) {
 						const blob = item.getAsFile();
 						const reader = new FileReader();
 						reader.readAsDataURL( blob );
@@ -251,7 +251,7 @@
 						};
 					}
 				} );
-			} );
+			}
 		}
 
 		// setup preview area to respond to changes.

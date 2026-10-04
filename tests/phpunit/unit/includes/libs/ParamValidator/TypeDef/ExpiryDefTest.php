@@ -8,6 +8,7 @@ use Wikimedia\ParamValidator\SimpleCallbacks;
 use Wikimedia\ParamValidator\TypeDef\ExpiryDef;
 use Wikimedia\ParamValidator\ValidationException;
 use Wikimedia\Timestamp\ConvertibleTimestamp;
+use Wikimedia\Timestamp\TimestampFormat as TS;
 
 /**
  * @covers \Wikimedia\ParamValidator\TypeDef\ExpiryDef
@@ -26,7 +27,7 @@ class ExpiryDefTest extends TypeDefTestCase {
 	 * @param array $settings
 	 * @return array
 	 */
-	private function getValidationAssertion( string $value, string $msg, array $settings = [] ) {
+	private static function getValidationAssertion( string $value, string $msg, array $settings = [] ) {
 		return [
 			$value,
 			new ValidationException(
@@ -49,7 +50,7 @@ class ExpiryDefTest extends TypeDefTestCase {
 		parent::testValidate( $value, $expect, $settings, $options, $expectConds );
 	}
 
-	public function provideValidate() {
+	public static function provideValidate() {
 		$settings = [
 			ExpiryDef::PARAM_MAX => '6 months',
 			ExpiryDef::PARAM_USE_MAX => true,
@@ -57,13 +58,13 @@ class ExpiryDefTest extends TypeDefTestCase {
 
 		return [
 			'Valid infinity' => [ 'indefinite', 'infinity' ],
-			'Invalid expiry' => $this->getValidationAssertion( 'foobar', 'badexpiry' ),
-			'Expiry in past' => $this->getValidationAssertion( '20150123T12:34:56Z', 'badexpiry-past' ),
-			'Expiry in past with unix 0' => $this->getValidationAssertion(
+			'Invalid expiry' => self::getValidationAssertion( 'foobar', 'badexpiry' ),
+			'Expiry in past' => self::getValidationAssertion( '20150123T12:34:56Z', 'badexpiry-past' ),
+			'Expiry in past with unix 0' => self::getValidationAssertion(
 				'1970-01-01T00:00:00Z',
 				'badexpiry-past'
 			),
-			'Expiry in past with negative unix time' => $this->getValidationAssertion(
+			'Expiry in past with negative unix time' => self::getValidationAssertion(
 				'1969-12-31T23:59:59Z',
 				'badexpiry-past',
 				$settings
@@ -103,12 +104,16 @@ class ExpiryDefTest extends TypeDefTestCase {
 					]
 				],
 			],
-			'Expiry exceeds max, fatal' => $this->getValidationAssertion(
+			'Expiry exceeds max, fatal' => self::getValidationAssertion(
 				'9999-01-23T12:34:56Z',
 				'paramvalidator-badexpiry-duration',
 				[
 					ExpiryDef::PARAM_MAX => '6 months',
 				]
+			),
+			'Expiry exceeds Y10K' => self::getValidationAssertion(
+				'50000 years',
+				'badexpiry'
 			),
 			'Not a string' => [
 				[ 1, 2, 3 ],
@@ -128,18 +133,18 @@ class ExpiryDefTest extends TypeDefTestCase {
 		);
 		$this->assertSame(
 			'2050-01-01T00:00:00Z',
-			ExpiryDef::normalizeExpiry( '205001010000', TS_ISO_8601 )
+			ExpiryDef::normalizeExpiry( '205001010000', TS::ISO_8601 )
 		);
 		$this->assertSame(
 			'1970-01-01T00:00:00Z',
-			ExpiryDef::normalizeExpiry( '1970-01-01T00:00:00Z', TS_ISO_8601 )
+			ExpiryDef::normalizeExpiry( '1970-01-01T00:00:00Z', TS::ISO_8601 )
 		);
 		$this->expectException( InvalidArgumentException::class );
 		$this->expectExceptionMessage( 'Invalid expiry value: 0' );
-		ExpiryDef::normalizeExpiry( 0, TS_ISO_8601 );
+		ExpiryDef::normalizeExpiry( 0, TS::ISO_8601 );
 	}
 
-	public function provideGetInfo() {
+	public static function provideGetInfo() {
 		return [
 			'Basic' => [
 				[],
@@ -151,7 +156,7 @@ class ExpiryDefTest extends TypeDefTestCase {
 		];
 	}
 
-	public function provideCheckSettings() {
+	public static function provideCheckSettings() {
 		$keys = [ 'Y', ExpiryDef::PARAM_USE_MAX, ExpiryDef::PARAM_MAX ];
 		return [
 			'Basic test' => [
@@ -174,20 +179,20 @@ class ExpiryDefTest extends TypeDefTestCase {
 		ConvertibleTimestamp::setFakeTime( '20200527000000' );
 		$this->assertSame(
 			'2020-11-27T00:00:00Z',
-			ExpiryDef::normalizeUsingMaxExpiry( '10 months', '6 months', TS_ISO_8601 )
+			ExpiryDef::normalizeUsingMaxExpiry( '10 months', '6 months', TS::ISO_8601 )
 		);
 		$this->assertSame(
 			'2020-10-27T00:00:00Z',
-			ExpiryDef::normalizeUsingMaxExpiry( '2020-10-27T00:00:00Z', '6 months', TS_ISO_8601 )
+			ExpiryDef::normalizeUsingMaxExpiry( '2020-10-27T00:00:00Z', '6 months', TS::ISO_8601 )
 		);
 		$this->assertSame(
 			'infinity',
-			ExpiryDef::normalizeUsingMaxExpiry( 'infinity', '6 months', TS_ISO_8601 )
+			ExpiryDef::normalizeUsingMaxExpiry( 'infinity', '6 months', TS::ISO_8601 )
 		);
-		$this->assertNull( ExpiryDef::normalizeUsingMaxExpiry( null, '6 months', TS_ISO_8601 ) );
+		$this->assertNull( ExpiryDef::normalizeUsingMaxExpiry( null, '6 months', TS::ISO_8601 ) );
 
 		$this->expectException( InvalidArgumentException::class );
 		$this->expectExceptionMessage( 'Invalid expiry value: invalid expiry' );
-		ExpiryDef::normalizeUsingMaxExpiry( 'invalid expiry', '6 months', TS_ISO_8601 );
+		ExpiryDef::normalizeUsingMaxExpiry( 'invalid expiry', '6 months', TS::ISO_8601 );
 	}
 }

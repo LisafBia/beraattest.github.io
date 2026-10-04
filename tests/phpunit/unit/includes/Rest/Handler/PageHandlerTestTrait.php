@@ -2,29 +2,34 @@
 
 namespace MediaWiki\Tests\Rest\Handler;
 
-use File;
-use FileRepo;
 use MediaWiki\Config\ServiceOptions;
+use MediaWiki\FileRepo\File\File;
+use MediaWiki\FileRepo\FileRepo;
+use MediaWiki\FileRepo\RepoGroup;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MainConfigSchema;
+use MediaWiki\Parser\ParserOptions;
+use MediaWiki\Parser\Parsoid\LintErrorChecker;
 use MediaWiki\Parser\Parsoid\ParsoidParser;
 use MediaWiki\Parser\Parsoid\ParsoidParserFactory;
-use MediaWiki\Rest\Handler\Helper\HtmlMessageOutputHelper;
+use MediaWiki\Registration\ExtensionRegistry;
 use MediaWiki\Rest\Handler\Helper\HtmlOutputRendererHelper;
+use MediaWiki\Rest\Handler\Helper\HtmlShadowOutputHelper;
 use MediaWiki\Rest\Handler\Helper\PageContentHelper;
 use MediaWiki\Rest\Handler\Helper\PageRedirectHelper;
 use MediaWiki\Rest\Handler\Helper\PageRestHelperFactory;
+use MediaWiki\Rest\Handler\Helper\RevisionContentHelper;
 use MediaWiki\Rest\Handler\LanguageLinksHandler;
+use MediaWiki\Rest\Handler\PageHandler;
 use MediaWiki\Rest\Handler\PageHistoryCountHandler;
 use MediaWiki\Rest\Handler\PageHistoryHandler;
 use MediaWiki\Rest\Handler\PageHTMLHandler;
-use MediaWiki\Rest\Handler\PageSourceHandler;
-use MediaWiki\Rest\RequestData;
+use MediaWiki\Rest\Handler\PageLintHandler;
+use MediaWiki\Rest\Handler\RevisionLintHandler;
 use MediaWiki\Rest\RequestInterface;
 use MediaWiki\Rest\ResponseFactory;
 use MediaWiki\Rest\Router;
 use PHPUnit\Framework\MockObject\MockObject;
-use RepoGroup;
 use Wikimedia\ObjectCache\WANObjectCache;
 use Wikimedia\Parsoid\Parsoid;
 use Wikimedia\Stats\StatsFactory;
@@ -38,7 +43,7 @@ use Wikimedia\Stats\StatsFactory;
  */
 trait PageHandlerTestTrait {
 
-	private function newRouterForPageHandler( $baseUrl, $rootPath = '' ): Router {
+	private function newRouterForPageHandler( string $baseUrl, string $rootPath = '' ): Router {
 		$router = $this->createNoOpMock( Router::class, [ 'getRoutePath', 'getRouteUrl' ] );
 		$router->method( 'getRoutePath' )
 			->willReturnCallback( static function (
@@ -69,6 +74,37 @@ trait PageHandlerTestTrait {
 	}
 
 	/**
+	 * Stubs PageRestHelperFactory::newPageRedirectHelper() so that the helper is built
+	 * from the arguments the handler passes in, the way the real factory does.
+	 *
+	 * This matters because the route path and the request are what determine the
+	 * redirect target URL: the handler passes its own getRoutePath(), so a redirect
+	 * stays on the endpoint the request came in on, and the request supplies the
+	 * query parameters that get carried over to the target. A helper pre-built with
+	 * a fixed path and an empty request would make both unobservable.
+	 *
+	 * @param PageRestHelperFactory|MockObject $helperFactory
+	 */
+	private function mockPageRedirectHelper( $helperFactory ): void {
+		$services = $this->getServiceContainer();
+		$helperFactory->method( 'newPageRedirectHelper' )
+			->willReturnCallback( static fn (
+				ResponseFactory $responseFactory,
+				Router $router,
+				string $pathWithModulePrefix,
+				RequestInterface $request
+			) => new PageRedirectHelper(
+				$services->getRedirectStore(),
+				$services->getTitleFormatter(),
+				$responseFactory,
+				$router,
+				$pathWithModulePrefix,
+				$request,
+				$services->getLanguageConverterFactory()
+			) );
+	}
+
+	/**
 	 * @param Parsoid|MockObject $mockParsoid
 	 */
 	public function resetServicesWithMockedParsoid( $mockParsoid ): void {
@@ -77,7 +113,10 @@ trait PageHandlerTestTrait {
 			$mockParsoid,
 			$services->getParsoidPageConfigFactory(),
 			$services->getLanguageConverterFactory(),
-			$services->getParsoidDataAccess()
+			$services->getParsoidSiteConfig(),
+			$services->getParsoidDataAccess(),
+			$services->getNamespaceInfo(),
+			$services->getTrackingCategories(),
 		);
 
 		// Create a mock Parsoid factory that returns the ParsoidParser object
@@ -91,7 +130,7 @@ trait PageHandlerTestTrait {
 	/**
 	 * @return PageHTMLHandler
 	 */
-	public function newPageHtmlHandler( ?RequestInterface $request = null ) {
+	public function newPageHtmlHandler() {
 		$services = $this->getServiceContainer();
 		$config = [
 			MainConfigNames::RightsUrl => 'https://example.com/rights',
@@ -102,18 +141,19 @@ trait PageHandlerTestTrait {
 
 		$helperFactory = $this->createNoOpMock(
 			PageRestHelperFactory::class,
-			[ 'newPageContentHelper', 'newHtmlOutputRendererHelper', 'newHtmlMessageOutputHelper', 'newPageRedirectHelper' ]
+			[ 'newPageContentHelper', 'newHtmlOutputRendererHelper', 'newHtmlShadowOutputHelper', 'newPageRedirectHelper' ]
 		);
 
 		$helperFactory->method( 'newPageContentHelper' )
-			->willReturn( new PageContentHelper(
+			->willReturnCallback( static fn () => new PageContentHelper(
 				new ServiceOptions( PageContentHelper::CONSTRUCTOR_OPTIONS, $config ),
 				$services->getRevisionLookup(),
 				$services->getTitleFormatter(),
 				$services->getPageStore(),
 				$services->getTitleFactory(),
 				$services->getConnectionProvider(),
-				$services->getChangeTagsStore()
+				$services->getChangeTagsStore(),
+				$services->getShadowPageLoader(),
 			) );
 
 		$parsoidOutputStash = $this->getParsoidOutputStash();
@@ -137,25 +177,18 @@ trait PageHandlerTestTrait {
 					$lenientRevHandling
 				);
 			} );
-		$helperFactory->method( 'newHtmlMessageOutputHelper' )
-			->willReturnCallback( static function ( $page ) {
-				return new HtmlMessageOutputHelper( $page );
+		$helperFactory->method( 'newHtmlShadowOutputHelper' )
+			->willReturnCallback( static function ( $page ) use ( $services ) {
+				return new HtmlShadowOutputHelper(
+					$services->getShadowPageLoader(),
+					$services->getTitleFormatter(),
+					$services->getParsoidSiteConfig(),
+					ParserOptions::newFromAnon(),
+					$page
+				);
 			} );
 
-		$request ??= new RequestData( [] );
-		$responseFactory = new ResponseFactory( [] );
-		$helperFactory->method( 'newPageRedirectHelper' )
-			->willReturn(
-				new PageRedirectHelper(
-					$services->getRedirectStore(),
-					$services->getTitleFormatter(),
-					$responseFactory,
-					$this->newRouterForPageHandler( 'https://example.test/api' ),
-					'/test/{title}',
-					$request,
-					$services->getLanguageConverterFactory()
-				)
-			);
+		$this->mockPageRedirectHelper( $helperFactory );
 
 		return new PageHTMLHandler(
 			$helperFactory
@@ -163,17 +196,161 @@ trait PageHandlerTestTrait {
 	}
 
 	/**
-	 * @return PageSourceHandler
+	 * @return PageHandler
 	 */
-	public function newPageSourceHandler() {
+	public function newPageHandler() {
 		$services = $this->getServiceContainer();
-		return new PageSourceHandler(
+		$config = [
+			MainConfigNames::RightsUrl => 'https://example.com/rights',
+			MainConfigNames::RightsText => 'some rights',
+			MainConfigNames::ParsoidCacheConfig =>
+				MainConfigSchema::getDefaultValue( MainConfigNames::ParsoidCacheConfig )
+		];
+
+		$helperFactory = $this->createNoOpMock(
+			PageRestHelperFactory::class,
+			[ 'newPageContentHelper', 'newHtmlOutputRendererHelper', 'newHtmlShadowOutputHelper', 'newPageRedirectHelper' ]
+		);
+
+		$helperFactory->method( 'newPageContentHelper' )
+			->willReturnCallback( static fn () => new PageContentHelper(
+				new ServiceOptions( PageContentHelper::CONSTRUCTOR_OPTIONS, $config ),
+				$services->getRevisionLookup(),
+				$services->getTitleFormatter(),
+				$services->getPageStore(),
+				$services->getTitleFactory(),
+				$services->getConnectionProvider(),
+				$services->getChangeTagsStore(),
+				$services->getShadowPageLoader(),
+			) );
+
+		$parsoidOutputStash = $this->getParsoidOutputStash();
+		$helperFactory->method( 'newHtmlOutputRendererHelper' )
+			->willReturnCallback( static function ( $page, $parameters, $authority, $revision, $lenientRevHandling ) use ( $services, $parsoidOutputStash ) {
+				return new HtmlOutputRendererHelper(
+					$parsoidOutputStash,
+					StatsFactory::newNull(),
+					$services->getParserOutputAccess(),
+					$services->getPageStore(),
+					$services->getRevisionLookup(),
+					$services->getRevisionRenderer(),
+					$services->getParsoidSiteConfig(),
+					$services->getHtmlTransformFactory(),
+					$services->getContentHandlerFactory(),
+					$services->getLanguageFactory(),
+					$page,
+					$parameters,
+					$authority,
+					$revision,
+					$lenientRevHandling
+				);
+			} );
+		$helperFactory->method( 'newHtmlShadowOutputHelper' )
+			->willReturnCallback( static function ( $page ) use ( $services ) {
+				return new HtmlShadowOutputHelper(
+					$services->getShadowPageLoader(),
+					$services->getTitleFormatter(),
+					$services->getParsoidSiteConfig(),
+					ParserOptions::newFromAnon(),
+					$page
+				);
+			} );
+
+		$this->mockPageRedirectHelper( $helperFactory );
+
+		return new PageHandler(
 			$services->getTitleFormatter(),
-			$services->getPageRestHelperFactory()
+			$helperFactory
 		);
 	}
 
-	public function newPageHistoryHandler() {
+	/**
+	 * @param Parsoid|MockObject|null $parsoid
+	 * @return PageLintHandler
+	 */
+	public function newPageLintHandler( ?Parsoid $parsoid = null ) {
+		$services = $this->getServiceContainer();
+		$config = [
+			MainConfigNames::RightsUrl => 'https://example.com/rights',
+			MainConfigNames::RightsText => 'some rights',
+			MainConfigNames::ParsoidCacheConfig =>
+				MainConfigSchema::getDefaultValue( MainConfigNames::ParsoidCacheConfig )
+		];
+
+		$helperFactory = $this->createNoOpMock(
+			PageRestHelperFactory::class,
+			[ 'newPageContentHelper', 'newPageRedirectHelper' ]
+		);
+
+		$helperFactory->method( 'newPageContentHelper' )
+			->willReturnCallback( static fn () => new PageContentHelper(
+				new ServiceOptions( PageContentHelper::CONSTRUCTOR_OPTIONS, $config ),
+				$services->getRevisionLookup(),
+				$services->getTitleFormatter(),
+				$services->getPageStore(),
+				$services->getTitleFactory(),
+				$services->getConnectionProvider(),
+				$services->getChangeTagsStore(),
+				$services->getShadowPageLoader(),
+			) );
+
+		$this->mockPageRedirectHelper( $helperFactory );
+
+		$lintErrorChecker = new LintErrorChecker(
+			$parsoid ?: $services->get( '_Parsoid' ),
+			$services->getParsoidPageConfigFactory(),
+			$services->getTitleFactory(),
+			ExtensionRegistry::getInstance(),
+			$services->getMainConfig(),
+		);
+
+		return new PageLintHandler( $helperFactory, $lintErrorChecker );
+	}
+
+	/**
+	 * @param Parsoid|MockObject|null $parsoid
+	 * @return RevisionLintHandler
+	 */
+	public function newRevisionLintHandler( ?Parsoid $parsoid = null ) {
+		$services = $this->getServiceContainer();
+		$config = [
+			MainConfigNames::RightsUrl => 'https://example.com/rights',
+			MainConfigNames::RightsText => 'some rights',
+			MainConfigNames::ParsoidCacheConfig =>
+				MainConfigSchema::getDefaultValue( MainConfigNames::ParsoidCacheConfig )
+		];
+
+		$helperFactory = $this->createNoOpMock(
+			PageRestHelperFactory::class,
+			[ 'newRevisionContentHelper', 'newPageRedirectHelper' ]
+		);
+
+		$helperFactory->method( 'newRevisionContentHelper' )
+			->willReturnCallback( static fn () => new RevisionContentHelper(
+				new ServiceOptions( PageContentHelper::CONSTRUCTOR_OPTIONS, $config ),
+				$services->getRevisionLookup(),
+				$services->getTitleFormatter(),
+				$services->getPageStore(),
+				$services->getTitleFactory(),
+				$services->getConnectionProvider(),
+				$services->getChangeTagsStore(),
+				$services->getShadowPageLoader(),
+			) );
+
+		$this->mockPageRedirectHelper( $helperFactory );
+
+		$lintErrorChecker = new LintErrorChecker(
+			$parsoid ?: $services->get( '_Parsoid' ),
+			$services->getParsoidPageConfigFactory(),
+			$services->getTitleFactory(),
+			ExtensionRegistry::getInstance(),
+			$services->getMainConfig(),
+		);
+
+		return new RevisionLintHandler( $helperFactory, $lintErrorChecker );
+	}
+
+	public function newPageHistoryHandler(): PageHistoryHandler {
 		$services = $this->getServiceContainer();
 		return new PageHistoryHandler(
 			$services->getRevisionStore(),
@@ -186,7 +363,7 @@ trait PageHandlerTestTrait {
 		);
 	}
 
-	public function newPageHistoryCountHandler() {
+	public function newPageHistoryCountHandler(): PageHistoryCountHandler {
 		$services = $this->getServiceContainer();
 		return new PageHistoryCountHandler(
 			$services->getRevisionStore(),
@@ -200,7 +377,7 @@ trait PageHandlerTestTrait {
 		);
 	}
 
-	public function newLanguageLinksHandler() {
+	public function newLanguageLinksHandler(): LanguageLinksHandler {
 		$services = $this->getServiceContainer();
 		return new LanguageLinksHandler(
 			$services->getConnectionProvider(),
@@ -212,7 +389,11 @@ trait PageHandlerTestTrait {
 		);
 	}
 
-	private function installMockFileRepo( string $fileName, ?string $redirectedFrom = null ): void {
+	private function installMockFileRepo(
+		string $fileName,
+		?string $redirectedFrom = null,
+		bool $expectFindFile = true
+	): void {
 		$repo = $this->createNoOpMock(
 			FileRepo::class,
 			[]
@@ -237,7 +418,8 @@ trait PageHandlerTestTrait {
 			RepoGroup::class,
 			[ 'findFile' ]
 		);
-		$repoGroup->expects( $this->atLeastOnce() )->method( 'findFile' )
+		$repoGroup->expects( $expectFindFile ? $this->atLeastOnce() : $this->any() )
+			->method( 'findFile' )
 			->willReturn( $file );
 
 		$this->setService(

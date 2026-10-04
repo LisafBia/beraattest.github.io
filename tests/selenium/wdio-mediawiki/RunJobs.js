@@ -1,14 +1,11 @@
-'use strict';
+import { createApiClient } from 'wdio-mediawiki/Api.js';
+import Page from './Page.js';
 
-const MWBot = require( 'mwbot' );
-const Page = require( './Page' );
 const MAINPAGE_REQUESTS_MAX_RUNS = 10; // (arbitrary) safe-guard against endless execution
 
-function getJobCount() {
-	const bot = new MWBot( {
-		apiUrl: `${ browser.config.baseUrl }/api.php`
-	} );
-	return bot.request( {
+async function getJobCount() {
+	const api = await createApiClient();
+	return api.request( {
 		action: 'query',
 		meta: 'siteinfo',
 		siprop: 'statistics'
@@ -61,8 +58,8 @@ function runThroughMainPageRequests( runCount = 1 ) {
 class RunJobs {
 
 	static run() {
-		browser.call( () => runThroughMainPageRequests() );
+		return browser.call( () => runThroughMainPageRequests() );
 	}
 }
 
-module.exports = RunJobs;
+export default RunJobs;

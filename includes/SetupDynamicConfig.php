@@ -4,10 +4,17 @@
  * It's split into a separate file so it can be tested.
  */
 
+use MediaWiki\FileRepo\FileRepo;
+use MediaWiki\FileRepo\ForeignAPIRepo;
+use MediaWiki\FileRepo\ForeignDBRepo;
 use MediaWiki\Language\LanguageCode;
+use MediaWiki\Logging\LogFormatter;
+use MediaWiki\Logging\NewUsersLogFormatter;
+use MediaWiki\Logging\PageLangLogFormatter;
 use MediaWiki\MainConfigSchema;
 use MediaWiki\Title\NamespaceInfo;
-use Wikimedia\AtEase\AtEase;
+use Wikimedia\LockManager\FSLockManager;
+use Wikimedia\LockManager\NullLockManager;
 
 // For backwards compatibility, the value of wgLogos is copied to wgLogo.
 // This is because some extensions/skins may be using $config->get('Logo')
@@ -26,11 +33,6 @@ if ( isset( $wgMimeTypeBlacklist ) ) {
 	$wgMimeTypeExclusions = array_merge( $wgMimeTypeExclusions, $wgMimeTypeBlacklist );
 } else {
 	$wgMimeTypeBlacklist = $wgMimeTypeExclusions;
-}
-if ( isset( $wgEnableUserEmailBlacklist ) ) {
-	$wgEnableUserEmailMuteList = $wgEnableUserEmailBlacklist;
-} else {
-	$wgEnableUserEmailBlacklist = $wgEnableUserEmailMuteList;
 }
 if ( isset( $wgShortPagesNamespaceBlacklist ) ) {
 	$wgShortPagesNamespaceExclusions = $wgShortPagesNamespaceBlacklist;
@@ -59,7 +61,6 @@ if ( isset( $wgRateLimits['changetag'] ) ) {
 }
 
 // Prohibited file extensions shouldn't appear on the "allowed" list
-// @phan-suppress-next-line PhanTypeMismatchArgumentNullableInternal False positive
 $wgFileExtensions = array_values( array_diff( $wgFileExtensions, $wgProhibitedFileExtensions ) );
 
 // Fix path to icon images after they were moved in 1.24
@@ -88,8 +89,18 @@ if ( isset( $wgFooterIcons['poweredby'] )
 	&& is_array( $wgFooterIcons['poweredby']['mediawiki'] )
 	&& $wgFooterIcons['poweredby']['mediawiki']['src'] === null
 ) {
-	$wgFooterIcons['poweredby']['mediawiki']['src'] =
-		"$wgResourceBasePath/resources/assets/poweredby_mediawiki.svg";
+	$compactLogo = "$wgResourceBasePath/resources/assets/mediawiki_compact.svg";
+	$wgFooterIcons['poweredby']['mediawiki']['sources'] = [
+		[
+			"media" => "(min-width: 500px)",
+			"srcset" => "$wgResourceBasePath/resources/assets/poweredby_mediawiki.svg",
+			"width" => 88,
+			"height" => 31,
+		]
+	];
+	$wgFooterIcons['poweredby']['mediawiki']['src'] = $compactLogo;
+	$wgFooterIcons['poweredby']['mediawiki']['width'] = 25;
+	$wgFooterIcons['poweredby']['mediawiki']['height'] = 25;
 }
 
 // Unconditional protection for NS_MEDIAWIKI since otherwise it's too easy for a
@@ -122,6 +133,18 @@ $wgGalleryOptions += [
 	'mode' => 'traditional',
 ];
 
+$wgLocalFileRepo['directory'] ??= $wgUploadDirectory;
+$wgLocalFileRepo['scriptDirUrl'] ??= $wgScriptPath;
+$wgLocalFileRepo['favicon'] ??= $wgFavicon;
+$wgLocalFileRepo['url'] ??= ( $wgUploadBaseUrl ? $wgUploadBaseUrl . $wgUploadPath : $wgUploadPath );
+$wgLocalFileRepo['hashLevels'] ??= ( $wgHashedUploadDirectory ? 2 : 0 );
+$wgLocalFileRepo['thumbScriptUrl'] ??= $wgThumbnailScriptPath;
+$wgLocalFileRepo['transformVia404'] ??= !$wgGenerateThumbnailOnParse;
+$wgLocalFileRepo['deletedDir'] ??= $wgDeletedDirectory;
+$wgLocalFileRepo['deletedHashLevels'] ??= ( $wgHashedUploadDirectory ? 3 : 0 );
+$wgLocalFileRepo['updateCompatibleMetadata'] ??= $wgUpdateCompatibleMetadata;
+$wgLocalFileRepo['reserializeMetadata'] ??= $wgUpdateCompatibleMetadata;
+
 if ( isset( $wgLocalFileRepo['name'] ) && !isset( $wgLocalFileRepo['backend'] ) ) {
 	// Create a default FileBackend name.
 	// FileBackendGroup will register a default, if absent from $wgFileBackends.
@@ -148,6 +171,7 @@ if ( $wgUseSharedUploads ) {
 			'dbName' => $wgSharedUploadDBname,
 			'dbFlags' => ( $wgDebugDumpSql ? DBO_DEBUG : 0 ) | DBO_DEFAULT,
 			'tablePrefix' => $wgSharedUploadDBprefix,
+			'dbSchema' => $wgSharedUploadDBschema,
 			'hasSharedCache' => $wgCacheSharedUploads,
 			'descBaseUrl' => $wgRepositoryBaseUrl,
 			'fetchDescription' => $wgFetchCommonsDescriptions,
@@ -211,8 +235,6 @@ if ( !$wgEnableEmail ) {
 	$wgEmailAuthentication = false; // do not require auth if you're not sending email anyway
 	$wgEnableUserEmail = false;
 	$wgEnotifFromEditor = false;
-	$wgEnotifImpersonal = false;
-	$wgEnotifMaxRecips = 0;
 	$wgEnotifMinorEdits = false;
 	$wgEnotifRevealEditorAddress = false;
 	$wgEnotifUseRealName = false;
@@ -301,9 +323,8 @@ if ( isset( $wgSlaveLagCritical ) ) {
 }
 
 if ( $wgInvalidateCacheOnLocalSettingsChange && defined( 'MW_CONFIG_FILE' ) ) {
-	AtEase::suppressWarnings();
-	$wgCacheEpoch = max( $wgCacheEpoch, gmdate( 'YmdHis', filemtime( MW_CONFIG_FILE ) ) );
-	AtEase::restoreWarnings();
+	// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+	$wgCacheEpoch = max( $wgCacheEpoch, gmdate( 'YmdHis', @filemtime( MW_CONFIG_FILE ) ) );
 }
 
 if ( $wgNewUserLog ) {
@@ -311,11 +332,36 @@ if ( $wgNewUserLog ) {
 	$wgLogTypes[] = 'newusers';
 	$wgLogNames['newusers'] = 'newuserlogpage';
 	$wgLogHeaders['newusers'] = 'newuserlogpagetext';
-	$wgLogActionsHandlers['newusers/newusers'] = NewUsersLogFormatter::class;
-	$wgLogActionsHandlers['newusers/create'] = NewUsersLogFormatter::class;
-	$wgLogActionsHandlers['newusers/create2'] = NewUsersLogFormatter::class;
-	$wgLogActionsHandlers['newusers/byemail'] = NewUsersLogFormatter::class;
-	$wgLogActionsHandlers['newusers/autocreate'] = NewUsersLogFormatter::class;
+	$wgLogActionsHandlers['newusers/newusers'] = [
+		'class' => NewUsersLogFormatter::class,
+		'services' => [
+			'NamespaceInfo',
+		]
+	];
+	$wgLogActionsHandlers['newusers/create'] = [
+		'class' => NewUsersLogFormatter::class,
+		'services' => [
+			'NamespaceInfo',
+		]
+	];
+	$wgLogActionsHandlers['newusers/create2'] = [
+		'class' => NewUsersLogFormatter::class,
+		'services' => [
+			'NamespaceInfo',
+		]
+	];
+	$wgLogActionsHandlers['newusers/byemail'] = [
+		'class' => NewUsersLogFormatter::class,
+		'services' => [
+			'NamespaceInfo',
+		]
+	];
+	$wgLogActionsHandlers['newusers/autocreate'] = [
+		'class' => NewUsersLogFormatter::class,
+		'services' => [
+			'NamespaceInfo',
+		]
+	];
 }
 
 if ( $wgPageCreationLog ) {
@@ -334,24 +380,13 @@ if ( $wgPageLanguageUseDB ) {
 	];
 }
 
-if ( $wgPHPSessionHandling !== 'enable' &&
-	$wgPHPSessionHandling !== 'warn' &&
-	$wgPHPSessionHandling !== 'disable'
-) {
-	$wgPHPSessionHandling = 'warn';
-}
-if ( defined( 'MW_NO_SESSION' ) ) {
-	// If the entry point wants no session, force 'disable' here unless they
-	// specifically set it to the (undocumented) 'warn'.
-	$wgPHPSessionHandling = MW_NO_SESSION === 'warn' ? 'warn' : 'disable';
-}
-
 // Backwards compatibility with old bot passwords storage configs
 if ( !$wgVirtualDomainsMapping ) {
 	$wgVirtualDomainsMapping = [];
 }
 if ( $wgBotPasswordsCluster ) {
 	$wgVirtualDomainsMapping['virtual-botpasswords']['cluster'] = $wgBotPasswordsCluster;
+	$wgVirtualDomainsMapping['virtual-botpasswords']['db'] ??= false;
 }
 
 if ( $wgBotPasswordsDatabase ) {

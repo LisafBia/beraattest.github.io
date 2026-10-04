@@ -50,4 +50,44 @@ class SchemaGeneratorTest extends MediaWikiIntegrationTestCase {
 		$this->expectExceptionMessage( 'No schema changes detected' );
 		$generator->generateSchemaChange( 'mysql', self::DATA_DIR . '/patch-no_change.json' );
 	}
+
+	/**
+	 * @dataProvider provideJsonSchemasPaths
+	 */
+	public function testNormalizePath(
+		string $expected,
+		string $jsonSchema,
+		string $installPath,
+		string $extensionDirectory
+	) {
+		$this->assertEquals(
+			$expected,
+			SchemaGenerator::normalizePath( $jsonSchema, $installPath, $extensionDirectory )
+		);
+	}
+
+	public static function provideJsonSchemasPaths() {
+		// ($expected, $jsonSchema, $installPath, $extensionDirectory)
+		return [
+			'Core patch under core root' => [
+				'tests/phpunit/data/schema-maintenance/patch-no_change.json',
+				self::DATA_DIR . '/patch-no_change.json',
+				MW_INSTALL_PATH,
+				MW_INSTALL_PATH . '/extensions'
+			],
+			'Extension patch with default wgExtensionDirectory under core root' => [
+				'db_patches/patch.json',
+				self::DATA_DIR . '/extensions/FooExt/db_patches/patch.json',
+				self::DATA_DIR, // used as MW_INSTALL_PATH
+				self::DATA_DIR . '/extensions'
+			],
+			'Extension patch with custom wgExtensionDirectory outside core root' => [
+				'db_patches/patch.json',
+				self::DATA_DIR . '/extensions/FooExt/db_patches/patch.json',
+				MW_INSTALL_PATH . '/includes', // not a parent of self::DATA_DIR
+				self::DATA_DIR . '/extensions'
+			],
+		];
+	}
+
 }

@@ -7,26 +7,15 @@
  * Copyright © 2011 Platonides
  * https://www.mediawiki.org/
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  * @ingroup Maintenance
  */
 
 use MediaWiki\Content\ContentHandler;
+use MediaWiki\Import\ImportStreamSource;
+use MediaWiki\Import\WikiRevision;
+use MediaWiki\Language\LCStoreNull;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Permissions\UltimateAuthority;
@@ -34,6 +23,7 @@ use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Settings\SettingsBuilder;
 use MediaWiki\Title\Title;
 use MediaWiki\User\User;
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 // @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
@@ -82,7 +72,7 @@ abstract class DumpIterator extends Maintenance {
 			return;
 		}
 
-		$this->startTime = microtime( true );
+		$this->startTime = ConvertibleTimestamp::hrtime();
 
 		if ( $this->getOption( 'dump' ) == '-' ) {
 			$source = new ImportStreamSource( $this->getStdin() );
@@ -98,7 +88,7 @@ abstract class DumpIterator extends Maintenance {
 			->getWikiImporter( $source, new UltimateAuthority( $user ) );
 
 		$importer->setRevisionCallback(
-			[ $this, 'handleRevision' ] );
+			$this->handleRevision( ... ) );
 		$importer->setNoticeCallback( static function ( $msg, $params ) {
 			echo wfMessage( $msg, $params )->text() . "\n";
 		} );
@@ -109,7 +99,7 @@ abstract class DumpIterator extends Maintenance {
 
 		$this->conclusions();
 
-		$delta = microtime( true ) - $this->startTime;
+		$delta = ( ConvertibleTimestamp::hrtime() - $this->startTime ) / 1e9;
 		$this->error( "Done {$this->count} revisions in " . round( $delta, 2 ) . " seconds " );
 		if ( $delta > 0 ) {
 			$this->error( round( $this->count / $delta, 2 ) . " pages/sec" );
@@ -138,7 +128,7 @@ abstract class DumpIterator extends Maintenance {
 		}
 	}
 
-	public static function disableInterwikis( $prefix, &$data ) {
+	public static function disableInterwikis( string $prefix, array &$data ): bool {
 		# Title::newFromText will check on each namespaced article if it's an interwiki.
 		# We always answer that it is not.
 
@@ -186,8 +176,6 @@ abstract class DumpIterator extends Maintenance {
 
 	/**
 	 * Core function which does whatever the maintenance script is designed to do
-	 *
-	 * @param WikiRevision $rev
 	 */
 	abstract public function processRevision( WikiRevision $rev );
 }
@@ -205,13 +193,11 @@ class SearchDump extends DumpIterator {
 		$this->addOption( 'regex', 'Searching regex', true, true );
 	}
 
+	/** @inheritDoc */
 	public function getDbType() {
 		return Maintenance::DB_NONE;
 	}
 
-	/**
-	 * @param WikiRevision $rev
-	 */
 	public function processRevision( WikiRevision $rev ) {
 		if ( preg_match( $this->getOption( 'regex' ), $rev->getContent()->getTextForSearchIndex() ) ) {
 			$this->output( $rev->getTitle() . " matches at edit from " . $rev->getTimestamp() . "\n" );

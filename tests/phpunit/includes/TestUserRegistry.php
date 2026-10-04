@@ -16,7 +16,7 @@ class TestUserRegistry {
 	/** @var int Random int, included in IDs */
 	private static $randInt;
 
-	public static function getNextId() {
+	public static function getNextId(): string {
 		if ( !self::$randInt ) {
 			self::$randInt = mt_rand( 1, 0xFFFFFF );
 		}
@@ -36,7 +36,6 @@ class TestUserRegistry {
 	 */
 	public static function getMutableTestUser( $testName, $groups = [], $userPrefix = null ) {
 		$id = self::getNextId();
-		$testUserName = "$testName $id";
 		$userPrefix ??= "TestUser";
 		$testUser = new TestUser(
 			"$userPrefix $testName $id",

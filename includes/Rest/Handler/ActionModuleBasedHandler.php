@@ -2,7 +2,6 @@
 
 namespace MediaWiki\Rest\Handler;
 
-use MediaWiki\Api\ApiBase;
 use MediaWiki\Api\ApiMain;
 use MediaWiki\Api\ApiMessage;
 use MediaWiki\Api\ApiUsageException;
@@ -15,6 +14,7 @@ use MediaWiki\Rest\Handler\Helper\RestStatusTrait;
 use MediaWiki\Rest\HttpException;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\Response;
+use MediaWiki\User\User;
 use Wikimedia\Message\MessageValue;
 
 /**
@@ -25,28 +25,23 @@ use Wikimedia\Message\MessageValue;
 abstract class ActionModuleBasedHandler extends Handler {
 	use RestStatusTrait;
 
-	/**
-	 * @var ApiMain|null
-	 */
-	private $apiMain = null;
+	private ?ApiMain $apiMain = null;
 
-	protected function getUser() {
+	protected function getUser(): User {
 		return $this->getApiMain()->getUser();
 	}
 
 	/**
 	 * Set main action API entry point for testing.
+	 * @warning The ApiMain instance may be modified!
 	 *
-	 * @param ApiMain $apiMain
+	 * @internal
 	 */
 	public function setApiMain( ApiMain $apiMain ) {
 		$this->apiMain = $apiMain;
 	}
 
-	/**
-	 * @return ApiMain
-	 */
-	public function getApiMain() {
+	public function getApiMain(): ApiMain {
 		if ( $this->apiMain ) {
 			return $this->apiMain;
 		}
@@ -65,28 +60,10 @@ abstract class ActionModuleBasedHandler extends Handler {
 		$fauxContext->setUser( $context->getUser() );
 		$fauxContext->setLanguage( $context->getLanguage() );
 
-		$this->apiMain = new ApiMain( $fauxContext, true );
-		return $this->apiMain;
-	}
+		$apiMain = new ApiMain( $fauxContext, true );
+		$this->setApiMain( $apiMain );
 
-	/**
-	 * Overrides an action API module. Used for testing.
-	 *
-	 * @param string $name
-	 * @param string $group
-	 * @param ApiBase $module
-	 */
-	public function overrideActionModule( string $name, string $group, ApiBase $module ) {
-		$this->getApiMain()->getModuleManager()->addModule(
-			$name,
-			$group,
-			[
-				'class' => get_class( $module ),
-				'factory' => static function () use ( $module ) {
-					return $module;
-				}
-			]
-		);
+		return $apiMain;
 	}
 
 	/**
@@ -102,11 +79,19 @@ abstract class ActionModuleBasedHandler extends Handler {
 		$apiMain = $this->getApiMain();
 
 		$params = $this->getActionModuleParameters();
+		$params += [
+			'format' => 'json',
+			'formatversion' => '2',
+			'errorformat' => 'plaintext',
+		];
 		$request = $apiMain->getRequest();
 
 		foreach ( $params as $key => $value ) {
 			$request->setVal( $key, $value );
 		}
+
+		// TODO: Only require tokens with cookie auth (T436749)!
+		// If the session is safe against CSRF, we can just inject a valid token.
 
 		try {
 			// NOTE: ApiMain detects this to be an internal call, so it will throw
@@ -116,7 +101,8 @@ abstract class ActionModuleBasedHandler extends Handler {
 			// use a fake loop to throw the first error
 			foreach ( $ex->getStatusValue()->getMessages( 'error' ) as $msg ) {
 				$msg = ApiMessage::create( $msg );
-				$this->throwHttpExceptionForActionModuleError( $msg, $ex->getCode() ?: 400 );
+
+				$this->throwHttpExceptionForActionModuleError( $msg, $ex->getCode() ?: 0 );
 			}
 
 			// This should never happen, since ApiUsageExceptions should always
@@ -174,17 +160,35 @@ abstract class ActionModuleBasedHandler extends Handler {
 	 * to preserve baseline behavior.
 	 *
 	 * @stable to override
-	 *
-	 * @param WebResponse $actionModuleResponse
-	 * @param array $actionModuleResult
-	 * @param Response $response
 	 */
 	protected function mapActionModuleResponse(
 		WebResponse $actionModuleResponse,
 		array $actionModuleResult,
 		Response $response
 	) {
-		// TODO: map status, headers, cookies, etc
+		$status = $actionModuleResponse->getStatusCode();
+
+		if ( $status > 0 ) {
+			$response->setStatus( $status );
+		}
+
+		// NOTE: We rely on the REST framework for CORS handling.
+		static $headersToCopy = [
+			'cache-control', 'location', 'etag', 'vary', 'last-modified'
+		];
+
+		// NOTE: We assume that $actionModuleResponse is a FauxResponse instance
+		// obtained from the FauxRequest injected by getApiMain(). So unlike
+		// a real WebRequest, it wouldn't already have written the headers to
+		// global state.
+		foreach ( $headersToCopy as $name ) {
+			$val = $actionModuleResponse->getHeader( $name );
+			if ( $val !== null && $val !== '' ) {
+				$response->setHeader( $name, $val );
+			}
+		}
+
+		// TODO: map warnings and such contained in $actionModuleResult (T436750).
 	}
 
 	/**
@@ -205,18 +209,29 @@ abstract class ActionModuleBasedHandler extends Handler {
 	 *
 	 * @throws HttpException always.
 	 */
-	protected function throwHttpExceptionForActionModuleError( IApiMessage $msg, $statusCode = 400 ) {
-		// override to supply mappings
+	protected function throwHttpExceptionForActionModuleError( IApiMessage $msg, $statusCode = 0 ) {
+		if ( !$statusCode ) {
+			// Determine status code based on API code, if no status code is given.
+			$statusCode = match ( $msg->getApiCode() ) {
+				'badtoken' => 401,
+				'ratelimited' => 429,
+				'maxlag' => 429,
+				'readonly' => 503,
+				'missingtitle' => 404,
+				'nosuchpageid' => 404,
+				default => 400
+			};
+		}
 
 		throw new LocalizedHttpException(
-			MessageValue::newFromSpecifier( $msg ),
+			$msg,
 			$statusCode,
 			// Include the original error code in the response.
 			// This makes it easier to track down the original cause of the error,
 			// and allows more specific mappings to be added to
 			// implementations of throwHttpExceptionForActionModuleError() provided by
 			// subclasses
-			[ 'actionModuleErrorCode' => $msg->getApiCode() ]
+			$msg->getApiData() + [ 'actionModuleErrorCode' => $msg->getApiCode() ],
 		);
 	}
 

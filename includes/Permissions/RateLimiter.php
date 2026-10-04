@@ -1,26 +1,11 @@
 <?php
 /**
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
- *
+ * @license GPL-2.0-or-later
  * @file
  */
 
 namespace MediaWiki\Permissions;
 
-use Liuggio\StatsdClient\Factory\StatsdDataFactoryInterface;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
@@ -31,7 +16,7 @@ use MediaWiki\User\UserFactory;
 use MediaWiki\User\UserGroupManager;
 use Psr\Log\LoggerInterface;
 use Wikimedia\IPUtils;
-use Wikimedia\Stats\NullStatsdDataFactory;
+use Wikimedia\Stats\StatsFactory;
 use Wikimedia\WRStats\LimitCondition;
 use Wikimedia\WRStats\WRStatsFactory;
 
@@ -44,7 +29,7 @@ use Wikimedia\WRStats\WRStatsFactory;
 class RateLimiter {
 
 	private LoggerInterface $logger;
-	private StatsdDataFactoryInterface $stats;
+	private StatsFactory $statsFactory;
 
 	private ServiceOptions $options;
 	private WRStatsFactory $wrstatsFactory;
@@ -92,7 +77,7 @@ class RateLimiter {
 		HookContainer $hookContainer
 	) {
 		$this->logger = LoggerFactory::getInstance( 'ratelimit' );
-		$this->stats = new NullStatsdDataFactory();
+		$this->statsFactory = StatsFactory::newNull();
 
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
 		$this->options = $options;
@@ -106,12 +91,8 @@ class RateLimiter {
 		$this->rateLimits = $this->options->get( MainConfigNames::RateLimits );
 	}
 
-	public function setStats( StatsdDataFactoryInterface $stats ) {
-		$this->stats = $stats;
-	}
-
-	private function incrementStats( $name ) {
-		$this->stats->increment( "RateLimiter.$name" );
+	public function setStats( StatsFactory $statsFactory ) {
+		$this->statsFactory = $statsFactory;
 	}
 
 	/**
@@ -186,6 +167,8 @@ class RateLimiter {
 		if ( $this->nonLimitableActions[$action] ?? false ) {
 			return false;
 		}
+		$actionMetric = $this->statsFactory->getCounter( 'RateLimiter_limit_actions_total' )
+			->setLabel( 'action', $action === '' ? '[view]' : $action );
 
 		$user = $subject->getUser();
 		$ip = $subject->getIP();
@@ -194,7 +177,9 @@ class RateLimiter {
 		$result = false;
 		$legacyUser = $this->userFactory->newFromUserIdentity( $user );
 		if ( !$this->hookRunner->onPingLimiter( $legacyUser, $action, $result, $incrBy ) ) {
-			$this->incrementStats( "limit.$action.result." . ( $result ? 'tripped_by_hook' : 'passed_by_hook' ) );
+			$statsResult = ( $result ? 'tripped_by_hook' : 'passed_by_hook' );
+			$actionMetric->setLabel( 'result', $statsResult )
+				->increment();
 			return $result;
 		}
 
@@ -204,13 +189,15 @@ class RateLimiter {
 
 		// Some groups shouldn't trigger the ping limiter, ever
 		if ( $this->canBypass( $action ) && $this->isExempt( $subject ) ) {
-			$this->incrementStats( "limit.$action.result.exempt" );
+			$actionMetric->setLabel( 'result', 'exempt' )
+				->increment();
 			return false;
 		}
 
 		$conds = $this->getConditions( $action );
 		$limiter = $this->wrstatsFactory->createRateLimiter( $conds, [ 'limiter', $action ] );
-		$limitBatch = $limiter->createBatch( $incrBy );
+		$peekMode = $incrBy === 0;
+		$limitBatch = $limiter->createBatch( $incrBy ?: 1 );
 		$this->logger->debug( __METHOD__ . ": limiting $action rate for {$user->getName()}" );
 
 		$id = $user->getId();
@@ -311,7 +298,9 @@ class RateLimiter {
 			'ip' => $ip,
 		];
 
-		$batchResult = $limitBatch->tryIncr();
+		$batchResult = $peekMode ? $limitBatch->peek() : $limitBatch->tryIncr();
+		$failedMetric = $this->statsFactory->getCounter( 'RateLimiter_limit_cause_total' )
+			->setLabel( 'action', $action );
 		foreach ( $batchResult->getFailedResults() as $type => $result ) {
 			$this->logger->info(
 				'User::pingLimiter: User tripped rate limit',
@@ -323,24 +312,25 @@ class RateLimiter {
 					'key' => $type
 				] + $loggerInfo
 			);
-
-			$this->incrementStats( "limit.$action.tripped_by.$type" );
+			$failedMetric->setLabel( 'tripped_by', $type )
+				->increment();
 		}
 
 		$allowed = $batchResult->isAllowed();
 
-		$this->incrementStats( "limit.$action.result." . ( $allowed ? 'passed' : 'tripped' ) );
+		$actionMetric->setLabel( 'result', ( $allowed ? 'passed' : 'tripped' ) )
+			->increment();
 
 		return !$allowed;
 	}
 
-	private function canBypass( string $action ) {
+	private function canBypass( string $action ): bool {
 		return $this->rateLimits[$action]['&can-bypass'] ?? true;
 	}
 
 	/**
 	 * @param string $action
-	 * @return LimitCondition[]
+	 * @return array<string,LimitCondition>
 	 */
 	private function getConditions( $action ) {
 		if ( !isset( $this->rateLimits[$action] ) ) {

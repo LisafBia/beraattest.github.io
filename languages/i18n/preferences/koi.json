@@ -135,7 +135,7 @@
 	"underline-always": "Пыр",
 	"tog-showhiddencats": "Мыччавны дзебӧм  категорияэз",
 	"tog-showrollbackconfirmation": "Корны вынсьӧтӧм бӧрыньтчан  ыстісьӧм вылӧ личкикӧ",
-	"tog-forcesafemode": "Пыр лӧсьӧтӧ [[mw:Manual:Safemode|лёкись видзан режим]]",
+	"tog-forcesafemode": "Пыр лӧсьӧтӧ [[mw:Special:MyLanguage/Manual:Safemode|лёкись видзан режим]]",
 	"prefs-help-forcesafemode": "Пӧдналӧ вики веськӧтлӧммез и уджкериссезлісь CSS",
 	"prefs-editing": "Веськӧтӧм",
 	"prefs-description-editing": "Лӧсьӧтӧ вильмӧтӧммезлісь пыртӧмсӧ, нійӧ видзӧтӧмсӧ да синмалӧмсӧ",
@@ -218,6 +218,7 @@
 	"search-thumbnail-extra-namespaces-label": "Петкӧтлыны миниатюрасӧ Special:Search-ын пызанвыв версияын",
 	"search-thumbnail-extra-namespaces-message": "Мыччалӧ шедӧтӧмтор миниатюраэзсӧ $1 {{PLURAL:$2|ним пространстволӧ|ним пространствоэзлӧ}} {{#special:search}} листбокын",
 	"prefs-advancedsearchoptions": "Паськӧтӧм лӧсьӧтаннэз",
+	"prefs-misc": "Мукӧд",
 	"prefs-reset-intro": "Этӧ листбоксӧ позьӧ уджӧтны, медбы лӧсьӧтаннэсӧ вайӧтны одзжык лӧсьӧтӧмӧдз.Тӧдӧ,сійӧ оз позь дугдӧтны.",
 	"prefs-reset-confirm": "Да, ме кӧсъя бырӧтны лӧсьӧтаннэзӧс",
 	"restoreprefs": "Дзоньтыны быдӧс лӧсьӧтаннэз одзжык лӧсьӧтӧм сьӧрті"
